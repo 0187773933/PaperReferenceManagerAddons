@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""
-Exists server — wraps the snapshot modules.
-
-POST /exists  { "queries": [ { "id": ..., "title": ..., "doi": ... } ] }
-            -> { "results": [ { "id": ..., "exists": bool, "title": ..., "doi": ... } ] }
-
-Run:
-    python server.py --manager zotero
-    python server.py --manager mendeley
-    python server.py --manager zotero --zotero-sqlite /path/to/zotero.sqlite
-"""
-
 import argparse
 import json
 import os
@@ -25,11 +13,6 @@ from rapidfuzz import fuzz, process
 
 from src.utils import utils
 from src.tasks import snapshot as snap_module
-
-
-# ============================================================
-# Snapshot cache
-# ============================================================
 
 class SnapshotCache:
     """
@@ -117,13 +100,7 @@ class SnapshotCache:
 
         return self._titles , self._dois
 
-
-# ============================================================
-# Lookup
-# ============================================================
-
 TITLE_THRESHOLD = 96
-
 
 def lookup( cache: SnapshotCache , queries: List[ Dict ] ) -> List[ Dict ]:
     titles , dois = cache.get()
@@ -150,14 +127,8 @@ def lookup( cache: SnapshotCache , queries: List[ Dict ] ) -> List[ Dict ]:
         } )
     return results
 
-
-# ============================================================
-# HTTP server
-# ============================================================
-
 class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
     daemon_threads = True
-
 
 class Handler( BaseHTTPRequestHandler ):
     cache: SnapshotCache = None   # injected at startup
@@ -227,26 +198,32 @@ class Handler( BaseHTTPRequestHandler ):
             print( f"server error: {e!r}" )
             self._send_json( 500 , { "results": [] , "error": str( e ) } )
 
-
-# ============================================================
-# Main
-# ============================================================
-
 def build_args( parsed ):
-    """Produce a namespace compatible with snapshot.get_common."""
-    parsed.output          = Path( parsed.output )
-    parsed.config          = Path( parsed.config )
-    parsed.mendeley        = parsed.manager.lower() == "mendeley"
-    parsed.zotero          = parsed.manager.lower() == "zotero"
+    """Resolve --manager / --zotero / --mendeley into the form snapshot.get_common expects."""
+    parsed.output = Path( parsed.output )
+    parsed.config = Path( parsed.config )
+
+    if not parsed.manager:
+        if parsed.zotero:
+            parsed.manager = "zotero"
+        elif parsed.mendeley:
+            parsed.manager = "mendeley"
+        else:
+            raise SystemExit( "must pass one of: --zotero | --mendeley | --manager <name>" )
+
+    parsed.manager  = parsed.manager.lower()
+    parsed.zotero   = parsed.manager == "zotero"
+    parsed.mendeley = parsed.manager == "mendeley"
     parsed.mendeley_source = "api"
     return parsed
 
-
 def main():
     ap = argparse.ArgumentParser( description="Paper reference manager exists server" )
-    ap.add_argument( "--manager"        , required=True , help="mendeley | zotero" )
-    ap.add_argument( "--zotero-sqlite"  , default=None  , help="Path to zotero.sqlite" )
-    ap.add_argument( "--mendeley-sqlite", default=None  , help="Path to Mendeley SQLite" )
+    ap.add_argument( "--manager"        , default=None , help="mendeley | zotero (or use --zotero/--mendeley)" )
+    ap.add_argument( "--zotero"         , action="store_true" , help="Use Zotero as the manager" )
+    ap.add_argument( "--mendeley"       , action="store_true" , help="Use Mendeley as the manager" )
+    ap.add_argument( "--zotero-sqlite"  , default=None , help="Path to zotero.sqlite" )
+    ap.add_argument( "--mendeley-sqlite", default=None , help="Path to Mendeley SQLite" )
     ap.add_argument( "--output"         , default=str( Path.cwd() / "output" ) )
     ap.add_argument( "--config"         , default=str( Path.cwd() / "config" ) )
     ap.add_argument( "--host"           , default=os.environ.get( "SERVER_HOST" , "127.0.0.1" ) )
@@ -266,7 +243,6 @@ def main():
     watched = "mtime-watched" if cache._watch_files else f"ttl={args.ttl}s"
     print( f"exists server  http://{args.host}:{args.port}  (manager={args.manager}, {watched})" )
     server.serve_forever()
-
 
 if __name__ == "__main__":
     main()
