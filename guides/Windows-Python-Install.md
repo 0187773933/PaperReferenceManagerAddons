@@ -1,4 +1,4 @@
-# Windows Python Install
+# Windows Install
 
 1. Open PowerShell as Admin
 2. `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine`
@@ -9,5 +9,9 @@
 7. Close and reopen new non-admin terminal
 8. `pyenv install 3.10.11`
 9. `pyenv global 3.10.11`
-10. `python3 -m venv venv`
-11. `.\venv\Scripts\Activate.ps1`
+10. `winget install --id Git.Git -e --source winget`
+11. `git clone https://github.com/0187773933/PaperReferenceManagerAddons`
+12. `cd PaperReferenceManagerAddons`
+13. `python3 -m venv venv`
+14. `.\venv\Scripts\Activate.ps1`
+15. `pip install -r requirements.txt`
