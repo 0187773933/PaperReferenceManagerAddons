@@ -1,0 +1,9 @@
+openalex:
+  api_key: "asdf"
+mendeley:
+  client_id: "12345"
+  secret: "asdf"
+  redirect_uri: "http://localhost:1234"
+  auth_url: "https://api.mendeley.com/oauth/authorize?client_id=12345&redirect_uri=http%3a%2f%2flocalhost%3a1234&response_type=code&scope=all"
+  email: "asdf@example.edu"
+  password: "asdf"

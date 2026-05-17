@@ -1,0 +1,16 @@
+[project]
+name = "prma"
+version = "1.0.0"
+description = "Paper Reference Manager Addons CLI Tool"
+authors = [ { name = "morpheous" } ]
+dependencies = []
+
+[project.scripts]
+prma = "src.cli:cli"
+
+[tool.setuptools]
+packages = [ "src" ]
+
+[build-system]
+requires = [ "setuptools" ]
+build-backend = "setuptools.build_meta"

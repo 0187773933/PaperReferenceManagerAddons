@@ -1,0 +1,16 @@
+.git/
+*__pycache__/
+venv/
+output/*
+*.egg-info
+.claude/
+.ipynb_checkpoints/
+.DS_Store
+~$*
+*session.pkl
+config/config.yaml
+config/mendeley_session.json
+config/session.pkl
+*creds.json
+config/creds.json
+gitPushUpdate.sh

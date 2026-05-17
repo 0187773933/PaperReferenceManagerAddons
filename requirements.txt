@@ -1,0 +1,4 @@
+--only-binary=pyyaml
+tqdm
+requests
+openpyxl
