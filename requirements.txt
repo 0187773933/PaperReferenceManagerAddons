@@ -4,3 +4,4 @@ tqdm
 requests
 openpyxl
 rapidfuzz
+playwright

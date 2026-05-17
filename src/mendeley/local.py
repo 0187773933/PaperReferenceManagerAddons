@@ -26,7 +26,8 @@ class MendeleyLocal():
 			hits = glob.glob( pattern )
 			if hits:
 				return Path( hits[ 0 ] )
-		raise FileNotFoundError( "No Mendeley .sqlite found - check paths above" )
+		print( "No Mendeley .sqlite found - check paths above" )
+		return False
 
 	def take_snapshot( self ):
 		tmp = tempfile.NamedTemporaryFile( suffix=".sqlite" , delete=False )
