@@ -60,18 +60,18 @@ class OpenAlex():
 			utils.write_json( paper_cached_fp , paper_data )
 
 			# 2.) Download all of its References
-			# referenced_works = paper_data.get( "referenced_works" )
-			# if not referenced_works:
-			# 	continue
-			# for i , item in enumerate( tqdm( referenced_works , desc="References" , position=1 , leave=False ) ):
-			# 	wid = item.split( "/" )[ -1 ]
-			# 	reference_cached_fp = self.references_dir.joinpath( f"{wid}.json" )
-			# 	if reference_cached_fp.exists():
-			# 		continue
-			# 	reference_data = self.API.get_id( wid )
-			# 	if not reference_data:
-			# 		reference_data = {}
-			# 	utils.write_json( reference_cached_fp , reference_data )
+			referenced_works = paper_data.get( "referenced_works" )
+			if not referenced_works:
+				continue
+			for i , item in enumerate( tqdm( referenced_works , desc="References" , position=1 , leave=False ) ):
+				wid = item.split( "/" )[ -1 ]
+				reference_cached_fp = self.references_dir.joinpath( f"{wid}.json" )
+				if reference_cached_fp.exists():
+					continue
+				reference_data = self.API.get_id( wid )
+				if not reference_data:
+					reference_data = {}
+				utils.write_json( reference_cached_fp , reference_data )
 
 	def search( self , oa_index , searches ):
 		return self.Search.add_search_sheets( oa_index , searches )

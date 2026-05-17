@@ -1,9 +1,12 @@
 import json
 import requests
 from pathlib import Path
+import time
 from pprint import pprint
+from rapidfuzz import fuzz , process
 
 from .auth import MendeleyAuth
+from ..utils import utils
 
 class MendeleyAPI():
 	def __init__( self , args ):
@@ -84,11 +87,11 @@ class MendeleyAPI():
 		titles , dois = set() , set()
 		for d in papers.values():
 			if d.get( "title" ):
-				nt = normalize_title( d[ "title" ] )
+				nt = utils.normalize_title( d[ "title" ] )
 				if nt:
 					titles.add( nt )
 			if d.get( "doi" ):
-				nd = normalize_doi( d[ "doi" ] )
+				nd = utils.normalize_doi( d[ "doi" ] )
 				if nd:
 					dois.add( nd )
 		self._index_titles = titles
@@ -96,14 +99,25 @@ class MendeleyAPI():
 		self._index_ids    = ids
 		return titles , dois
 
-	def title_exists( self , title ):
+	def title_exists( self , title , threshold=96 ):
 		titles , _ = self._index()
 		if isinstance( title , ( list , tuple , set ) ):
-			return { t: normalize_title( t ) in titles for t in title }
-		return normalize_title( title ) in titles
+			return {
+				t: bool( process.extractOne(
+					utils.normalize_title( t ) , titles ,
+					scorer=fuzz.token_sort_ratio ,
+					score_cutoff=threshold
+				) )
+				for t in title
+			}
+		return bool( process.extractOne(
+			utils.normalize_title( title ) , titles ,
+			scorer=fuzz.token_sort_ratio ,
+			score_cutoff=threshold
+		) )
 
 	def doi_exists( self , doi ):
 		_ , dois = self._index()
 		if isinstance( doi , ( list , tuple , set ) ):
-			return { x: ( normalize_doi( x ) in dois ) for x in doi }
-		return normalize_doi( doi ) in dois
+			return { x: ( utils.normalize_doi( x ) in dois ) for x in doi }
+		return utils.normalize_doi( doi ) in dois
