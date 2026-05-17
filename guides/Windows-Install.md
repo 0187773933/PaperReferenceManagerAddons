@@ -15,6 +15,7 @@
 13. `python3 -m venv venv`
 14. `.\venv\Scripts\Activate.ps1`
 15. `pip install -r requirements.txt`
+16. `playwright install chromium chromium-headless-shell`
 
 ---
 
