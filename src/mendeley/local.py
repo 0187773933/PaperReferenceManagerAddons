@@ -14,7 +14,8 @@ class MendeleyLocal():
 			self.sqlite_path = Path( args.mendeley_sqlite )
 		else:
 			self.sqlite_path = self.find_db()
-		self.storage = self.sqlite_path.parent.joinpath( "storage" )
+		if self.sqlite_path:
+			self.storage = self.sqlite_path.parent.joinpath( "storage" )
 
 	def find_db( self ):
 		candidates = [
@@ -26,7 +27,7 @@ class MendeleyLocal():
 			hits = glob.glob( pattern )
 			if hits:
 				return Path( hits[ 0 ] )
-		print( "No Mendeley .sqlite found - check paths above" )
+		print( "No Mendeley Local .sqlite found" )
 		return False
 
 	def take_snapshot( self ):
