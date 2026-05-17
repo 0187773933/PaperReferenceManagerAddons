@@ -2,4 +2,4 @@
 cd /d "%~dp0"
 
 powershell.exe -NoExit -ExecutionPolicy Bypass -Command ^
-  "& { . .\venv\Scripts\Activate.ps1; python main.py --meneley }"
+  "& { . .\venv\Scripts\Activate.ps1; python main.py --mendeley }"
