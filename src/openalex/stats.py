@@ -4,8 +4,11 @@ from pathlib import Path
 from pprint import pprint
 from tqdm import tqdm
 from collections import Counter
+from rapidfuzz import fuzz , process
 
 from ..utils import utils
+
+FUZZ_TITLE_THRESHOLD = 92
 
 # ---------- search helpers ----------
 def reconstruct_abstract( inv_index ):
@@ -44,7 +47,14 @@ class OpenAlexStats():
 
 		# 2. Source of truth: snapshot
 		lib_dois = { utils.normalize_doi( i[ "doi" ] ) for i in snapshot.values() if i.get( "doi" ) }
-		lib_titles = { utils.openalex_normalize_title( i[ "title" ] ) for i in snapshot.values() if i.get( "title" ) }
+		lib_dois.discard( None )
+		# Lowercased + alphanumeric-only titles for both exact-set and fuzzy comparison.
+		lib_titles_list = [
+			utils.normalize_title( i[ "title" ] )
+			for i in snapshot.values() if i.get( "title" )
+		]
+		lib_titles_list = [ t for t in lib_titles_list if t ]
+		lib_titles_set = set( lib_titles_list )
 		# use file stems as fallback so files with missing/malformed id fields are still covered
 		lib_wids = set( zp.keys() ) | { fp.stem for fp in self.storage_dir.glob( "*.json" ) }
 
@@ -67,13 +77,25 @@ class OpenAlexStats():
 			haystack = make_haystack( meta )
 
 			rt = meta.get( "title" ) or meta.get( "display_name" )
-			rt_norm = utils.openalex_normalize_title( rt ) if rt else None
+			rt_norm = utils.normalize_title( rt ) if rt else None
 			rd = meta.get( "doi" )
 			rd_norm = utils.normalize_doi( rd ) if rd else None
-			is_dup = (
-				bool( rt_norm and rt_norm in lib_titles ) or
-				bool( rd_norm and rd_norm in lib_dois )
-			)
+
+			is_dup = False
+			if rd_norm and rd_norm in lib_dois:
+				is_dup = True
+			elif rt_norm:
+				if rt_norm in lib_titles_set:
+					is_dup = True
+				else:
+					match = process.extractOne(
+						rt_norm ,
+						lib_titles_list ,
+						scorer=fuzz.token_set_ratio ,
+						score_cutoff=FUZZ_TITLE_THRESHOLD ,
+					)
+					if match:
+						is_dup = True
 			self._index.append( ( rw , meta , haystack , n , not is_dup ) )
 
 			if is_dup:
