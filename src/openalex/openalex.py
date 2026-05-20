@@ -57,9 +57,16 @@ class OpenAlex():
 			if not paper_data:
 				print( f"\nNo OpenAlex data for DOI: {paper_doi_normalized}" )
 				continue
+
+			# 2.) Fetch all of its Cited-By Papers
+			oa_wid = ( paper_data.get( "id" ) or "" ).rsplit( "/" , 1 )[ -1 ]
+			if oa_wid and ( paper_data.get( "cited_by_count" ) or 0 ) > 0:
+				paper_data[ "cited_by_works" ] = self.API.get_cited_by( oa_wid )
+			else:
+				paper_data[ "cited_by_works" ] = []
 			utils.write_json( paper_cached_fp , paper_data )
 
-			# 2.) Download all of its References
+			# 3.) Download all of its References
 			referenced_works = paper_data.get( "referenced_works" )
 			if not referenced_works:
 				continue

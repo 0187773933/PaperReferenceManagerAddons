@@ -12,7 +12,7 @@ def safe_sheet_name( name ):
 class OpenAlexSearch():
 	def __init__( self , args ):
 		self.args = args
-		self.HEADERS_ROW = [ "Cites" , "Title" , "Year" , "Proxy" , "DOI" , "Link" , "OA Cited-By" , "WID" ]
+		self.HEADERS_ROW = [ "Cites" , "Title" , "Year" , "Proxy" , "DOI" , "Link" , "PDF" , "OA Cited-By" , "WID" ]
 		self.xlsx_path = self.args.output.joinpath( "missing.xlsx" )
 
 	def add_search_sheets( self , oa_index , searches ):

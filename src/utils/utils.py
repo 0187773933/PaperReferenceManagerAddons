@@ -132,6 +132,10 @@ def openalex_to_xlsx_row( wid , meta , cite_count ):
 	doi_url   = f"https://doi.org/{clean_doi}" if clean_doi else None
 	proxy = Link( proxy_url , proxy_url ) if proxy_url else ""
 	link  = Link( doi_url , doi_url ) if doi_url else ""
+	best_oa = meta.get( "best_oa_location" ) or {}
+	oa_block = meta.get( "open_access" ) or {}
+	pdf_url = best_oa.get( "pdf_url" ) or oa_block.get( "oa_url" )
+	pdf = Link( pdf_url , pdf_url ) if pdf_url else ""
 	return [
 		cite_count,
 		title_of( meta ) or "(no metadata)" ,
@@ -139,6 +143,7 @@ def openalex_to_xlsx_row( wid , meta , cite_count ):
 		proxy ,
 		clean_doi ,
 		link ,
+		pdf ,
 		meta.get( "cited_by_count" ) ,
 		wid ,
 	]

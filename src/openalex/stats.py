@@ -10,7 +10,6 @@ from ..utils import utils
 
 FUZZ_TITLE_THRESHOLD = 92
 
-# ---------- search helpers ----------
 def reconstruct_abstract( inv_index ):
 	if not inv_index: return ""
 	positions = [ ( pos , word ) for word , poses in inv_index.items() for pos in poses ]
@@ -36,6 +35,21 @@ class OpenAlexStats():
 		self._index = []   # list of ( wid , meta , haystack , cite_count , included_in_missing )
 		self.xlsx_path = self.args.output.joinpath( "missing.xlsx" )
 
+	def _is_dup( self , rd_norm , rt_norm , lib_dois , lib_titles_set , lib_titles_list ):
+		if rd_norm and rd_norm in lib_dois:
+			return True
+		if rt_norm:
+			if rt_norm in lib_titles_set:
+				return True
+			match = process.extractOne(
+				rt_norm , lib_titles_list ,
+				scorer=fuzz.token_set_ratio ,
+				score_cutoff=FUZZ_TITLE_THRESHOLD ,
+			)
+			if match:
+				return True
+		return False
+
 	def compute( self , snapshot ):
 		# 1. OpenAlex data we have for library papers
 		zp = {}
@@ -48,17 +62,15 @@ class OpenAlexStats():
 		# 2. Source of truth: snapshot
 		lib_dois = { utils.normalize_doi( i[ "doi" ] ) for i in snapshot.values() if i.get( "doi" ) }
 		lib_dois.discard( None )
-		# Lowercased + alphanumeric-only titles for both exact-set and fuzzy comparison.
 		lib_titles_list = [
 			utils.normalize_title( i[ "title" ] )
 			for i in snapshot.values() if i.get( "title" )
 		]
 		lib_titles_list = [ t for t in lib_titles_list if t ]
 		lib_titles_set = set( lib_titles_list )
-		# use file stems as fallback so files with missing/malformed id fields are still covered
 		lib_wids = set( zp.keys() ) | { fp.stem for fp in self.storage_dir.glob( "*.json" ) }
 
-		# 3. Tally refs (skip library wids early)
+		# 3. Tally backward refs
 		counts = Counter()
 		for wid , p in tqdm( zp.items() , desc="Tallying refs" ):
 			for r in p.get( "referenced_works" ) or []:
@@ -67,8 +79,7 @@ class OpenAlexStats():
 					continue
 				counts[ rw ] += 1
 
-		# 4. Single pass: load each ref once, build row, stash haystack
-		#    self._index keeps everything for downstream search sheets
+		# 4. Single pass: load each ref, dedup, stash haystack
 		self._index = []
 		rows , skipped = [] , 0
 		for rw , n in tqdm( counts.most_common() , desc="Building rows" ):
@@ -81,21 +92,7 @@ class OpenAlexStats():
 			rd = meta.get( "doi" )
 			rd_norm = utils.normalize_doi( rd ) if rd else None
 
-			is_dup = False
-			if rd_norm and rd_norm in lib_dois:
-				is_dup = True
-			elif rt_norm:
-				if rt_norm in lib_titles_set:
-					is_dup = True
-				else:
-					match = process.extractOne(
-						rt_norm ,
-						lib_titles_list ,
-						scorer=fuzz.token_set_ratio ,
-						score_cutoff=FUZZ_TITLE_THRESHOLD ,
-					)
-					if match:
-						is_dup = True
+			is_dup = self._is_dup( rd_norm , rt_norm , lib_dois , lib_titles_set , lib_titles_list )
 			self._index.append( ( rw , meta , haystack , n , not is_dup ) )
 
 			if is_dup:
@@ -103,13 +100,80 @@ class OpenAlexStats():
 				continue
 			rows.append( utils.openalex_to_xlsx_row( rw , meta , n ) )
 
-		# 5. Build base sheets
-		HEADERS_ROW = [ "Cites" , "Title" , "Year" , "Proxy" , "DOI" , "Link" , "OA Cited-By" , "WID" ]
+		# 5. Forward direction: tally papers citing your library (read from cached JSONs)
+		forward_counts = Counter()
+		forward_meta = {}
+		for lib_paper in tqdm( zp.values() , desc="Tallying cited-by" ):
+			for cw in lib_paper.get( "cited_by_works" ) or []:
+				cw_id = cw.get( "id" ) or ""
+				cwid = cw_id.rsplit( "/" , 1 )[ -1 ] if cw_id else ""
+				if not cwid or cwid in lib_wids:
+					continue
+				forward_counts[ cwid ] += 1
+				if cwid not in forward_meta:
+					forward_meta[ cwid ] = cw
+
+		forward_rows , forward_skipped = [] , 0
+		for cwid , n in tqdm( forward_counts.most_common() , desc="Building cited-by rows" ):
+			meta = forward_meta[ cwid ]
+			rt = meta.get( "title" ) or meta.get( "display_name" )
+			rt_norm = utils.normalize_title( rt ) if rt else None
+			rd = meta.get( "doi" )
+			rd_norm = utils.normalize_doi( rd ) if rd else None
+			if self._is_dup( rd_norm , rt_norm , lib_dois , lib_titles_set , lib_titles_list ):
+				forward_skipped += 1
+				continue
+			forward_rows.append( utils.openalex_to_xlsx_row( cwid , meta , n ) )
+
+		# 6. Top 100 Authors aggregated across non-dup missing references
+		author_papers = Counter()
+		author_cites = Counter()
+		author_meta = {}
+		for wid , meta , hay , cite_count , included in tqdm( self._index , desc="Tallying authors" ):
+			if not included:
+				continue
+			seen = set()
+			for a in meta.get( "authorships" ) or []:
+				author = a.get( "author" ) or {}
+				aid = author.get( "id" )
+				if not aid or aid in seen:
+					continue
+				seen.add( aid )
+				author_papers[ aid ] += 1
+				author_cites[ aid ] += cite_count
+				if aid not in author_meta:
+					author_meta[ aid ] = {
+						"name": author.get( "display_name" ) or "(unknown)" ,
+						"orcid": author.get( "orcid" ) ,
+					}
+
+		AUTHOR_HEADERS = [ "Library Cites" , "Papers" , "Author" , "ORCID" , "OpenAlex Link" ]
+		ranked_authors = sorted(
+			author_cites.items() ,
+			key=lambda kv: ( kv[ 1 ] , author_papers[ kv[ 0 ] ] ) ,
+			reverse=True ,
+		)[ :100 ]
+		author_rows = []
+		for aid , total in ranked_authors:
+			info = author_meta.get( aid , {} )
+			orcid_url = info.get( "orcid" )
+			author_rows.append([
+				total ,
+				author_papers[ aid ] ,
+				info.get( "name" ) or "(unknown)" ,
+				utils.Link( orcid_url , orcid_url ) if orcid_url else "" ,
+				utils.Link( aid , aid ) if aid else "" ,
+			])
+
+		# 7. Build sheets
+		HEADERS_ROW = [ "Cites" , "Title" , "Year" , "Proxy" , "DOI" , "Link" , "PDF" , "OA Cited-By" , "WID" ]
 		sheets = [
-			( "Top 1000 by Cites"   , HEADERS_ROW , rows[ :1000 ] ),
+			( "Top 1000 by Cites"     , HEADERS_ROW    , rows[ :1000 ] ),
+			( "Top 1000 Cited-By"     , HEADERS_ROW    , forward_rows[ :1000 ] ),
+			( "Top 100 Authors"       , AUTHOR_HEADERS , author_rows ),
 			# ( "Top 1000 by Recency" , HEADERS_ROW , sorted( rows , key=lambda r: r[ 2 ] or 0 , reverse=True )[ :1000 ] ),
 		]
 
 		utils.write_xlsx( self.xlsx_path , sheets )
-		print( f"resolved={len(zp)} missing={len(rows)} (deduped {skipped}) -> {self.xlsx_path}" )
+		print( f"resolved={len(zp)} missing={len(rows)} (deduped {skipped}) forward={len(forward_rows)} (deduped {forward_skipped}) -> {self.xlsx_path}" )
 		return self._index
