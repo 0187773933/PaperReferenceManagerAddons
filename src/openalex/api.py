@@ -52,7 +52,7 @@ class OpenAlexAPI():
 		return self._request( f"{self.base_url}/https://doi.org/{doi}" )
 
 	def get_id( self , open_alex_wid ):
-		return self._request( self.base_url + open_alex_wid )
+		return self._request( f"{self.base_url}/{open_alex_wid}" )
 
 	def search_title( self , title , per_page=10 ):
 		data = self._request( self.base_url , {

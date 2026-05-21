@@ -3,6 +3,7 @@ from pathlib import Path
 # import shutil
 # import etms_downloader.tasks.tasks as tasks
 import src.tasks.tasks as tasks
+from pathlib import Path
 
 def cli():
 	parser = argparse.ArgumentParser()
@@ -10,19 +11,19 @@ def cli():
 	# Default
 	parser.add_argument(
 		"--output" ,
-		type=str ,
+		type=Path ,
 		default=Path.cwd().joinpath( "output" ) ,
 		help="Output Location"
 	)
 	parser.add_argument(
 		"--config" ,
-		type=str ,
+		type=Path ,
 		default=Path.cwd().joinpath( "config" ) ,
 		help="Config Files Location"
 	)
 	parser.add_argument(
 		"--searches" ,
-		type=str ,
+		type=Path ,
 		default=Path.cwd().joinpath( "searches" ) ,
 		help="Searches Files Location"
 	)
@@ -56,13 +57,13 @@ def cli():
 	# Optional
 	parser.add_argument(
 		"--zotero-sqlite" ,
-		type=str ,
+		type=Path ,
 		default=None ,
 		help="Optionally Specify Direct Path to Zotero SQLite DB"
 	)
 	parser.add_argument(
 		"--mendeley-sqlite" ,
-		type=str ,
+		type=Path ,
 		default=None ,
 		help="Optionally Specify Direct Path to Mendeley SQLite DB"
 	)
