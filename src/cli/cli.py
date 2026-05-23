@@ -67,7 +67,12 @@ def cli():
 		default=None ,
 		help="Optionally Specify Direct Path to Mendeley SQLite DB"
 	)
-
+	parser.add_argument(
+		"--top-author-count" ,
+		type=int ,
+		default=100 ,
+		help="Optionally Specify Total Number of Most Common Authors"
+	)
 
 	args = parser.parse_args()
 	tasks.main( args )

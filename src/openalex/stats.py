@@ -152,7 +152,7 @@ class OpenAlexStats():
 			author_cites.items() ,
 			key=lambda kv: ( kv[ 1 ] , author_papers[ kv[ 0 ] ] ) ,
 			reverse=True ,
-		)[ :100 ]
+		)[ : self.args.top_author_count ]
 		author_rows = []
 		for aid , total in ranked_authors:
 			info = author_meta.get( aid , {} )
@@ -170,10 +170,11 @@ class OpenAlexStats():
 		sheets = [
 			( "Top 1000 by Cites"     , HEADERS_ROW    , rows[ :1000 ] ),
 			( "Top 1000 Cited-By"     , HEADERS_ROW    , forward_rows[ :1000 ] ),
-			( "Top 100 Authors"       , AUTHOR_HEADERS , author_rows ),
+			( f"Top {self.args.top_author_count} Authors"       , AUTHOR_HEADERS , author_rows ),
 			# ( "Top 1000 by Recency" , HEADERS_ROW , sorted( rows , key=lambda r: r[ 2 ] or 0 , reverse=True )[ :1000 ] ),
 		]
 
 		utils.write_xlsx( self.xlsx_path , sheets )
-		print( f"resolved={len(zp)} missing={len(rows)} (deduped {skipped}) forward={len(forward_rows)} (deduped {forward_skipped}) -> {self.xlsx_path}" )
+		print( f"resolved={len(zp)} missing={len(rows)} (deduped {skipped}) forward={len(forward_rows)} (deduped {forward_skipped})" )
+		print( f"Created {self.xlsx_path}" )
 		return self._index
