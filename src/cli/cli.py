@@ -74,5 +74,15 @@ def cli():
 		help="Optionally Specify Total Number of Most Common Authors"
 	)
 
+	# Other Tasks
+	parser.add_argument(
+		"--mendeley-download" ,
+		action="store_true" ,
+		default=False ,
+		help="Download Mendeley PDFs"
+	)
+
 	args = parser.parse_args()
+	if args.mendeley_download:
+		tasks.mendeley_download( args )
 	tasks.main( args )

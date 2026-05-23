@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 from pprint import pprint
 from rapidfuzz import fuzz , process
+from tqdm import tqdm
 
 from .auth import MendeleyAuth
 from ..utils import utils
@@ -13,36 +14,102 @@ class MendeleyAPI():
 		self.args = args
 		self.Auth = MendeleyAuth( args )
 		self.api_base   = "https://api.mendeley.com"
-		self.cache_path = Path.cwd().joinpath( "output" , "cache" , "mendeley.jsonl" )
+		self.cache_path = self.args.output.joinpath( "cache" , "mendeley.jsonl" )
+		self.pdf_download_path = self.args.output.joinpath( "pdfs" , "mendeley" )
+		self.pdf_download_path.mkdir( parents=True , exist_ok=True )
 		self._index_titles = None
 		self._index_dois   = None
 		self._index_ids    = None   # ids the current index was built from
 		self._index_time   = 0.0    # last time we refreshed
 		self._index_ttl    = 300    # seconds before we re-hit snapshot()
+		self.access_token = None
+		self.session = None
+
+	def refresh_session( self ):
+		if not self.access_token:
+			self.access_token = self.Auth.get_access_token()
+		if not self.session:
+			self.session = requests.Session()
+			self.session.headers[ "Authorization" ] = f"Bearer {self.access_token}"
+
+	def files_for_document( self , document_id ):
+		try:
+			r = self.session.get( self.api_base + "/files" ,
+				params={ "document_id": document_id } ,
+				headers={ "Accept": "application/vnd.mendeley-file.1+json" } ,
+				timeout=30
+			)
+			r.raise_for_status()
+			return r.json()
+		except Exception as e:
+			print( e )
+			return {}
+
+	def download_file( self , file_id , file_name ):
+		try:
+			r = self.session.get(  self.api_base + f"/files/{file_id}" ,
+				headers={ "Accept": "application/vnd.mendeley-file.1+json" } ,
+				timeout=30 ,
+				allow_redirects=False
+			)
+			if r.status_code not in ( 302 , 303 ):
+				raise RuntimeError(
+					f"Expected redirect for file download, got HTTP {r.status_code}"
+				)
+			download_url = r.headers.get( "Location" )
+			if not download_url:
+				raise RuntimeError( "Mendeley file response did not include Location header" )
+			file_response = requests.get(
+				download_url ,
+				timeout=120
+			)
+			file_response.raise_for_status()
+			out_path = self.pdf_download_path.joinpath( file_name )
+			out_path.write_bytes( file_response.content )
+			return out_path
+		except Exception as e:
+			print( e )
+			return False
 
 	def take_snapshot( self , modified_since=None ):
-		self.access_token = self.Auth.get_access_token()
-		sess = requests.Session()
-		sess.headers[ "Authorization" ] = f"Bearer {self.access_token}"
+		self.refresh_session()
 		url = self.api_base + "/documents"
 		params = { "limit": 500 , "view": "all" }
 		if modified_since:
 			params[ "modified_since" ] = modified_since
+		print( "Mendeley :: Taking Snapshot" )
 		while url:
-			r = sess.get( url , params=params , headers={
+			r = self.session.get( url , params=params , headers={
 				"Accept": "application/vnd.mendeley-document.1+json"
 			} , timeout=30 )
 			r.raise_for_status()
 			for item in r.json():
 				ids = item.get( "identifiers" , {} ) or {}
 				doi = ids.get( "doi" )
+				websites = item.get( "websites" )
+				file_attached = item.get( "file_attached" )
+				doc_id = item.get( "id" )
+				pdf_hosted = []
+				pdf_links = []
+				if file_attached == True:
+					files = self.files_for_document( doc_id )
+					for file in files:
+						if file.get( "mime_type" ) == "application/pdf":
+							pdf_hosted.append( { "id": file.get( "id" ) , "file_name": file.get( "file_name" ) } )
+				if websites:
+					for x in websites:
+						if ".pdf" in x:
+							pdf_links.append( x )
 				doc = {
 					"doi":      doi ,
-					"id":       item.get( "id" ) ,
+					"id":       doc_id ,
 					"title":    item.get( "title" ) ,
 					"url":      f"https://doi.org/{doi}" ,
 					"date":     item.get( "year" ) ,
 					"modified": item.get( "last_modified" ) ,
+					"type": item.get( "type" ) ,
+					"pdf_hosted": pdf_hosted ,
+					"pdf_links": pdf_links
 				}
 				yield doc
 			params = None
@@ -121,3 +188,40 @@ class MendeleyAPI():
 		if isinstance( doi , ( list , tuple , set ) ):
 			return { x: ( utils.normalize_doi( x ) in dois ) for x in doi }
 		return utils.normalize_doi( doi ) in dois
+
+	def download_snapshot_pdfs( self ):
+		if not self.cache_path.exists():
+			print( f"Mendeley :: No snapshot cache at {self.cache_path}" )
+			return
+		self.refresh_session()
+		papers = []
+		with self.cache_path.open( encoding="utf-8" ) as fh:
+			for line in fh:
+				if line.strip():
+					papers.append( json.loads( line ) )
+		total_files = sum( len( p.get( "pdf_hosted" ) or [] ) for p in papers )
+		print( f"Mendeley :: Downloading up to {total_files} PDFs across {len(papers)} papers -> {self.pdf_download_path}" )
+		downloaded , skipped , failed = 0 , 0 , 0
+		file_bar = tqdm( total=total_files , desc="PDFs" , position=1 , leave=False )
+		for paper in tqdm( papers , desc="Papers" , position=0 ):
+			pdf_hosted = paper.get( "pdf_hosted" ) or []
+			for entry in pdf_hosted:
+				file_id = entry.get( "id" )
+				file_name = entry.get( "file_name" )
+				if not file_id or not file_name:
+					failed += 1
+					file_bar.update( 1 )
+					continue
+				out_path = self.pdf_download_path.joinpath( file_name )
+				if out_path.exists():
+					skipped += 1
+					file_bar.update( 1 )
+					continue
+				result = self.download_file( file_id , file_name )
+				if result:
+					downloaded += 1
+				else:
+					failed += 1
+				file_bar.update( 1 )
+		file_bar.close()
+		print( f"Mendeley :: PDFs downloaded={downloaded} skipped={skipped} failed={failed}" )

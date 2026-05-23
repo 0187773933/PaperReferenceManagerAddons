@@ -2,6 +2,7 @@
 *__pycache__/
 venv/
 output/*
+output-mendeley/*
 *.egg-info
 .claude/
 .ipynb_checkpoints/

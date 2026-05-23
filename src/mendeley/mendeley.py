@@ -14,3 +14,7 @@ class Mendeley:
 		elif self.args.mendeley_source == "api":
 			self.snapshot = self.API.snapshot()
 		return self.snapshot
+
+	def download( self ):
+		if self.args.mendeley_source == "api":
+			self.API.download_snapshot_pdfs()
