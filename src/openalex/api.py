@@ -69,3 +69,19 @@ class OpenAlexAPI():
 			"sort": "cited_by_count:desc" ,
 		})
 		return ( data or {} ).get( "results" , [] )
+
+	def batch_get_ids( self , wids , per_page=50 ):
+		"""Fetch many works in one request via filter=ids.openalex:W1|W2|...
+		Yields work dicts. Caller batches; we cap per-request size to keep URLs sane."""
+		clean = [ w for w in ( wids or [] ) if w and w.startswith( "W" ) ]
+		if not clean:
+			return
+		per_page = max( 1 , min( per_page , 50 ) )
+		for i in range( 0 , len( clean ) , per_page ):
+			chunk = clean[ i : i + per_page ]
+			data = self._request( self.base_url , {
+				"filter": f"ids.openalex:{ '|'.join( chunk ) }" ,
+				"per-page": per_page ,
+			})
+			for w in ( data or {} ).get( "results" , [] ) or []:
+				yield w
