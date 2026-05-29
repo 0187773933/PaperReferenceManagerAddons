@@ -6,9 +6,12 @@ import unicodedata
 from tqdm import tqdm
 from openpyxl import Workbook
 from openpyxl.styles import Font
+from rapidfuzz import fuzz , process
 import importlib.util
 
 from ..openalex import search_helpers
+
+FUZZ_TITLE_THRESHOLD = 92
 
 def write_yaml( file_path , python_object ):
 	with open( file_path , "w" , encoding="utf-8" ) as f:
@@ -148,9 +151,70 @@ def openalex_to_xlsx_row( wid , meta , cite_count ):
 		wid ,
 	]
 
-def load_searches( searches_dir ):
+def build_library_dedup_index( snapshot ):
+	"""Build a dedup index from a library snapshot ( normalized DOIs + titles ).
+	Use with is_library_dup() to test whether an OpenAlex meta dict matches
+	something already in the library."""
+	dois = { normalize_doi( i[ "doi" ] ) for i in snapshot.values() if i.get( "doi" ) }
+	dois.discard( None )
+	titles_list = [
+		normalize_title( i[ "title" ] )
+		for i in snapshot.values() if i.get( "title" )
+	]
+	titles_list = [ t for t in titles_list if t ]
+	titles_set = set( titles_list )
+	return {
+		"dois": dois ,
+		"titles_set": titles_set ,
+		"titles_list": titles_list ,
+	}
+
+def is_library_dup( meta , lib_index , fuzzy=True , threshold=FUZZ_TITLE_THRESHOLD ):
+	"""True if meta matches the library by DOI ( exact ) or title.
+	Title check: exact normalized first ; if fuzzy=True , also a
+	token_set_ratio match at >= threshold. token_set_ratio is bag-of-words
+	and false-positives on topical overlap , so pass fuzzy=False for
+	high-precision callers ( e.g. the crawler , which feeds a manual review )."""
+	rd = meta.get( "doi" )
+	rd_norm = normalize_doi( rd ) if rd else None
+	if rd_norm and rd_norm in lib_index[ "dois" ]:
+		return True
+	rt = meta.get( "title" ) or meta.get( "display_name" )
+	rt_norm = normalize_title( rt ) if rt else None
+	if not rt_norm:
+		return False
+	if rt_norm in lib_index[ "titles_set" ]:
+		return True
+	if not fuzzy:
+		return False
+	match = process.extractOne(
+		rt_norm , lib_index[ "titles_list" ] ,
+		scorer=fuzz.token_set_ratio ,
+		score_cutoff=threshold ,
+	)
+	return match is not None
+
+def load_searches( searches_dir , files=None ):
+    """Load search predicates from .py files in searches_dir.
+    If files is provided ( a list of names/paths ) , load only those instead of
+    globbing the directory. Names without .py get the extension appended ;
+    relative paths resolve against searches_dir ; absolute paths pass through."""
+    from pathlib import Path
+    if files:
+        py_files = []
+        for f in files:
+            p = Path( f )
+            if p.suffix != ".py":
+                p = p.with_suffix( ".py" )
+            if not p.is_absolute():
+                p = searches_dir.joinpath( p )
+            if not p.exists():
+                raise FileNotFoundError( f"search file not found: {p}" )
+            py_files.append( p )
+    else:
+        py_files = sorted( searches_dir.glob( "*.py" ) )
     all_searches = []
-    for py_file in sorted( searches_dir.glob( "*.py" ) ):
+    for py_file in py_files:
         spec = importlib.util.spec_from_file_location( py_file.stem , py_file )
         module = importlib.util.module_from_spec( spec )
         for name in dir( search_helpers ):

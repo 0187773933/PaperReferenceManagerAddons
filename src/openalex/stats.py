@@ -4,11 +4,8 @@ from pathlib import Path
 from pprint import pprint
 from tqdm import tqdm
 from collections import Counter
-from rapidfuzz import fuzz , process
 
 from ..utils import utils
-
-FUZZ_TITLE_THRESHOLD = 92
 
 def reconstruct_abstract( inv_index ):
 	if not inv_index: return ""
@@ -35,21 +32,6 @@ class OpenAlexStats():
 		self._index = []   # list of ( wid , meta , haystack , cite_count , included_in_missing )
 		self.xlsx_path = self.args.output.joinpath( "missing.xlsx" )
 
-	def _is_dup( self , rd_norm , rt_norm , lib_dois , lib_titles_set , lib_titles_list ):
-		if rd_norm and rd_norm in lib_dois:
-			return True
-		if rt_norm:
-			if rt_norm in lib_titles_set:
-				return True
-			match = process.extractOne(
-				rt_norm , lib_titles_list ,
-				scorer=fuzz.token_set_ratio ,
-				score_cutoff=FUZZ_TITLE_THRESHOLD ,
-			)
-			if match:
-				return True
-		return False
-
 	def compute( self , snapshot ):
 		# 1. OpenAlex data we have for library papers
 		zp = {}
@@ -60,14 +42,7 @@ class OpenAlexStats():
 				zp[ oid.rsplit( "/" , 1 )[ -1 ] ] = d
 
 		# 2. Source of truth: snapshot
-		lib_dois = { utils.normalize_doi( i[ "doi" ] ) for i in snapshot.values() if i.get( "doi" ) }
-		lib_dois.discard( None )
-		lib_titles_list = [
-			utils.normalize_title( i[ "title" ] )
-			for i in snapshot.values() if i.get( "title" )
-		]
-		lib_titles_list = [ t for t in lib_titles_list if t ]
-		lib_titles_set = set( lib_titles_list )
+		lib_index = utils.build_library_dedup_index( snapshot )
 		lib_wids = set( zp.keys() ) | { fp.stem for fp in self.storage_dir.glob( "*.json" ) }
 
 		# 3. Tally backward refs
@@ -87,12 +62,7 @@ class OpenAlexStats():
 			meta = ( utils.read_json( fp ) or {} ) if fp.exists() else {}
 			haystack = make_haystack( meta )
 
-			rt = meta.get( "title" ) or meta.get( "display_name" )
-			rt_norm = utils.normalize_title( rt ) if rt else None
-			rd = meta.get( "doi" )
-			rd_norm = utils.normalize_doi( rd ) if rd else None
-
-			is_dup = self._is_dup( rd_norm , rt_norm , lib_dois , lib_titles_set , lib_titles_list )
+			is_dup = utils.is_library_dup( meta , lib_index )
 			self._index.append( ( rw , meta , haystack , n , not is_dup ) )
 
 			if is_dup:
@@ -116,11 +86,7 @@ class OpenAlexStats():
 		forward_rows , forward_skipped = [] , 0
 		for cwid , n in tqdm( forward_counts.most_common() , desc="Building cited-by rows" ):
 			meta = forward_meta[ cwid ]
-			rt = meta.get( "title" ) or meta.get( "display_name" )
-			rt_norm = utils.normalize_title( rt ) if rt else None
-			rd = meta.get( "doi" )
-			rd_norm = utils.normalize_doi( rd ) if rd else None
-			if self._is_dup( rd_norm , rt_norm , lib_dois , lib_titles_set , lib_titles_list ):
+			if utils.is_library_dup( meta , lib_index ):
 				forward_skipped += 1
 				continue
 			forward_rows.append( utils.openalex_to_xlsx_row( cwid , meta , n ) )

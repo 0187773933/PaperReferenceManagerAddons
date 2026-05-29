@@ -7,7 +7,7 @@ browser userscripts / external tools can ask "do I already have this paper".
 
 Two entry points share this module:
   - prma server ( wired through src/cli/cli.py + src/tasks/tasks.py )
-  - python server.py ( root-level shim , kept for the existing .bat files )
+  - python server.py ( root-level shim , kept for the existing .bat files in ./windows-scripts/ )
 
 Both end up calling run( args ). The args namespace must have:
     manager , zotero , mendeley , output , config ,

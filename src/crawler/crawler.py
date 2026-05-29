@@ -104,6 +104,8 @@ class Crawler():
 		meta = self._read_cached( wid )
 		if meta is not None:
 			return meta , False
+		if not wid or not wid.startswith( "W" ):
+			return None , False
 		if not do_fetch or api_budget[ 0 ] <= 0:
 			return None , False
 		api_budget[ 0 ] -= 1
@@ -148,6 +150,8 @@ class Crawler():
 		seed = self._read_cached( wid )
 		if seed and seed.get( "cited_by_works" ):
 			return seed[ "cited_by_works" ] or []
+		if not wid or not wid.startswith( "W" ):
+			return []
 		if not do_fetch or api_budget[ 0 ] <= 0:
 			return []
 		api_budget[ 0 ] -= 1
@@ -187,6 +191,8 @@ class Crawler():
 	def crawl(
 		self ,
 		searches ,
+		snapshot=None ,
+		out_name=None ,
 		max_visits=500 ,
 		max_depth=2 ,
 		min_seed_hits=1 ,
@@ -200,6 +206,8 @@ class Crawler():
 		if not searches:
 			print( "Crawler :: no searches provided" )
 			return
+		if out_name:
+			self.xlsx_path = self.args.output.joinpath( out_name )
 		names = [ n for n , _ in searches ]
 		predicates = [ p for _ , p in searches ]
 		print( f"Crawler :: predicates={names}" )
@@ -207,13 +215,24 @@ class Crawler():
 		       f"do_fetch={do_fetch} api_budget={api_budget} "
 		       f"cite_weight={cite_weight} link_weight={link_weight}" )
 
-		# Inventory what we already have on disk
+		# Inventory what we already have on disk.
+		# lib_wids = the library ; used as a fast-path skip for novel detection.
+		# refs/crawler caches are for avoiding re-fetch , NOT for suppressing
+		# reports -- a paper sitting in those caches may still be a valid
+		# predicate-matched candidate the user hasn't reviewed yet.
 		lib_wids = { fp.stem for fp in self.oa_cache_dir.glob( "*.json" ) }
 		ref_wids = { fp.stem for fp in self.oa_refs_dir.glob( "*.json" ) }
 		crawler_wids = { fp.stem for fp in self.cache_dir.glob( "*.json" ) }
-		known_wids = lib_wids | ref_wids | crawler_wids
-		print( f"Crawler :: known wids -- library={len(lib_wids)} "
-		       f"refs={len(ref_wids)} crawler={len(crawler_wids)}" )
+		print( f"Crawler :: caches -- library={len(lib_wids)} "
+		       f"refs={len(ref_wids)} crawler={len(crawler_wids)} "
+		       f"( only library is used for novel-exclusion )" )
+
+		# DOI/title dedup against the live library snapshot ( catches papers
+		# that are in the library but missing from the OpenAlex cache , and
+		# papers reached under a different work-id ).
+		lib_index = utils.build_library_dedup_index( snapshot ) if snapshot else None
+		print( f"Crawler :: lib_index dois={len(lib_index['dois']) if lib_index else 0} "
+		       f"titles={len(lib_index['titles_set']) if lib_index else 0}" )
 
 		# Seed from library papers matching the predicates
 		seeds = []
@@ -247,10 +266,13 @@ class Crawler():
 				depths[ wid ] = min( depth , depths.get( wid , depth ) )
 				heapq.heappush( frontier , ( -s , counter , wid , depth ) )
 				counter += 1
-			if hits >= min_novel_hits and wid not in known_wids:
-				prev = novel.get( wid )
-				if ( prev is None ) or ( s > prev[ 1 ] ):
-					novel[ wid ] = ( meta , s , hits , depth )
+			if hits < min_novel_hits or wid in lib_wids:
+				return
+			if lib_index and utils.is_library_dup( meta , lib_index , fuzzy=False ):
+				return
+			prev = novel.get( wid )
+			if ( prev is None ) or ( s > prev[ 1 ] ):
+				novel[ wid ] = ( meta , s , hits , depth )
 
 		for wid , meta in seeds:
 			metas[ wid ] = meta

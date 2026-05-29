@@ -192,8 +192,9 @@ class MendeleyAPI():
 	def download_snapshot_pdfs( self ):
 		if not self.cache_path.exists():
 			print( f"Mendeley :: No snapshot cache at {self.cache_path}" )
-			return
-		self.refresh_session()
+			self.snapshot()
+		else:
+			self.refresh_session()
 		papers = []
 		with self.cache_path.open( encoding="utf-8" ) as fh:
 			for line in fh:
