@@ -12,6 +12,11 @@ def mendeley_yolo( args ):
 	m = Mendeley( args )
 	m.yolo()
 
+def zotero_yolo( args ):
+	from ..zotero.zotero import Zotero
+	z = Zotero( args )
+	z.yolo()
+
 def server( args ):
 	from ..server.server import run
 	run( args )

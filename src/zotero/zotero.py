@@ -228,3 +228,38 @@ class Zotero():
 			}
 			papers[ key ] = paper
 		return papers
+
+	def yolo( self ):
+		from pathlib import Path
+		from tqdm import tqdm
+		from ..pdf import pdf
+		papers = self.snapshot()
+
+		jobs = []
+		skip_no_doi , skip_no_pdf , skip_missing = 0 , 0 , 0
+		for key , paper in papers.items():
+			if not utils.normalize_doi( paper.get( "doi" ) ):
+				skip_no_doi += 1
+				continue
+			pdfs = paper.get( "pdfs" ) or []
+			if not pdfs:
+				skip_no_pdf += 1
+				continue
+			for raw in pdfs:
+				pdf_path = Path( raw )
+				if not pdf_path.exists():
+					skip_missing += 1
+					continue
+				jobs.append( pdf_path )
+
+		print(
+			f"Zotero :: YOLO -- {len(jobs)} pdfs to process "
+			f"( skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} not-on-disk={skip_missing} )"
+		)
+
+		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
+		for pdf_path in outer:
+			outer.set_postfix_str( pdf_path.name[ :60 ] )
+			yolo_path = pdf_path.with_suffix( ".json" )
+			result = pdf.yolo( pdf_path )
+			utils.write_json( yolo_path , result )

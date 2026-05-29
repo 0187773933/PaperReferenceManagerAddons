@@ -29,8 +29,6 @@ class Mendeley:
 		yolo_cache.mkdir( parents=True , exist_ok=True )
 		papers = self.API.snapshot()
 
-		# Pre-filter so the outer bar has an accurate total ; collapse the
-		# per-paper skip messages into one summary line.
 		jobs = []
 		skip_no_doi , skip_no_pdf , skip_missing = 0 , 0 , 0
 		for p_id , paper in papers.items():
@@ -52,8 +50,6 @@ class Mendeley:
 			f"( skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} not-downloaded={skip_missing} )"
 		)
 
-		# Two bars: per-PDF pages on top ( leave=False so it auto-clears ) ,
-		# overall PDF count on the bottom ( stays visible ).
 		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
 		for pdf_path in outer:
 			outer.set_postfix_str( pdf_path.name[ :60 ] )

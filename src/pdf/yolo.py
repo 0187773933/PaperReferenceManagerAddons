@@ -177,7 +177,6 @@ def add_overlay( _img , yolo_result , alpha=0.25 ):
 
 	return vis
 
-
 def img_with_overlay( _img , confidence , model_img_size=1024 , alpha=0.25 ):
 	yolo_result = img(
 		_img ,

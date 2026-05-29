@@ -70,7 +70,7 @@ def _mendeley( sub , global_parser ):
 	p_yolo = msub.add_parser(
 		"yolo" ,
 		parents=[ global_parser ] ,
-		help="Download PDFs for everything in the Mendeley snapshot"
+		help="YOLO PDFs the Mendeley snapshot"
 	)
 	p_yolo.set_defaults(
 		_entry=tasks.mendeley_yolo ,
@@ -79,6 +79,26 @@ def _mendeley( sub , global_parser ):
 	return {
 		"mendeley_download": False ,
 		"mendeley_yolo": False ,
+	}
+
+def _zotero( sub , global_parser ):
+	p = sub.add_parser(
+		"zotero" ,
+		parents=[ global_parser ] ,
+		help="Zotero-specific tasks"
+	)
+	msub = p.add_subparsers( dest="zotero_command" , metavar="<zotero-command>" )
+	p_yolo = msub.add_parser(
+		"yolo" ,
+		parents=[ global_parser ] ,
+		help="YOLO PDFs in the Zotero snapshot"
+	)
+	p_yolo.set_defaults(
+		_entry=tasks.zotero_yolo ,
+		zotero_yolo=True ,
+	)
+	return {
+		"zotero_yolo": False ,
 	}
 
 def _crawl( sub , global_parser ):
@@ -151,6 +171,7 @@ def _server( sub , global_parser ):
 REGISTRARS = (
 	_snapshot ,
 	_mendeley ,
+	_zotero   ,
 	_crawl    ,
 	_server   ,
 )

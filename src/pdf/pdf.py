@@ -16,7 +16,7 @@ def get_page_count( self , pdf_path ):
 		return -1
 
 DPI = 400
-def to_images( pdf_path , page_index=None , debug=False ):
+def to_images( pdf_path , page_index=None , max_pages=30 , debug=False ):
 	images = []
 	scale = DPI / 72.0 # 72 is pdf-spec for 1 inch
 
@@ -32,6 +32,9 @@ def to_images( pdf_path , page_index=None , debug=False ):
 			if not 0 <= page_index < n:
 				raise IndexError( f"page_index {page_index} out of range for {n}-page PDF" )
 			indices = [ page_index ]
+
+		if max_pages is not None:
+			indices = indices[ :max_pages ]
 
 		if debug:
 			print( f"[pdfium] {Path(pdf_path).name}: {n} pages, rendering {indices}" )
