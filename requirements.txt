@@ -5,3 +5,10 @@ requests
 openpyxl
 rapidfuzz
 playwright
+pikepdf
+pypdfium2
+doclayout-yolo
+Pillow
+deskew
+'numpy<2'
+huggingface_hub

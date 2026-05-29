@@ -29,6 +29,10 @@ def _global_parser():
 	g.add_argument( "--top-author-count" , type=int , default=100 ,
 		help="Total Number of Most Common Authors" )
 
+	# PDF
+	g.add_argument( "--pdf-deskew" , type=bool , default=True , help="Deskew PDFs" )
+	g.add_argument( "--pdf-deskew-threshold" , type=float , default=0.5 , help="PDF Deskew Threshold" )
+
 	# YOLO
 	g.add_argument( "--yolo-model-path" , type=Path , default=Path.cwd().joinpath( "models" , "doclayout_yolo_docstructbench_imgsz1024.pt" ) ,
 		help="Path to YOLO DocLayout Model" )
@@ -63,8 +67,18 @@ def _mendeley( sub , global_parser ):
 		_entry=tasks.mendeley_download ,
 		mendeley_download=True ,    # downstream code may read args.mendeley_download
 	)
+	p_yolo = msub.add_parser(
+		"yolo" ,
+		parents=[ global_parser ] ,
+		help="Download PDFs for everything in the Mendeley snapshot"
+	)
+	p_yolo.set_defaults(
+		_entry=tasks.mendeley_yolo ,
+		mendeley_yolo=True ,
+	)
 	return {
 		"mendeley_download": False ,
+		"mendeley_yolo": False ,
 	}
 
 def _crawl( sub , global_parser ):

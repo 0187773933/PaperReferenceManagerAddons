@@ -2,6 +2,8 @@ import cv2
 import math
 from deskew import determine_skew
 
+DESKEW_THRESHOLD = 0.5
+
 def get_skew_angle( image ):
 	gray = cv2.cvtColor( image , cv2.COLOR_BGR2GRAY )
 	thresh = cv2.threshold(
@@ -12,7 +14,7 @@ def get_skew_angle( image ):
 	return angle
 
 # https://github.com/sbrunner/deskew
-def deskew( image , angle , h , w ):
+def _deskew( image , angle , h , w ):
 	# compute new bounds to avoid cropping
 	center = ( w // 2 , h // 2 )
 	angle_rad = math.radians( angle )
@@ -32,3 +34,13 @@ def deskew( image , angle , h , w ):
 		flags=cv2.INTER_CUBIC ,
 		borderMode=cv2.BORDER_REPLICATE
 	)
+
+def deskew( _img , threshold=DESKEW_THRESHOLD ):
+	H , W = _img.shape[ :2 ]
+	scew_angle = get_skew_angle( _img )
+	if abs( scew_angle ) > threshold:
+		# print( f"\t\tDetected skew angle: {scew_angle:.2f}°, deskewing : {pdf_path}" )
+		deskewed = _deskew( _img , scew_angle , H , W )
+		return deskewed
+	else:
+		return _img
