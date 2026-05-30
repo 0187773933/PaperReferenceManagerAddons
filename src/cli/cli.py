@@ -76,9 +76,19 @@ def _mendeley( sub , global_parser ):
 		_entry=tasks.mendeley_yolo ,
 		mendeley_yolo=True ,
 	)
+	p_snap = msub.add_parser(
+		"snapshot" ,
+		parents=[ global_parser ] ,
+		help="Save a pickled Mendeley snapshot to output/cache/mendeley.snapshot"
+	)
+	p_snap.set_defaults(
+		_entry=tasks.mendeley_snapshot ,
+		mendeley_snapshot=True ,
+	)
 	return {
 		"mendeley_download": False ,
 		"mendeley_yolo": False ,
+		"mendeley_snapshot": False ,
 	}
 
 def _zotero( sub , global_parser ):
@@ -97,8 +107,18 @@ def _zotero( sub , global_parser ):
 		_entry=tasks.zotero_yolo ,
 		zotero_yolo=True ,
 	)
+	p_snap = msub.add_parser(
+		"snapshot" ,
+		parents=[ global_parser ] ,
+		help="Save a pickled Zotero snapshot to output/cache/zotero.snapshot"
+	)
+	p_snap.set_defaults(
+		_entry=tasks.zotero_snapshot ,
+		zotero_snapshot=True ,
+	)
 	return {
 		"zotero_yolo": False ,
+		"zotero_snapshot": False ,
 	}
 
 def _crawl( sub , global_parser ):

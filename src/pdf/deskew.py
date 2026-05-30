@@ -1,5 +1,6 @@
 import cv2
 import math
+import numpy as np
 from deskew import determine_skew
 
 DESKEW_THRESHOLD = 0.5
@@ -37,10 +38,12 @@ def _deskew( image , angle , h , w ):
 
 def deskew( _img , threshold=DESKEW_THRESHOLD ):
 	H , W = _img.shape[ :2 ]
-	scew_angle = get_skew_angle( _img )
-	if abs( scew_angle ) > threshold:
-		# print( f"\t\tDetected skew angle: {scew_angle:.2f}°, deskewing : {pdf_path}" )
-		deskewed = _deskew( _img , scew_angle , H , W )
+	skew_angle = get_skew_angle( _img )
+	if not skew_angle:
+		return _img
+	if abs( skew_angle ) > threshold:
+		# print( f"\t\tDetected skew angle: {skew_angle:.2f}°, deskewing : {pdf_path}" )
+		deskewed = _deskew( _img , skew_angle , H , W )
 		return deskewed
 	else:
 		return _img

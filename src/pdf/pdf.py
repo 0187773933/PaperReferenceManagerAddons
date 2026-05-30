@@ -1,3 +1,4 @@
+from tqdm import tqdm
 from pathlib import Path
 import tempfile
 import cv2
@@ -15,8 +16,8 @@ def get_page_count( self , pdf_path ):
 		print( f"{pdf_path}: {e}" )
 		return -1
 
-DPI = 400
-def to_images( pdf_path , page_index=None , max_pages=30 , debug=False ):
+DPI = 200
+def to_images( pdf_path , page_index=None , max_pages=50 , debug=False ):
 	images = []
 	scale = DPI / 72.0 # 72 is pdf-spec for 1 inch
 
@@ -90,7 +91,7 @@ def images_are_identical( pdf_images , threshold=0.01 , deskew=False , deskew_th
 	return True
 
 def yolo( pdf_path ):
-	from tqdm import tqdm
+
 	images = to_images( pdf_path )
 	pages = []
 	for image in tqdm( images , desc="Pages" , position=0 , leave=False , unit="pg" ):

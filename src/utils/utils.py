@@ -1,6 +1,7 @@
 import re
 import yaml
 import json
+import pickle
 import base64
 import unicodedata
 from tqdm import tqdm
@@ -28,6 +29,14 @@ def write_json( file_path , python_object ):
 def read_json( file_path ):
 	with open( file_path , encoding="utf-8" ) as f:
 		return json.load( f )
+
+def write_pickle( file_path , python_object ):
+	with open( file_path , "wb" ) as f:
+		pickle.dump( python_object , f )
+
+def read_pickle( file_path ):
+	with open( file_path , "rb" ) as f:
+		return pickle.load( f )
 
 # Crossref's recommended DOI pattern (the "good enough for 99%" one)
 _DOI_RE = re.compile( r'10\.\d{4,9}/[-._;()/:a-z0-9]+' , re.IGNORECASE )

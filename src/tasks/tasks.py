@@ -12,10 +12,20 @@ def mendeley_yolo( args ):
 	m = Mendeley( args )
 	m.yolo()
 
+def mendeley_snapshot( args ):
+	from ..mendeley.mendeley import Mendeley
+	m = Mendeley( args )
+	m.save_snapshot()
+
 def zotero_yolo( args ):
 	from ..zotero.zotero import Zotero
 	z = Zotero( args )
 	z.yolo()
+
+def zotero_snapshot( args ):
+	from ..zotero.zotero import Zotero
+	z = Zotero( args )
+	z.save_snapshot()
 
 def server( args ):
 	from ..server.server import run

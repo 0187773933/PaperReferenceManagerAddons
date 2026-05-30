@@ -11,10 +11,12 @@ def get_common( args ):
 	if manager_name == "mendeley":
 		from ..mendeley.mendeley import Mendeley
 		m = Mendeley( args )
+		m.save_snapshot()
 		return m.snapshot()
 	elif manager_name == "zotero":
 		from ..zotero.zotero import Zotero
 		z = Zotero( args )
+		z.save_snapshot()
 		return z.snapshot()
 	elif manager_name == "endnote":
 		print( "get_snapshot_common( EndNote ) , Todo" )

@@ -203,6 +203,15 @@ class Zotero():
 		# Return keyed by Zotero key (one per bib item)
 		return {item["key"]: item for item in papers.values()}
 
+	def save_snapshot( self ):
+		snap = self.snapshot()
+		cache_dir = self.args.output.joinpath( "cache" )
+		cache_dir.mkdir( parents=True , exist_ok=True )
+		out_path = cache_dir.joinpath( "zotero.snapshot" )
+		utils.write_pickle( out_path , snap )
+		print( f"Zotero :: snapshot pickled -- {len(snap)} papers -> {out_path}" )
+		return out_path
+
 	def snapshot( self ):
 		_snapshot = self.take_snapshot()
 		papers = {}
@@ -236,7 +245,7 @@ class Zotero():
 		papers = self.snapshot()
 
 		jobs = []
-		skip_no_doi , skip_no_pdf , skip_missing = 0 , 0 , 0
+		skip_no_doi , skip_no_pdf , skip_missing , skip_done = 0 , 0 , 0 , 0
 		for key , paper in papers.items():
 			if not utils.normalize_doi( paper.get( "doi" ) ):
 				skip_no_doi += 1
@@ -250,16 +259,20 @@ class Zotero():
 				if not pdf_path.exists():
 					skip_missing += 1
 					continue
+				if pdf_path.with_suffix( ".yolo.json" ).exists():
+					skip_done += 1
+					continue
 				jobs.append( pdf_path )
 
 		print(
 			f"Zotero :: YOLO -- {len(jobs)} pdfs to process "
-			f"( skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} not-on-disk={skip_missing} )"
+			f"( skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} "
+			f"not-on-disk={skip_missing} already-done={skip_done} )"
 		)
 
 		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
 		for pdf_path in outer:
 			outer.set_postfix_str( pdf_path.name[ :60 ] )
-			yolo_path = pdf_path.with_suffix( ".json" )
+			yolo_path = pdf_path.with_suffix( ".yolo.json" )
 			result = pdf.yolo( pdf_path )
 			utils.write_json( yolo_path , result )
