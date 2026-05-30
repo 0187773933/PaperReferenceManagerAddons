@@ -90,11 +90,11 @@ def images_are_identical( pdf_images , threshold=0.01 , deskew=False , deskew_th
 				return False
 	return True
 
-def yolo( pdf_path ):
+def yolo( pdf_path , do_deskew=False ):
 
 	images = to_images( pdf_path )
 	pages = []
 	for image in tqdm( images , desc="Pages" , position=0 , leave=False , unit="pg" ):
-		page_result = YOLO.img( image , 0.2 )
+		page_result = YOLO.img( image , 0.2 , do_deskew=do_deskew )
 		pages.append( page_result )
 	return pages

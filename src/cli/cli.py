@@ -30,7 +30,8 @@ def _global_parser():
 		help="Total Number of Most Common Authors" )
 
 	# PDF
-	g.add_argument( "--pdf-deskew" , type=bool , default=True , help="Deskew PDFs" )
+	g.add_argument( "--pdf-deskew" , action="store_true" , default=False ,
+		help="Deskew PDFs before YOLO ( off by default ; only useful for scanned PDFs )" )
 	g.add_argument( "--pdf-deskew-threshold" , type=float , default=0.5 , help="PDF Deskew Threshold" )
 
 	# YOLO

@@ -274,5 +274,5 @@ class Zotero():
 		for pdf_path in outer:
 			outer.set_postfix_str( pdf_path.name[ :60 ] )
 			yolo_path = pdf_path.with_suffix( ".yolo.json" )
-			result = pdf.yolo( pdf_path )
+			result = pdf.yolo( pdf_path , do_deskew=self.args.pdf_deskew )
 			utils.write_json( yolo_path , result )

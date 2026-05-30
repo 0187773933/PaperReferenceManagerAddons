@@ -34,14 +34,14 @@ def load_yolo_model():
 		_YOLO_MODEL = YOLOv10( Path.cwd().joinpath( "src" , "models" , "doclayout_yolo_docstructbench_imgsz1024.pt" ) )
 	return _YOLO_MODEL
 
-def img( _img , confidence=0.1 , model_img_size=1024 ):
+def img( _img , confidence=0.1 , model_img_size=1024 , do_deskew=False ):
 	model = load_yolo_model()
 	if hasattr( _img , "mode" ):
 		_img = np.array( _img.convert( "RGB" ) )
 		_img = cv2.cvtColor( _img , cv2.COLOR_RGB2BGR )
-	deskewed = deskew( _img )
+	prepped = deskew( _img ) if do_deskew else _img
 	detection = model.predict(
-		deskewed ,
+		prepped ,
 		imgsz=model_img_size ,
 		conf=confidence ,
 	)
@@ -59,7 +59,7 @@ def img( _img , confidence=0.1 , model_img_size=1024 ):
 	names = detection.names
 	boxes = detection.boxes
 
-	h , w = deskewed.shape[ : 2 ]
+	h , w = prepped.shape[ : 2 ]
 
 	for i in range( len( boxes ) ):
 		class_id = int( boxes.cls[ i ] )
