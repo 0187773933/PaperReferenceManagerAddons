@@ -17,6 +17,11 @@ def mendeley_snapshot( args ):
 	m = Mendeley( args )
 	m.save_snapshot()
 
+def mendeley_images( args ):
+	from ..mendeley.mendeley import Mendeley
+	m = Mendeley( args )
+	m.images()
+
 def zotero_yolo( args ):
 	from ..zotero.zotero import Zotero
 	z = Zotero( args )
@@ -26,6 +31,11 @@ def zotero_snapshot( args ):
 	from ..zotero.zotero import Zotero
 	z = Zotero( args )
 	z.save_snapshot()
+
+def zotero_images( args ):
+	from ..zotero.zotero import Zotero
+	z = Zotero( args )
+	z.images()
 
 def server( args ):
 	from ..server.server import run

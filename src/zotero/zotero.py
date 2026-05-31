@@ -238,6 +238,18 @@ class Zotero():
 			papers[ key ] = paper
 		return papers
 
+	def _yolo_dir( self ):
+		d = self.args.output.joinpath( "cache" , "yolo" , "zotero" )
+		d.mkdir( parents=True , exist_ok=True )
+		return d
+
+	def _yolo_path_for( self , pdf_path , doi ):
+		"""{normalizedDOI}-{pdf_stem}.yolo.json -- DOI guards against PDF
+		filename collisions across different papers ; pdf_stem disambiguates
+		multiple PDFs that share a DOI."""
+		prefix = utils.doi_to_filename( doi )
+		return self._yolo_dir().joinpath( f"{prefix}-{pdf_path.stem}.yolo.json" )
+
 	def yolo( self ):
 		from pathlib import Path
 		from tqdm import tqdm
@@ -247,7 +259,8 @@ class Zotero():
 		jobs = []
 		skip_no_doi , skip_no_pdf , skip_missing , skip_done = 0 , 0 , 0 , 0
 		for key , paper in papers.items():
-			if not utils.normalize_doi( paper.get( "doi" ) ):
+			doi = utils.normalize_doi( paper.get( "doi" ) )
+			if not doi:
 				skip_no_doi += 1
 				continue
 			pdfs = paper.get( "pdfs" ) or []
@@ -259,10 +272,10 @@ class Zotero():
 				if not pdf_path.exists():
 					skip_missing += 1
 					continue
-				if pdf_path.with_suffix( ".yolo.json" ).exists():
+				if self._yolo_path_for( pdf_path , doi ).exists():
 					skip_done += 1
 					continue
-				jobs.append( pdf_path )
+				jobs.append( ( pdf_path , doi ) )
 
 		print(
 			f"Zotero :: YOLO -- {len(jobs)} pdfs to process "
@@ -271,8 +284,83 @@ class Zotero():
 		)
 
 		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
-		for pdf_path in outer:
+		for pdf_path , doi in outer:
 			outer.set_postfix_str( pdf_path.name[ :60 ] )
-			yolo_path = pdf_path.with_suffix( ".yolo.json" )
+			yolo_path = self._yolo_path_for( pdf_path , doi )
 			result = pdf.yolo( pdf_path , do_deskew=self.args.pdf_deskew )
 			utils.write_json( yolo_path , result )
+
+	# Depends on yolo() having run -- needs <pdf>.yolo.json next to each PDF.
+	# Writes cropped figures/tables ( with captions stacked below ) to
+	# output/images/zotero/{normalizedDOI}-{kind}-{N}.png
+	def images( self ):
+		from pathlib import Path
+		from tqdm import tqdm
+		from ..pdf import images as images_mod
+		images_dir = self.args.output.joinpath( "images" , "zotero" )
+		images_dir.mkdir( parents=True , exist_ok=True )
+		all_dir = images_dir.joinpath( "ALL" )
+		all_dir.mkdir( parents=True , exist_ok=True )
+
+		# Pre-scan ALL/ once to find already-done DOI prefixes.
+		done_prefixes = set()
+		for f in all_dir.iterdir():
+			if f.suffix != ".png":
+				continue
+			for marker in ( "-figure-" , "-table-" ):
+				idx = f.stem.rfind( marker )
+				if idx > 0:
+					done_prefixes.add( f.stem[ :idx ] )
+					break
+
+		papers = self.snapshot()
+		jobs = []
+		skip_no_doi , skip_no_pdf , skip_missing , skip_no_yolo , skip_done = 0 , 0 , 0 , 0 , 0
+		for key , paper in papers.items():
+			doi = utils.normalize_doi( paper.get( "doi" ) )
+			if not doi:
+				skip_no_doi += 1
+				continue
+			pdfs = paper.get( "pdfs" ) or []
+			if not pdfs:
+				skip_no_pdf += 1
+				continue
+			prefix = utils.doi_to_filename( doi )
+			if prefix in done_prefixes:
+				# Skip the whole paper -- all of its PDFs share the same DOI prefix.
+				skip_done += len( pdfs )
+				continue
+			for raw in pdfs:
+				pdf_path = Path( raw )
+				if not pdf_path.exists():
+					skip_missing += 1
+					continue
+				yolo_path = self._yolo_path_for( pdf_path , doi )
+				if not yolo_path.exists():
+					skip_no_yolo += 1
+					continue
+				jobs.append( ( pdf_path , yolo_path , prefix ) )
+
+		print(
+			f"Zotero :: IMAGES -- {len(jobs)} pdfs to process -> {images_dir} "
+			f"( skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} "
+			f"not-on-disk={skip_missing} no-yolo={skip_no_yolo} already-done={skip_done} )"
+		)
+
+		include_tables = getattr( self.args , "images_include_tables" , False )
+		montage        = not getattr( self.args , "images_no_montage" , False )
+		size_name      = getattr( self.args , "images_montage_size" , "medium" )
+		montage_scale  = images_mod.MONTAGE_SCALES.get( size_name , 1.0 )
+		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
+		total_imgs = 0
+		for pdf_path , yolo_path , prefix in outer:
+			outer.set_postfix_str( pdf_path.name[ :60 ] )
+			n = images_mod.extract(
+				pdf_path , yolo_path , images_dir , prefix ,
+				include_tables=include_tables ,
+				montage=montage ,
+				montage_scale=montage_scale ,
+			)
+			total_imgs += n
+
+		print( f"Zotero :: IMAGES -- wrote {total_imgs} cropped images" )

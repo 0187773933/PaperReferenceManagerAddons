@@ -92,6 +92,12 @@ def openalex_normalize_title( title ):
 
 	return title
 
+def doi_to_filename( doi ):
+	"""Make a DOI usable as a filename component ( replace path separators )."""
+	if not doi:
+		return None
+	return doi.replace( "/" , "_" ).replace( "\\" , "_" )
+
 def base64_encode( message ):
 	try:
 		message_bytes = message.encode( 'utf-8' )

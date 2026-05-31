@@ -17,9 +17,10 @@ def get_page_count( self , pdf_path ):
 		return -1
 
 DPI = 200
-def to_images( pdf_path , page_index=None , max_pages=50 , debug=False ):
+def to_images( pdf_path , page_index=None , max_pages=50 , dpi=None , debug=False ):
 	images = []
-	scale = DPI / 72.0 # 72 is pdf-spec for 1 inch
+	render_dpi = dpi if dpi is not None else DPI
+	scale = render_dpi / 72.0 # 72 is pdf-spec for 1 inch
 
 	with pdfium.PdfDocument( str( pdf_path ) ) as pdf:
 		pdf.init_forms()
@@ -90,11 +91,22 @@ def images_are_identical( pdf_images , threshold=0.01 , deskew=False , deskew_th
 				return False
 	return True
 
-def yolo( pdf_path , do_deskew=False ):
+YOLO_CONFIDENCE = 0.2
+YOLO_MAX_PAGES = 50
 
-	images = to_images( pdf_path )
+def yolo( pdf_path , do_deskew=False ):
+	images = to_images( pdf_path , max_pages=YOLO_MAX_PAGES )
 	pages = []
 	for image in tqdm( images , desc="Pages" , position=0 , leave=False , unit="pg" ):
-		page_result = YOLO.img( image , 0.2 , do_deskew=do_deskew )
+		page_result = YOLO.img( image , YOLO_CONFIDENCE , do_deskew=do_deskew )
 		pages.append( page_result )
-	return pages
+	return {
+		"meta": {
+			"dpi":        DPI ,
+			"confidence": YOLO_CONFIDENCE ,
+			"do_deskew":  do_deskew ,
+			"max_pages":  YOLO_MAX_PAGES ,
+			"version":    1 ,
+		} ,
+		"pages": pages ,
+	}

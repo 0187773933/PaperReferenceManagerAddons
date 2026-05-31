@@ -84,10 +84,32 @@ def mendeley( sub , global_parser ):
 		_entry=tasks.mendeley_snapshot ,
 		mendeley_snapshot=True ,
 	)
+	p_images = msub.add_parser(
+		"images" ,
+		parents=[ global_parser ] ,
+		help="Extract figures/tables ( with captions ) using existing yolo.json files"
+	)
+	p_images.add_argument( "--include-tables" , dest="images_include_tables" ,
+		action="store_true" , default=False ,
+		help="Include tables in extraction ( off by default ; figures only )" )
+	p_images.add_argument( "--no-montage" , dest="images_no_montage" ,
+		action="store_true" , default=False ,
+		help="Skip the per-paper grid montage ( ALL/ crops only )" )
+	p_images.add_argument( "--montage-size" , dest="images_montage_size" ,
+		choices=[ "original" , "high" , "medium" , "low" ] , default="medium" ,
+		help="Montage scale relative to its natural size: original=100% , high=75% , medium=50% ( default ) , low=25%" )
+	p_images.set_defaults(
+		_entry=tasks.mendeley_images ,
+		mendeley_images=True ,
+	)
 	return {
 		"mendeley_download": False ,
 		"mendeley_yolo": False ,
 		"mendeley_snapshot": False ,
+		"mendeley_images": False ,
+		"images_include_tables": False ,
+		"images_no_montage": False ,
+		"images_montage_size": "medium" ,
 	}
 
 def zotero( sub , global_parser ):
@@ -115,9 +137,28 @@ def zotero( sub , global_parser ):
 		_entry=tasks.zotero_snapshot ,
 		zotero_snapshot=True ,
 	)
+	p_images = msub.add_parser(
+		"images" ,
+		parents=[ global_parser ] ,
+		help="Extract figures/tables ( with captions ) using existing yolo.json files"
+	)
+	p_images.add_argument( "--include-tables" , dest="images_include_tables" ,
+		action="store_true" , default=False ,
+		help="Include tables in extraction ( off by default ; figures only )" )
+	p_images.add_argument( "--no-montage" , dest="images_no_montage" ,
+		action="store_true" , default=False ,
+		help="Skip the per-paper grid montage ( ALL/ crops only )" )
+	p_images.add_argument( "--montage-size" , dest="images_montage_size" ,
+		choices=[ "original" , "high" , "medium" , "low" ] , default="low" ,
+		help="Montage scale relative to its natural size: original=100% , high=75% , medium=50% ( default ) , low=25%" )
+	p_images.set_defaults(
+		_entry=tasks.zotero_images ,
+		zotero_images=True ,
+	)
 	return {
 		"zotero_yolo": False ,
 		"zotero_snapshot": False ,
+		"zotero_images": False ,
 	}
 
 def crawl( sub , global_parser ):
@@ -195,11 +236,11 @@ REGISTRARS = (
 )
 
 def cli():
-	global_parser = _global_parser()
+	_global_parser = global_parser()
 
 	parser = argparse.ArgumentParser(
 		prog="prma" ,
-		parents=[ global_parser ] ,
+		parents=[ _global_parser ] ,
 		description="Paper Reference Manager Addons" ,
 	)
 
@@ -207,7 +248,7 @@ def cli():
 
 	top_defaults = {}
 	for register in REGISTRARS:
-		top_defaults.update( register( sub , global_parser ) or {} )
+		top_defaults.update( register( sub , _global_parser ) or {} )
 	parser.set_defaults( **top_defaults )
 
 	args = parser.parse_args()
