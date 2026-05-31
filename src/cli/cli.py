@@ -3,8 +3,7 @@ import argparse
 from pathlib import Path
 import src.tasks.tasks as tasks
 
-
-def _global_parser():
+def global_parser():
 	g = argparse.ArgumentParser( add_help=False )
 	g.add_argument( "--output" , type=Path , default=Path.cwd().joinpath( "output" ) ,
 		help="Output Location" )
@@ -41,8 +40,7 @@ def _global_parser():
 		help="YOLO Model Confidence" )
 	return g
 
-
-def _snapshot( sub , global_parser ):
+def snapshot( sub , global_parser ):
 	p = sub.add_parser(
 		"snapshot" ,
 		parents=[ global_parser ] ,
@@ -51,7 +49,7 @@ def _snapshot( sub , global_parser ):
 	p.set_defaults( _entry=tasks.main )
 	return {}
 
-def _mendeley( sub , global_parser ):
+def mendeley( sub , global_parser ):
 	p = sub.add_parser(
 		"mendeley" ,
 		parents=[ global_parser ] ,
@@ -92,7 +90,7 @@ def _mendeley( sub , global_parser ):
 		"mendeley_snapshot": False ,
 	}
 
-def _zotero( sub , global_parser ):
+def zotero( sub , global_parser ):
 	p = sub.add_parser(
 		"zotero" ,
 		parents=[ global_parser ] ,
@@ -122,7 +120,7 @@ def _zotero( sub , global_parser ):
 		"zotero_snapshot": False ,
 	}
 
-def _crawl( sub , global_parser ):
+def crawl( sub , global_parser ):
 	p = sub.add_parser(
 		"crawl" ,
 		parents=[ global_parser ] ,
@@ -166,7 +164,7 @@ def _crawl( sub , global_parser ):
 		"crawl_out_name":       None  ,
 	}
 
-def _server( sub , global_parser ):
+def server( sub , global_parser ):
 	p = sub.add_parser(
 		"server" ,
 		parents=[ global_parser ] ,
@@ -188,13 +186,12 @@ def _server( sub , global_parser ):
 		"ttl":      60.0        ,
 	}
 
-
 REGISTRARS = (
-	_snapshot ,
-	_mendeley ,
-	_zotero   ,
-	_crawl    ,
-	_server   ,
+	snapshot ,
+	mendeley ,
+	zotero   ,
+	crawl    ,
+	server   ,
 )
 
 def cli():
@@ -215,6 +212,5 @@ def cli():
 
 	args = parser.parse_args()
 
-	# No subcommand -> default behaviour ( same as `snapshot` )
 	entry = getattr( args , "_entry" , None ) or tasks.main
 	entry( args )
