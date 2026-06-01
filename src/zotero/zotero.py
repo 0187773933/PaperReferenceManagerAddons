@@ -290,12 +290,13 @@ class Zotero():
 			result = pdf.yolo( pdf_path , do_deskew=self.args.pdf_deskew )
 			utils.write_json( yolo_path , result )
 
-	# Depends on yolo() having run -- needs <pdf>.yolo.json next to each PDF.
-	# Writes cropped figures/tables ( with captions stacked below ) to
-	# output/images/zotero/{normalizedDOI}-{kind}-{N}.png
+	# Runs yolo on the fly for any PDF that doesn't already have a yolo.json ,
+	# then extracts figures/tables ( with captions ) to
+	# output/images/zotero/{ALL/{normalizedDOI}-{kind}-{N}.png , {normalizedDOI}-Figures.png } .
 	def images( self ):
 		from pathlib import Path
 		from tqdm import tqdm
+		from ..pdf import pdf as pdf_mod
 		from ..pdf import images as images_mod
 		images_dir = self.args.output.joinpath( "images" , "zotero" )
 		images_dir.mkdir( parents=True , exist_ok=True )
@@ -315,7 +316,8 @@ class Zotero():
 
 		papers = self.snapshot()
 		jobs = []
-		skip_no_doi , skip_no_pdf , skip_missing , skip_no_yolo , skip_done = 0 , 0 , 0 , 0 , 0
+		skip_no_doi , skip_no_pdf , skip_missing , skip_done = 0 , 0 , 0 , 0
+		needs_yolo = 0
 		for key , paper in papers.items():
 			doi = utils.normalize_doi( paper.get( "doi" ) )
 			if not doi:
@@ -337,24 +339,29 @@ class Zotero():
 					continue
 				yolo_path = self._yolo_path_for( pdf_path , doi )
 				if not yolo_path.exists():
-					skip_no_yolo += 1
-					continue
+					needs_yolo += 1
 				jobs.append( ( pdf_path , yolo_path , prefix ) )
 
 		print(
 			f"Zotero :: IMAGES -- {len(jobs)} pdfs to process -> {images_dir} "
-			f"( skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} "
-			f"not-on-disk={skip_missing} no-yolo={skip_no_yolo} already-done={skip_done} )"
+			f"( will run YOLO inline for {needs_yolo} ; "
+			f"skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} "
+			f"not-on-disk={skip_missing} already-done={skip_done} )"
 		)
 
 		include_tables = getattr( self.args , "images_include_tables" , False )
 		montage        = not getattr( self.args , "images_no_montage" , False )
 		size_name      = getattr( self.args , "images_montage_size" , "medium" )
 		montage_scale  = images_mod.MONTAGE_SCALES.get( size_name , 1.0 )
+		do_deskew      = getattr( self.args , "pdf_deskew" , False )
 		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
 		total_imgs = 0
 		for pdf_path , yolo_path , prefix in outer:
 			outer.set_postfix_str( pdf_path.name[ :60 ] )
+			# Run yolo on the fly if we don't have a cached result yet.
+			if not yolo_path.exists():
+				yolo_result = pdf_mod.yolo( pdf_path , do_deskew=do_deskew )
+				utils.write_json( yolo_path , yolo_result )
 			n = images_mod.extract(
 				pdf_path , yolo_path , images_dir , prefix ,
 				include_tables=include_tables ,
