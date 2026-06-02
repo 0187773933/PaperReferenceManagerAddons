@@ -102,14 +102,39 @@ def mendeley( sub , global_parser ):
 		_entry=tasks.mendeley_images ,
 		mendeley_images=True ,
 	)
+	p_ocr = msub.add_parser(
+		"ocr" ,
+		parents=[ global_parser ] ,
+		help="Parse each PDF into a structured JSON ( title , abstract , sections , figure captions ) using YOLO + embedded text + OCR fallback"
+	)
+	p_ocr.add_argument( "--force-ocr" , dest="ocr_force" ,
+		action="store_true" , default=False ,
+		help="Skip embedded-text extraction and OCR every bbox ( for pdfs with garbled text layers )" )
+	p_ocr.add_argument( "--max-pages" , dest="ocr_max_pages" ,
+		type=int , default=None ,
+		help="Cap pages parsed per PDF ( default: all pages YOLO covered )" )
+	p_ocr.add_argument( "--engine" , dest="ocr_engine" ,
+		choices=[ "rapid" , "paddle" , "surya" , "tesseract" , "mineru" ] , default="rapid" ,
+		help="OCR backend: rapid ( default , PP-OCRv5 on ONNX , ~0.2s/page CPU ) , paddle ( same models on paddlepaddle , 5-30x slower ) , surya ( transformer , best quality , 10-50x slower ) , tesseract ( fallback ) , mineru ( end-to-end PDF -> markdown with formulas/tables ; bypasses YOLO ; slow on CPU )" )
+	p_ocr.add_argument( "--lang" , dest="ocr_lang" , type=str , default="en" ,
+		help="Document language code ( en , zh , fr , de , es ) ; default 'en'" )
+	p_ocr.set_defaults(
+		_entry=tasks.mendeley_ocr ,
+		mendeley_ocr=True ,
+	)
 	return {
 		"mendeley_download": False ,
 		"mendeley_yolo": False ,
 		"mendeley_snapshot": False ,
 		"mendeley_images": False ,
+		"mendeley_ocr": False ,
 		"images_include_tables": False ,
 		"images_no_montage": False ,
 		"images_montage_size": "medium" ,
+		"ocr_force": False ,
+		"ocr_max_pages": None ,
+		"ocr_engine": "rapid" ,
+		"ocr_lang": "en" ,
 	}
 
 def zotero( sub , global_parser ):
@@ -155,10 +180,31 @@ def zotero( sub , global_parser ):
 		_entry=tasks.zotero_images ,
 		zotero_images=True ,
 	)
+	p_ocr = msub.add_parser(
+		"ocr" ,
+		parents=[ global_parser ] ,
+		help="Parse each PDF into a structured JSON ( title , abstract , sections , figure captions ) using YOLO + embedded text + OCR fallback"
+	)
+	p_ocr.add_argument( "--force-ocr" , dest="ocr_force" ,
+		action="store_true" , default=False ,
+		help="Skip embedded-text extraction and OCR every bbox ( for pdfs with garbled text layers )" )
+	p_ocr.add_argument( "--max-pages" , dest="ocr_max_pages" ,
+		type=int , default=None ,
+		help="Cap pages parsed per PDF ( default: all pages YOLO covered )" )
+	p_ocr.add_argument( "--engine" , dest="ocr_engine" ,
+		choices=[ "rapid" , "paddle" , "surya" , "tesseract" , "mineru" ] , default="rapid" ,
+		help="OCR backend: rapid ( default , PP-OCRv5 on ONNX , ~0.2s/page CPU ) , paddle ( same models on paddlepaddle , 5-30x slower ) , surya ( transformer , best quality , 10-50x slower ) , tesseract ( fallback ) , mineru ( end-to-end PDF -> markdown with formulas/tables ; bypasses YOLO ; slow on CPU )" )
+	p_ocr.add_argument( "--lang" , dest="ocr_lang" , type=str , default="en" ,
+		help="Document language code ( en , zh , fr , de , es ) ; default 'en'" )
+	p_ocr.set_defaults(
+		_entry=tasks.zotero_ocr ,
+		zotero_ocr=True ,
+	)
 	return {
 		"zotero_yolo": False ,
 		"zotero_snapshot": False ,
 		"zotero_images": False ,
+		"zotero_ocr": False ,
 	}
 
 def crawl( sub , global_parser ):

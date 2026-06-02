@@ -160,3 +160,72 @@ class Mendeley:
 			total_imgs += n
 
 		print( f"Mendeley :: IMAGES -- wrote {total_imgs} cropped images" )
+
+	# Runs yolo on the fly for any PDF that doesn't already have a yolo.json ,
+	# then parses each PDF into a structured array of section blocks
+	# ( title , abstract , Figure N , methods , results , ... ) and writes
+	# output/text/mendeley/{normalizedDOI}.json .
+	def ocr( self ):
+		from tqdm import tqdm
+		from ..pdf import pdf as pdf_mod
+		from ..pdf import ocr as ocr_mod
+		pdf_cache = self.args.output.joinpath( "pdfs" , "mendeley" )
+		text_dir  = self.args.output.joinpath( "text" , "mendeley" )
+		text_dir.mkdir( parents=True , exist_ok=True )
+
+		papers = self.API.snapshot()
+		jobs = []
+		skip_no_doi , skip_no_pdf , skip_missing , skip_done = 0 , 0 , 0 , 0
+		needs_yolo = 0
+		for p_id , paper in papers.items():
+			doi = utils.normalize_doi( paper.get( "doi" ) )
+			if not doi:
+				skip_no_doi += 1
+				continue
+			files = paper.get( "pdf_hosted" )
+			if not files:
+				skip_no_pdf += 1
+				continue
+			pdf_path = pdf_cache.joinpath( files[ 0 ][ "file_name" ] )
+			if not pdf_path.exists():
+				skip_missing += 1
+				continue
+			prefix = utils.doi_to_filename( doi )
+			out_path = text_dir.joinpath( f"{prefix}.json" )
+			if out_path.exists():
+				skip_done += 1
+				continue
+			yolo_path = self._yolo_path_for( pdf_path , doi )
+			if not yolo_path.exists():
+				needs_yolo += 1
+			jobs.append( ( pdf_path , yolo_path , out_path ) )
+
+		print(
+			f"Mendeley :: OCR -- {len(jobs)} pdfs to process -> {text_dir} "
+			f"( will run YOLO inline for {needs_yolo} ; "
+			f"skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} "
+			f"not-downloaded={skip_missing} already-done={skip_done} )"
+		)
+
+		do_deskew = getattr( self.args , "pdf_deskew" , False )
+		force_ocr = getattr( self.args , "ocr_force" , False )
+		max_pages = getattr( self.args , "ocr_max_pages" , None )
+		engine    = getattr( self.args , "ocr_engine" , ocr_mod.DEFAULT_ENGINE )
+		lang      = getattr( self.args , "ocr_lang" , "en" )
+		skip_yolo = ( engine == ocr_mod.ENGINE_MINERU )
+		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
+		total_blocks = 0
+		for pdf_path , yolo_path , out_path in outer:
+			outer.set_postfix_str( pdf_path.name[ :60 ] )
+			if not skip_yolo and not yolo_path.exists():
+				yolo_result = pdf_mod.yolo( pdf_path , do_deskew=do_deskew )
+				utils.write_json( yolo_path , yolo_result )
+			blocks = ocr_mod.parse(
+				pdf_path , yolo_path ,
+				force_ocr=force_ocr , max_pages=max_pages ,
+				engine=engine , lang=lang ,
+			)
+			utils.write_json( out_path , blocks )
+			total_blocks += len( blocks )
+
+		print( f"Mendeley :: OCR -- wrote {total_blocks} blocks across {len(jobs)} pdfs ( engine={engine} , lang={lang} )" )

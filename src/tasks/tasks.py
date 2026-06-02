@@ -22,6 +22,11 @@ def mendeley_images( args ):
 	m = Mendeley( args )
 	m.images()
 
+def mendeley_ocr( args ):
+	from ..mendeley.mendeley import Mendeley
+	m = Mendeley( args )
+	m.ocr()
+
 def zotero_yolo( args ):
 	from ..zotero.zotero import Zotero
 	z = Zotero( args )
@@ -36,6 +41,11 @@ def zotero_images( args ):
 	from ..zotero.zotero import Zotero
 	z = Zotero( args )
 	z.images()
+
+def zotero_ocr( args ):
+	from ..zotero.zotero import Zotero
+	z = Zotero( args )
+	z.ocr()
 
 def server( args ):
 	from ..server.server import run

@@ -371,3 +371,78 @@ class Zotero():
 			total_imgs += n
 
 		print( f"Zotero :: IMAGES -- wrote {total_imgs} cropped images" )
+
+	# Runs yolo on the fly for any PDF that doesn't already have a yolo.json ,
+	# then parses each PDF into a structured array of section blocks
+	# ( title , abstract , Figure N , methods , results , ... ) and writes
+	# output/text/zotero/{normalizedDOI}.json .
+	def ocr( self ):
+		from pathlib import Path
+		from tqdm import tqdm
+		from ..pdf import pdf as pdf_mod
+		from ..pdf import ocr as ocr_mod
+		text_dir = self.args.output.joinpath( "text" , "zotero" )
+		text_dir.mkdir( parents=True , exist_ok=True )
+
+		papers = self.snapshot()
+		jobs = []
+		skip_no_doi , skip_no_pdf , skip_missing , skip_done = 0 , 0 , 0 , 0
+		needs_yolo = 0
+		for key , paper in papers.items():
+			doi = utils.normalize_doi( paper.get( "doi" ) )
+			if not doi:
+				skip_no_doi += 1
+				continue
+			pdfs = paper.get( "pdfs" ) or []
+			if not pdfs:
+				skip_no_pdf += 1
+				continue
+			prefix = utils.doi_to_filename( doi )
+			out_path = text_dir.joinpath( f"{prefix}.json" )
+			if out_path.exists():
+				skip_done += 1
+				continue
+			# Pick the first available PDF on disk.
+			pdf_path = None
+			for raw in pdfs:
+				p = Path( raw )
+				if p.exists():
+					pdf_path = p
+					break
+			if pdf_path is None:
+				skip_missing += 1
+				continue
+			yolo_path = self._yolo_path_for( pdf_path , doi )
+			if not yolo_path.exists():
+				needs_yolo += 1
+			jobs.append( ( pdf_path , yolo_path , out_path ) )
+
+		print(
+			f"Zotero :: OCR -- {len(jobs)} pdfs to process -> {text_dir} "
+			f"( will run YOLO inline for {needs_yolo} ; "
+			f"skipped: no-doi={skip_no_doi} no-pdf={skip_no_pdf} "
+			f"not-on-disk={skip_missing} already-done={skip_done} )"
+		)
+
+		do_deskew = getattr( self.args , "pdf_deskew" , False )
+		force_ocr = getattr( self.args , "ocr_force" , False )
+		max_pages = getattr( self.args , "ocr_max_pages" , None )
+		engine    = getattr( self.args , "ocr_engine" , ocr_mod.DEFAULT_ENGINE )
+		lang      = getattr( self.args , "ocr_lang" , "en" )
+		skip_yolo = ( engine == ocr_mod.ENGINE_MINERU )
+		outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
+		total_blocks = 0
+		for pdf_path , yolo_path , out_path in outer:
+			outer.set_postfix_str( pdf_path.name[ :60 ] )
+			if not skip_yolo and not yolo_path.exists():
+				yolo_result = pdf_mod.yolo( pdf_path , do_deskew=do_deskew )
+				utils.write_json( yolo_path , yolo_result )
+			blocks = ocr_mod.parse(
+				pdf_path , yolo_path ,
+				force_ocr=force_ocr , max_pages=max_pages ,
+				engine=engine , lang=lang ,
+			)
+			utils.write_json( out_path , blocks )
+			total_blocks += len( blocks )
+
+		print( f"Zotero :: OCR -- wrote {total_blocks} blocks across {len(jobs)} pdfs ( engine={engine} , lang={lang} )" )
