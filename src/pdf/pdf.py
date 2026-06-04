@@ -22,7 +22,11 @@ def to_images( pdf_path , page_index=None , max_pages=50 , dpi=None , debug=Fals
 	render_dpi = dpi if dpi is not None else DPI
 	scale = render_dpi / 72.0 # 72 is pdf-spec for 1 inch
 
-	with pdfium.PdfDocument( str( pdf_path ) ) as pdf:
+	# Use explicit open/close instead of `with pdfium.PdfDocument(...)`
+	# because pypdfium2 < some-version doesn't implement __enter__ /
+	# __exit__ on PdfDocument , and we hit that on the installed wheel.
+	pdf = pdfium.PdfDocument( str( pdf_path ) )
+	try:
 		pdf.init_forms()
 		n = len( pdf )
 
@@ -50,6 +54,11 @@ def to_images( pdf_path , page_index=None , max_pages=50 , dpi=None , debug=Fals
 			images.append( pil_img )
 
 			page.close()
+	finally:
+		try:
+			pdf.close()
+		except Exception:
+			pass
 
 	return images[ 0 ] if page_index is not None else images
 
@@ -95,6 +104,7 @@ YOLO_CONFIDENCE = 0.2
 YOLO_MAX_PAGES = 50
 
 def yolo( pdf_path , do_deskew=False ):
+	from datetime import datetime , timezone
 	images = to_images( pdf_path , max_pages=YOLO_MAX_PAGES )
 	pages = []
 	for image in tqdm( images , desc="Pages" , position=0 , leave=False , unit="pg" ):
@@ -107,6 +117,7 @@ def yolo( pdf_path , do_deskew=False ):
 			"do_deskew":  do_deskew ,
 			"max_pages":  YOLO_MAX_PAGES ,
 			"version":    1 ,
+			"ran_at":     datetime.now( timezone.utc ).replace( microsecond=0 ).isoformat() ,
 		} ,
 		"pages": pages ,
 	}

@@ -16,14 +16,80 @@ class Mendeley:
 			self.snapshot = self.API.snapshot()
 		return self.snapshot
 
+	# Take a fresh snapshot of Mendeley and push every paper into the
+	# unified output/cache/papers/{doi}.json store. NO per-manager
+	# pickle is written.
+	#
+	# Calls the underlying API / Local snapshot directly to avoid
+	# the legacy self.snapshot() pattern that rebinds the method to
+	# the resulting dict ( latent bug -- second call would TypeError ).
 	def save_snapshot( self ):
-		snap = self.snapshot()
-		cache_dir = self.args.output.joinpath( "cache" )
-		cache_dir.mkdir( parents=True , exist_ok=True )
-		out_path = cache_dir.joinpath( "mendeley.snapshot" )
-		utils.write_pickle( out_path , snap )
-		print( f"Mendeley :: snapshot pickled -- {len(snap)} papers -> {out_path}" )
-		return out_path
+		if self.args.mendeley_source == "local":
+			snap = self.Local.snapshot()
+		else:
+			snap = self.API.snapshot()
+		self._push_to_db( snap )
+
+	def _push_to_db( self , snap ):
+		# Mendeley's snapshot is APPEND-ONLY by default. The API uses an
+		# incremental `modified_since` fetch against a local jsonl cache ;
+		# a transient API failure could miss IDs and a sync would then
+		# wrongly delete papers that still exist in Mendeley. The user
+		# can opt-in to pruning via --prune-mendeley when they're
+		# confident the snapshot is complete.
+
+		from ..db import papers
+		pdf_cache = self.args.output.joinpath( "pdfs" , "mendeley" )
+		prune = (
+			getattr( self.args , "prune_mendeley" , False )
+			and not getattr( self.args , "no_prune" , False )
+		)
+		seen_dois = set()
+
+		n_new , n_upd , n_no_doi = 0 , 0 , 0
+		for paper_id , paper in snap.items():
+			doi = utils.normalize_doi( paper.get( "doi" ) )
+			if not doi:
+				n_no_doi += 1
+				continue
+			seen_dois.add( doi )
+			pdf_hosted = paper.get( "pdf_hosted" ) or []
+			pdfs = [
+				str( pdf_cache.joinpath( f[ "file_name" ] ) )
+				for f in pdf_hosted
+				if f.get( "file_name" )
+			]
+			source_fields = {
+				"id":         paper.get( "id" ) ,
+				"url":        paper.get( "url" ) ,
+				"date":       paper.get( "date" ) ,
+				"modified":   paper.get( "modified" ) ,
+				"type":       paper.get( "type" ) ,
+				"pdf_hosted": pdf_hosted ,
+				"pdf_links":  paper.get( "pdf_links" ) or [] ,
+				"pdfs":       pdfs ,
+			}
+			_ , created = papers.upsert_source(
+				self.args , doi , papers.SOURCE_MENDELEY , source_fields ,
+				title=paper.get( "title" ) ,
+			)
+			if created:
+				n_new += 1
+			else:
+				n_upd += 1
+
+		n_detached , n_deleted = 0 , 0
+		if prune:
+			n_detached , n_deleted = papers.prune_source(
+				self.args , papers.SOURCE_MENDELEY , seen_dois ,
+			)
+
+		total = papers.count( self.args )
+		print(
+			f"Mendeley :: snapshot -> papers/ : +{n_new} new , ~{n_upd} updated , "
+			f"-{n_detached} source-detached , -{n_deleted} paper-deleted , "
+			f"skipped {n_no_doi} no-doi ; total = {total}"
+		)
 
 	def download( self ):
 		if self.args.mendeley_source == "api":

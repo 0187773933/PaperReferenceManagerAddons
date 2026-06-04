@@ -25,6 +25,7 @@ scale wrong and crops will be off. Regenerate yolo.json after a DPI change.
 """
 
 import math
+from pathlib import Path
 
 from PIL import Image
 
@@ -133,23 +134,33 @@ def _is_attached( anchor , other ):
 
 
 def extract(
-	pdf_path , yolo_path , output_dir , name_prefix ,
+	pdf_path , yolo_data , output_dir , name_prefix ,
 	include_tables=False ,
 	montage=True ,
 	montage_scale=1.0 ,
 ):
-	"""Read yolo_path , re-render pdf_path at CROP_DPI , crop each anchor
-	union'd with its neighboring attachments. Writes:
+	"""Crop figures ( and optionally tables ) out of pdf_path using
+	the bboxes in yolo_data , and write :
 	  - individual crops to output_dir/ALL/{name_prefix}-{kind}-{N}.png
 	  - per-paper grid montage  output_dir/{name_prefix}-Figures.png   ( if montage )
 	  - per-paper grid montage  output_dir/{name_prefix}-Tables.png    ( if montage AND
 	    include_tables AND any tables were extracted )
+
+	yolo_data is the dict produced by src/pdf/pdf.yolo() ( and now
+	carried on every paper record at paper[ 'yolo' ] ) -- either the
+	wrapped { 'meta' , 'pages' } shape or the legacy bare-list shape.
+
 	Per-kind counters ( figures and tables numbered independently from 1 ).
 	Tables are skipped unless include_tables=True. montage_scale is the
 	fraction of the assembled grid to keep ( 1.0 = original , 0.5 = half )."""
-	yolo_data = utils.read_json( yolo_path )
 	if not yolo_data:
 		return 0
+	# Tolerate the legacy "yolo_data is a file path" call shape so old
+	# call sites don't break in the middle of the refactor.
+	if isinstance( yolo_data , ( str , Path ) ):
+		yolo_data = utils.read_json( yolo_data )
+		if not yolo_data:
+			return 0
 
 	# Accept both wrapped { meta , pages } and legacy bare-list formats.
 	if isinstance( yolo_data , dict ):

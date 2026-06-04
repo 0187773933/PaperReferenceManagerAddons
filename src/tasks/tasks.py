@@ -1,51 +1,37 @@
+def _ensure_snapshot( args ):
+	if getattr( args , "skip_snapshot" , False ):
+		return
+	from . import snapshot
+	snapshot.get_common( args )
+
 def main( args ):
 	from . import main
 	main.main( args )
 
+def snapshot( args ):
+	from . import snapshot
+	snapshot.get_common( args )
+
+def yolo( args ):
+	_ensure_snapshot( args )
+	from . import yolo
+	yolo.run( args )
+
+def images( args ):
+	_ensure_snapshot( args )
+	from . import images
+	images.run( args )
+
+def ocr( args ):
+	_ensure_snapshot( args )
+	from . import ocr
+	ocr.run( args )
+
 def mendeley_download( args ):
+	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley
 	m = Mendeley( args )
 	m.download()
-
-def mendeley_yolo( args ):
-	from ..mendeley.mendeley import Mendeley
-	m = Mendeley( args )
-	m.yolo()
-
-def mendeley_snapshot( args ):
-	from ..mendeley.mendeley import Mendeley
-	m = Mendeley( args )
-	m.save_snapshot()
-
-def mendeley_images( args ):
-	from ..mendeley.mendeley import Mendeley
-	m = Mendeley( args )
-	m.images()
-
-def mendeley_ocr( args ):
-	from ..mendeley.mendeley import Mendeley
-	m = Mendeley( args )
-	m.ocr()
-
-def zotero_yolo( args ):
-	from ..zotero.zotero import Zotero
-	z = Zotero( args )
-	z.yolo()
-
-def zotero_snapshot( args ):
-	from ..zotero.zotero import Zotero
-	z = Zotero( args )
-	z.save_snapshot()
-
-def zotero_images( args ):
-	from ..zotero.zotero import Zotero
-	z = Zotero( args )
-	z.images()
-
-def zotero_ocr( args ):
-	from ..zotero.zotero import Zotero
-	z = Zotero( args )
-	z.ocr()
 
 def server( args ):
 	from ..server.server import run

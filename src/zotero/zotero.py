@@ -203,14 +203,74 @@ class Zotero():
 		# Return keyed by Zotero key (one per bib item)
 		return {item["key"]: item for item in papers.values()}
 
+	# Take a fresh snapshot of Zotero and push every paper into the
+	# unified output/cache/papers/{doi}.json store. NO per-manager
+	# pickle is written -- the papers/ directory is the only source of
+	# truth.
+	#
+	# Idempotent : papers already in the DB get their 'zotero' source
+	# field refreshed ; papers from Mendeley ( or any other manager )
+	# are untouched.
 	def save_snapshot( self ):
-		snap = self.snapshot()
-		cache_dir = self.args.output.joinpath( "cache" )
-		cache_dir.mkdir( parents=True , exist_ok=True )
-		out_path = cache_dir.joinpath( "zotero.snapshot" )
-		utils.write_pickle( out_path , snap )
-		print( f"Zotero :: snapshot pickled -- {len(snap)} papers -> {out_path}" )
-		return out_path
+		full = self.take_snapshot()      # full per-item dicts incl. tags/collections
+		self._push_to_db( full )
+
+	def _push_to_db( self , full ):
+		from ..db import papers
+		# Zotero's SQLite snapshot is authoritative ( full local copy ) ,
+		# so we sync : papers that disappeared from Zotero get their
+		# 'zotero' source detached , and zotero-only papers get deleted
+		# entirely. Use --no-prune to disable.
+		prune = not getattr( self.args , "no_prune" , False )
+		seen_dois = set()
+
+		n_new , n_upd , n_no_doi = 0 , 0 , 0
+		for key , item in full.items():
+			meta = item.get( "meta" ) or {}
+			doi = utils.normalize_doi(
+				item.get( "doi" ) or meta.get( "DOI" )
+			)
+			if not doi:
+				n_no_doi += 1
+				continue
+			seen_dois.add( doi )
+			pdfs = [
+				a.get( "abs_path" )
+				for a in ( item.get( "attachments" ) or [] )
+				if a.get( "abs_path" ) and str( a.get( "abs_path" ) ).lower().endswith( ".pdf" )
+			]
+			source_fields = {
+				"key":         key ,
+				"itemID":      item.get( "itemID" ) ,
+				"type":        item.get( "type" ) ,
+				"url":         meta.get( "url" ) ,
+				"date":        meta.get( "date" ) ,
+				"creators":    item.get( "creators" ) or [] ,
+				"tags":        item.get( "tags" ) or [] ,
+				"collections": item.get( "collections" ) or [] ,
+				"pdfs":        pdfs ,
+			}
+			_ , created = papers.upsert_source(
+				self.args , doi , papers.SOURCE_ZOTERO , source_fields ,
+				title=item.get( "title" ) or meta.get( "title" ) ,
+			)
+			if created:
+				n_new += 1
+			else:
+				n_upd += 1
+
+		n_detached , n_deleted = 0 , 0
+		if prune:
+			n_detached , n_deleted = papers.prune_source(
+				self.args , papers.SOURCE_ZOTERO , seen_dois ,
+			)
+
+		total = papers.count( self.args )
+		print(
+			f"Zotero :: snapshot -> papers/ : +{n_new} new , ~{n_upd} updated , "
+			f"-{n_detached} source-detached , -{n_deleted} paper-deleted , "
+			f"skipped {n_no_doi} no-doi ; total = {total}"
+		)
 
 	def snapshot( self ):
 		_snapshot = self.take_snapshot()

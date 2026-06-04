@@ -12,9 +12,18 @@ def global_parser():
 	g.add_argument( "--searches" , type=Path , default=Path.cwd().joinpath( "searches" ) ,
 		help="Searches Files Location" )
 
-	# Manager selection
+	# Manager selection. Default is zotero ( single-manager ) ; pass
+	# --manager all to snapshot every configured manager into the
+	# unified DB in one shot.
 	g.add_argument( "--manager" , type=str , default="zotero" ,
-		help="Mendeley/Zotero/EndNote/Paperpile/RefWorks/ReadCube" )
+		help="Reference manager : zotero ( default ) | mendeley | all" )
+	# Most commands ( yolo , ocr , images , ... ) auto-refresh the
+	# papers/ DB before running so the user doesn't have to call
+	# `prma snapshot` first. Pass --skip-snapshot when you know the
+	# library hasn't changed and want to skip the round trip.
+	g.add_argument( "--skip-snapshot" , dest="skip_snapshot" ,
+		action="store_true" , default=False ,
+		help="Skip the pre-task snapshot refresh ; assume papers/ is up to date" )
 	g.add_argument( "--mendeley" , action="store_true" , default=False ,
 		help="Mendeley Reference Manager" )
 	g.add_argument( "--zotero" , action="store_true" , default=False ,
@@ -44,10 +53,88 @@ def snapshot( sub , global_parser ):
 	p = sub.add_parser(
 		"snapshot" ,
 		parents=[ global_parser ] ,
-		help="Take a library snapshot and refresh OpenAlex cache + stats"
+		help="Refresh the unified papers/ DB from the selected --manager. Default also PRUNES Zotero papers that no longer exist in your library."
 	)
-	p.set_defaults( _entry=tasks.main )
-	return {}
+	p.add_argument( "--no-prune" , dest="no_prune" ,
+		action="store_true" , default=False ,
+		help="Don't detach sources / delete papers for DOIs missing from the current snapshot. Default behavior is sync ( prune ) for Zotero ; Mendeley is always append-only because its incremental API can miss IDs." )
+	p.add_argument( "--prune-mendeley" , dest="prune_mendeley" ,
+		action="store_true" , default=False ,
+		help="Also prune for Mendeley ( only safe when you've just done a full re-fetch ; the incremental API can otherwise wrongly delete papers )" )
+	p.set_defaults( _entry=tasks.snapshot )
+	return {
+		"no_prune": False ,
+		"prune_mendeley": False ,
+	}
+
+def yolo( sub , global_parser ):
+	p = sub.add_parser(
+		"yolo" ,
+		parents=[ global_parser ] ,
+		help="Run doclayout-yolo on every PDF in output/cache/papers/ and merge the result into each paper's record"
+	)
+	p.add_argument( "--force" , dest="yolo_force" ,
+		action="store_true" , default=False ,
+		help="Re-run YOLO even on papers that already have a 'yolo' field" )
+	p.set_defaults( _entry=tasks.yolo )
+	return {
+		"yolo_force": False ,
+	}
+
+def images( sub , global_parser ):
+	p = sub.add_parser(
+		"images" ,
+		parents=[ global_parser ] ,
+		help="Extract figure ( and optionally table ) crops + per-paper montages using each paper's YOLO bboxes ; runs YOLO inline for any paper that doesn't have it yet"
+	)
+	p.add_argument( "--include-tables" , dest="images_include_tables" ,
+		action="store_true" , default=False ,
+		help="Include tables in extraction ( off by default ; figures only )" )
+	p.add_argument( "--no-montage" , dest="images_no_montage" ,
+		action="store_true" , default=False ,
+		help="Skip the per-paper grid montage ( ALL/ crops only )" )
+	p.add_argument( "--montage-size" , dest="images_montage_size" ,
+		choices=[ "original" , "high" , "medium" , "low" ] , default="medium" ,
+		help="Montage scale relative to its natural size: original=100% , high=75% , medium=50% ( default ) , low=25%" )
+	p.add_argument( "--force" , dest="images_force" ,
+		action="store_true" , default=False ,
+		help="Re-process even papers already marked as done ( either via paper.images marker or existing PNGs on disk )" )
+	p.set_defaults( _entry=tasks.images )
+	return {
+		"images_include_tables": False ,
+		"images_no_montage":     False ,
+		"images_montage_size":   "medium" ,
+		"images_force":          False ,
+	}
+
+def ocr( sub , global_parser ):
+	p = sub.add_parser(
+		"ocr" ,
+		parents=[ global_parser ] ,
+		help="Pin OCR text onto every text-bearing YOLO detection in output/cache/papers/ ; runs YOLO inline for any paper that doesn't have it yet"
+	)
+	p.add_argument( "--force-ocr" , dest="ocr_force" ,
+		action="store_true" , default=False ,
+		help="Skip the embedded-text path and OCR every bbox ( for PDFs with garbled text layers )" )
+	p.add_argument( "--force" , dest="ocr_force_recompute" ,
+		action="store_true" , default=False ,
+		help="Overwrite det.ocr.<engine> even if already populated for this engine" )
+	p.add_argument( "--max-pages" , dest="ocr_max_pages" ,
+		type=int , default=None ,
+		help="Cap pages OCR'd per PDF ( default: all pages YOLO covered )" )
+	p.add_argument( "--engine" , dest="ocr_engine" ,
+		choices=[ "rapid" , "paddle" , "surya" , "tesseract" ] , default="rapid" ,
+		help="OCR backend: rapid ( default , PP-OCRv5 on ONNX , ~0.2s/page CPU ) , paddle ( same models on paddlepaddle , slower ) , surya ( transformer , best quality , slow ) , tesseract ( fallback )" )
+	p.add_argument( "--lang" , dest="ocr_lang" , type=str , default="en" ,
+		help="Document language code ( en , zh , fr , de , es ) ; default 'en'" )
+	p.set_defaults( _entry=tasks.ocr )
+	return {
+		"ocr_force": False ,
+		"ocr_force_recompute": False ,
+		"ocr_max_pages": None ,
+		"ocr_engine": "rapid" ,
+		"ocr_lang": "en" ,
+	}
 
 def mendeley( sub , global_parser ):
 	p = sub.add_parser(
@@ -66,75 +153,12 @@ def mendeley( sub , global_parser ):
 		_entry=tasks.mendeley_download ,
 		mendeley_download=True ,    # downstream code may read args.mendeley_download
 	)
-	p_yolo = msub.add_parser(
-		"yolo" ,
-		parents=[ global_parser ] ,
-		help="YOLO PDFs the Mendeley snapshot"
-	)
-	p_yolo.set_defaults(
-		_entry=tasks.mendeley_yolo ,
-		mendeley_yolo=True ,
-	)
-	p_snap = msub.add_parser(
-		"snapshot" ,
-		parents=[ global_parser ] ,
-		help="Save a pickled Mendeley snapshot to output/cache/mendeley.snapshot"
-	)
-	p_snap.set_defaults(
-		_entry=tasks.mendeley_snapshot ,
-		mendeley_snapshot=True ,
-	)
-	p_images = msub.add_parser(
-		"images" ,
-		parents=[ global_parser ] ,
-		help="Extract figures/tables ( with captions ) using existing yolo.json files"
-	)
-	p_images.add_argument( "--include-tables" , dest="images_include_tables" ,
-		action="store_true" , default=False ,
-		help="Include tables in extraction ( off by default ; figures only )" )
-	p_images.add_argument( "--no-montage" , dest="images_no_montage" ,
-		action="store_true" , default=False ,
-		help="Skip the per-paper grid montage ( ALL/ crops only )" )
-	p_images.add_argument( "--montage-size" , dest="images_montage_size" ,
-		choices=[ "original" , "high" , "medium" , "low" ] , default="medium" ,
-		help="Montage scale relative to its natural size: original=100% , high=75% , medium=50% ( default ) , low=25%" )
-	p_images.set_defaults(
-		_entry=tasks.mendeley_images ,
-		mendeley_images=True ,
-	)
-	p_ocr = msub.add_parser(
-		"ocr" ,
-		parents=[ global_parser ] ,
-		help="Parse each PDF into a structured JSON ( title , abstract , sections , figure captions ) using YOLO + embedded text + OCR fallback"
-	)
-	p_ocr.add_argument( "--force-ocr" , dest="ocr_force" ,
-		action="store_true" , default=False ,
-		help="Skip embedded-text extraction and OCR every bbox ( for pdfs with garbled text layers )" )
-	p_ocr.add_argument( "--max-pages" , dest="ocr_max_pages" ,
-		type=int , default=None ,
-		help="Cap pages parsed per PDF ( default: all pages YOLO covered )" )
-	p_ocr.add_argument( "--engine" , dest="ocr_engine" ,
-		choices=[ "rapid" , "paddle" , "surya" , "tesseract" , "mineru" ] , default="rapid" ,
-		help="OCR backend: rapid ( default , PP-OCRv5 on ONNX , ~0.2s/page CPU ) , paddle ( same models on paddlepaddle , 5-30x slower ) , surya ( transformer , best quality , 10-50x slower ) , tesseract ( fallback ) , mineru ( end-to-end PDF -> markdown with formulas/tables ; bypasses YOLO ; slow on CPU )" )
-	p_ocr.add_argument( "--lang" , dest="ocr_lang" , type=str , default="en" ,
-		help="Document language code ( en , zh , fr , de , es ) ; default 'en'" )
-	p_ocr.set_defaults(
-		_entry=tasks.mendeley_ocr ,
-		mendeley_ocr=True ,
-	)
+	# 'mendeley yolo' subcommand removed -- use `prma yolo` ( unified DB )
+	# 'mendeley snapshot' subcommand removed -- use `prma snapshot --manager mendeley`
+	# 'mendeley images' subcommand removed -- use `prma images --manager mendeley`
+	# 'mendeley ocr'    subcommand removed -- use `prma ocr    --manager mendeley`
 	return {
 		"mendeley_download": False ,
-		"mendeley_yolo": False ,
-		"mendeley_snapshot": False ,
-		"mendeley_images": False ,
-		"mendeley_ocr": False ,
-		"images_include_tables": False ,
-		"images_no_montage": False ,
-		"images_montage_size": "medium" ,
-		"ocr_force": False ,
-		"ocr_max_pages": None ,
-		"ocr_engine": "rapid" ,
-		"ocr_lang": "en" ,
 	}
 
 def zotero( sub , global_parser ):
@@ -144,68 +168,11 @@ def zotero( sub , global_parser ):
 		help="Zotero-specific tasks"
 	)
 	msub = p.add_subparsers( dest="zotero_command" , metavar="<zotero-command>" )
-	p_yolo = msub.add_parser(
-		"yolo" ,
-		parents=[ global_parser ] ,
-		help="YOLO PDFs in the Zotero snapshot"
-	)
-	p_yolo.set_defaults(
-		_entry=tasks.zotero_yolo ,
-		zotero_yolo=True ,
-	)
-	p_snap = msub.add_parser(
-		"snapshot" ,
-		parents=[ global_parser ] ,
-		help="Save a pickled Zotero snapshot to output/cache/zotero.snapshot"
-	)
-	p_snap.set_defaults(
-		_entry=tasks.zotero_snapshot ,
-		zotero_snapshot=True ,
-	)
-	p_images = msub.add_parser(
-		"images" ,
-		parents=[ global_parser ] ,
-		help="Extract figures/tables ( with captions ) using existing yolo.json files"
-	)
-	p_images.add_argument( "--include-tables" , dest="images_include_tables" ,
-		action="store_true" , default=False ,
-		help="Include tables in extraction ( off by default ; figures only )" )
-	p_images.add_argument( "--no-montage" , dest="images_no_montage" ,
-		action="store_true" , default=False ,
-		help="Skip the per-paper grid montage ( ALL/ crops only )" )
-	p_images.add_argument( "--montage-size" , dest="images_montage_size" ,
-		choices=[ "original" , "high" , "medium" , "low" ] , default="low" ,
-		help="Montage scale relative to its natural size: original=100% , high=75% , medium=50% ( default ) , low=25%" )
-	p_images.set_defaults(
-		_entry=tasks.zotero_images ,
-		zotero_images=True ,
-	)
-	p_ocr = msub.add_parser(
-		"ocr" ,
-		parents=[ global_parser ] ,
-		help="Parse each PDF into a structured JSON ( title , abstract , sections , figure captions ) using YOLO + embedded text + OCR fallback"
-	)
-	p_ocr.add_argument( "--force-ocr" , dest="ocr_force" ,
-		action="store_true" , default=False ,
-		help="Skip embedded-text extraction and OCR every bbox ( for pdfs with garbled text layers )" )
-	p_ocr.add_argument( "--max-pages" , dest="ocr_max_pages" ,
-		type=int , default=None ,
-		help="Cap pages parsed per PDF ( default: all pages YOLO covered )" )
-	p_ocr.add_argument( "--engine" , dest="ocr_engine" ,
-		choices=[ "rapid" , "paddle" , "surya" , "tesseract" , "mineru" ] , default="rapid" ,
-		help="OCR backend: rapid ( default , PP-OCRv5 on ONNX , ~0.2s/page CPU ) , paddle ( same models on paddlepaddle , 5-30x slower ) , surya ( transformer , best quality , 10-50x slower ) , tesseract ( fallback ) , mineru ( end-to-end PDF -> markdown with formulas/tables ; bypasses YOLO ; slow on CPU )" )
-	p_ocr.add_argument( "--lang" , dest="ocr_lang" , type=str , default="en" ,
-		help="Document language code ( en , zh , fr , de , es ) ; default 'en'" )
-	p_ocr.set_defaults(
-		_entry=tasks.zotero_ocr ,
-		zotero_ocr=True ,
-	)
-	return {
-		"zotero_yolo": False ,
-		"zotero_snapshot": False ,
-		"zotero_images": False ,
-		"zotero_ocr": False ,
-	}
+	# 'zotero yolo' subcommand removed -- use `prma yolo` ( unified DB )
+	# 'zotero snapshot' subcommand removed -- use `prma snapshot --manager zotero`
+	# 'zotero images'   subcommand removed -- use `prma images   --manager zotero`
+	# 'zotero ocr'      subcommand removed -- use `prma ocr      --manager zotero`
+	return {}
 
 def crawl( sub , global_parser ):
 	p = sub.add_parser(
@@ -275,6 +242,9 @@ def server( sub , global_parser ):
 
 REGISTRARS = (
 	snapshot ,
+	yolo     ,
+	images   ,
+	ocr      ,
 	mendeley ,
 	zotero   ,
 	crawl    ,
