@@ -190,6 +190,20 @@ def text( sub , global_parser ):
 		"text_include_references":  False ,
 	}
 
+def methods( sub , global_parser ):
+	p = sub.add_parser(
+		"methods" ,
+		parents=[ global_parser ] ,
+		help="Extract the Methods section of every paper ( from yolo + ocr + preprocess sections , with raw_text fallback ) and write one .txt file per paper at output/methods/<doi>.txt ; runs yolo + ocr + preprocess inline ( all idempotent ) so 'prma methods' is a one-stop command"
+	)
+	p.add_argument( "--force" , dest="methods_force" ,
+		action="store_true" , default=False ,
+		help="Re-render even papers whose .txt file already exists" )
+	p.set_defaults( _entry=tasks.methods )
+	return {
+		"methods_force": False ,
+	}
+
 def mendeley( sub , global_parser ):
 	p = sub.add_parser(
 		"mendeley" ,
@@ -302,6 +316,7 @@ REGISTRARS = (
 	preprocess ,
 	md         ,
 	text       ,
+	methods    ,
 	mendeley   ,
 	zotero     ,
 	crawl      ,

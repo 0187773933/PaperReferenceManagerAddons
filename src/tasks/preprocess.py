@@ -28,9 +28,18 @@ For each paper :
   - call preprocess.preprocess_paper() and save all three results
     back onto the paper record.
 
-Idempotent. Does NOT re-render YOLO or re-OCR anything ; sorts /
-labels what's already pinned on the paper , plus a single pymupdf
-raw-text extraction per PDF.
+Idempotent at this stage : sorts / labels what's already pinned on
+the paper , plus a single pymupdf raw-text extraction per PDF.
+
+Runs ocr ( and yolo inline via ocr ) FIRST so a paper that was just
+added to the DB by ` prma snapshot ` -- and therefore has no yolo /
+ocr data yet -- still gets the full pipeline rather than being silently
+skipped at the no-yolo gate below. Both inner stages are themselves
+idempotent : a fully-OCR'd / fully-preprocessed paper falls through
+cheaply , so the cost on a steady-state DB is just the planning walk.
+This is why every consumer of preprocess ( ` prma md ` , ` prma text ` ,
+` prma methods ` , ` prma preprocess ` itself ) gets the full
+snapshot -> yolo -> ocr -> preprocess chain for free.
 """
 
 from tqdm import tqdm
@@ -61,6 +70,16 @@ def _paper_matches_managers( paper , managers ):
 
 
 def run( args ):
+	# Pull every paper up through ocr first ( ocr.run itself runs YOLO
+	# inline for any paper that doesn't have it ). Both stages are
+	# idempotent : papers already done fall through cheaply. This makes
+	# preprocess the single "make every paper ready" entry point , so
+	# anything that depends on sections / raw_text ( md , text , methods )
+	# automatically picks up newly-snapshotted papers without the caller
+	# having to remember to run ` prma yolo ` + ` prma ocr ` first.
+	from . import ocr as ocr_task
+	ocr_task.run( args )
+
 	from ..pdf import preprocess as pre
 
 	force = getattr( args , "preprocess_force" , False )

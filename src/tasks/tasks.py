@@ -42,6 +42,11 @@ def text( args ):
 	from . import text
 	text.run( args )
 
+def methods( args ):
+	_ensure_snapshot( args )
+	from . import methods
+	methods.run( args )
+
 def mendeley_download( args ):
 	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley
