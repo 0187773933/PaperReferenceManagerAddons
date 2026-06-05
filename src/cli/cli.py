@@ -136,6 +136,34 @@ def ocr( sub , global_parser ):
 		"ocr_lang": "en" ,
 	}
 
+def preprocess( sub , global_parser ):
+	p = sub.add_parser(
+		"preprocess" ,
+		parents=[ global_parser ] ,
+		help="Sort each paper's YOLO blocks ( with OCR text already pinned ) into reading order and stamp paper[ 'sections' ] ; reuses existing yolo + ocr data , does not re-run either"
+	)
+	p.add_argument( "--force" , dest="preprocess_force" ,
+		action="store_true" , default=False ,
+		help="Re-sort even papers that already have a 'sections' field" )
+	p.set_defaults( _entry=tasks.preprocess )
+	return {
+		"preprocess_force": False ,
+	}
+
+def md( sub , global_parser ):
+	p = sub.add_parser(
+		"md" ,
+		parents=[ global_parser ] ,
+		help="Render a Markdown document for each paper at output/md/<doi>.md ; runs preprocess inline ( idempotent ) so 'prma md' is a one-stop command"
+	)
+	p.add_argument( "--force" , dest="md_force" ,
+		action="store_true" , default=False ,
+		help="Re-render even papers whose .md file already exists" )
+	p.set_defaults( _entry=tasks.md )
+	return {
+		"md_force": False ,
+	}
+
 def mendeley( sub , global_parser ):
 	p = sub.add_parser(
 		"mendeley" ,
@@ -241,14 +269,16 @@ def server( sub , global_parser ):
 	}
 
 REGISTRARS = (
-	snapshot ,
-	yolo     ,
-	images   ,
-	ocr      ,
-	mendeley ,
-	zotero   ,
-	crawl    ,
-	server   ,
+	snapshot   ,
+	yolo       ,
+	images     ,
+	ocr        ,
+	preprocess ,
+	md         ,
+	mendeley   ,
+	zotero     ,
+	crawl      ,
+	server     ,
 )
 
 def cli():

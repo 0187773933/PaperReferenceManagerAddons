@@ -67,7 +67,7 @@ def main():
 	for doi , paper in tqdm(
 		list( papers.iter_all( args ) ) , desc="papers" , unit="paper" ,
 	):
-		ocr_bucket = paper.get( "ocr" )
+		ocr_bucket = paper.get( "sections" )
 		if not ocr_bucket:
 			n_already_clean += 1
 			continue
@@ -81,14 +81,14 @@ def main():
 			del ocr_bucket[ args.engine ]
 			# If the bucket is empty after removal , drop it entirely.
 			if not ocr_bucket:
-				paper.pop( "ocr" , None )
+				paper.pop( "sections" , None )
 			else:
-				paper[ "ocr" ] = ocr_bucket
+				paper[ "sections" ] = ocr_bucket
 		else:
 			if args.dry_run:
 				n_touched += 1
 				continue
-			paper.pop( "ocr" , None )
+			paper.pop( "sections" , None )
 
 		papers.save( args , paper )
 		n_touched += 1

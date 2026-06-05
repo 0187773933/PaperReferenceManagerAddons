@@ -27,6 +27,16 @@ def ocr( args ):
 	from . import ocr
 	ocr.run( args )
 
+def preprocess( args ):
+	_ensure_snapshot( args )
+	from . import preprocess
+	preprocess.run( args )
+
+def md( args ):
+	_ensure_snapshot( args )
+	from . import md
+	md.run( args )
+
 def mendeley_download( args ):
 	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley
