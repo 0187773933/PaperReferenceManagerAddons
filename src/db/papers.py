@@ -155,6 +155,12 @@ def _utc_now_iso():
 	return datetime.now( timezone.utc ).replace( microsecond=0 ).isoformat()
 
 
+def _strip_cosmetic( source ):
+	"""Drop the timestamp field that we re-stamp on every upsert , so
+	source-vs-source equality compares the substantive data only."""
+	return { k: v for k , v in ( source or {} ).items() if k != "updated_at" }
+
+
 def upsert_source(
 	args , doi , source_name , source_fields ,
 	title=None ,
@@ -171,10 +177,20 @@ def upsert_source(
 	source_fields is expected to carry a 'pdfs' list of absolute
 	paths under that manager.
 
-	Returns ( paper , was_created )."""
+	IDEMPOTENT : if the incoming source data matches what's already
+	saved ( ignoring the cosmetic 'updated_at' timestamp ) AND no
+	title fill-in is happening , we SKIP save() and return changed=
+	False. This is what makes re-snapshotting on an unchanged library
+	cheap -- otherwise we'd JSON-rewrite every 100KB+ paper file even
+	when nothing actually changed.
+
+	Returns ( paper , was_created , was_changed ) :
+	  - was_created : the paper didn't exist before this call ;
+	  - was_changed : save() actually ran ( file was rewritten ).
+	    Always True when was_created is True."""
 	doi = utils.normalize_doi( doi )
 	if not doi:
-		return None , False
+		return None , False , False
 	existing = load( args , doi )
 	created = existing is None
 	if created:
@@ -185,13 +201,22 @@ def upsert_source(
 			"pdf_path":   None ,
 			"created_at": _utc_now_iso() ,
 		}
-	source_fields = dict( source_fields or {} )
-	source_fields[ "updated_at" ] = _utc_now_iso()
-	existing.setdefault( "sources" , {} )[ source_name ] = source_fields
-	if title and not existing.get( "title" ):
+
+	incoming      = dict( source_fields or {} )
+	existing_src  = ( existing.get( "sources" ) or {} ).get( source_name ) or {}
+	title_change  = bool( title and not existing.get( "title" ) )
+	data_changed  = _strip_cosmetic( existing_src ) != _strip_cosmetic( incoming )
+
+	if not created and not data_changed and not title_change:
+		# No substantive change -- skip the JSON rewrite entirely.
+		return existing , False , False
+
+	incoming[ "updated_at" ] = _utc_now_iso()
+	existing.setdefault( "sources" , {} )[ source_name ] = incoming
+	if title_change:
 		existing[ "title" ] = title
 	save( args , existing )
-	return existing , created
+	return existing , created , True
 
 
 def remove_source( args , doi , source_name ):

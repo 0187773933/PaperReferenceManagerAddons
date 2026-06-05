@@ -38,6 +38,46 @@ class Zotero():
 		conn.row_factory = sqlite3.Row
 		return conn
 
+	def take_titles_and_dois( self ):
+		"""Fast path for the 'exists' server : pull ONLY title + DOI
+		fields straight from the SQLite copy and return normalized
+		( titles_set , dois_set ) . No creator / attachment / tag /
+		collection joins ; no roundtrip through output/cache/papers/ .
+		Typical run is ~50-200 ms for a 2000-paper library vs ~10-30
+		seconds for take_snapshot() + _push_to_db()."""
+		conn = self.open_snapshot()
+		try:
+			c = conn.cursor()
+			titles , dois = set() , set()
+			for row in c.execute( """
+				SELECT fields.fieldName , itemDataValues.value
+				FROM itemData
+				JOIN fields          ON fields.fieldID         = itemData.fieldID
+				JOIN itemDataValues  ON itemDataValues.valueID = itemData.valueID
+				JOIN items           ON items.itemID           = itemData.itemID
+				JOIN itemTypes       ON itemTypes.itemTypeID   = items.itemTypeID
+				LEFT JOIN deletedItems ON deletedItems.itemID  = items.itemID
+				WHERE deletedItems.itemID IS NULL
+				  AND itemTypes.typeName NOT IN ( 'attachment' , 'note' , 'annotation' )
+				  AND fields.fieldName    IN ( 'title' , 'DOI' )
+			""" ):
+				field = row[ "fieldName" ]
+				value = row[ "value" ]
+				if not value:
+					continue
+				if field == "title":
+					t = utils.normalize_title( value )
+					if t:
+						titles.add( t )
+				elif field == "DOI":
+					d = utils.normalize_doi( value )
+					if d:
+						dois.add( d )
+			return titles , dois
+		finally:
+			try: conn.close()
+			except Exception: pass
+
 	def take_snapshot( self ):
 		conn = self.open_snapshot()
 		c = conn.cursor()
@@ -224,7 +264,7 @@ class Zotero():
 		prune = not getattr( self.args , "no_prune" , False )
 		seen_dois = set()
 
-		n_new , n_upd , n_no_doi = 0 , 0 , 0
+		n_new , n_upd , n_noop , n_no_doi = 0 , 0 , 0 , 0
 		for key , item in full.items():
 			meta = item.get( "meta" ) or {}
 			doi = utils.normalize_doi(
@@ -250,14 +290,16 @@ class Zotero():
 				"collections": item.get( "collections" ) or [] ,
 				"pdfs":        pdfs ,
 			}
-			_ , created = papers.upsert_source(
+			_ , created , changed = papers.upsert_source(
 				self.args , doi , papers.SOURCE_ZOTERO , source_fields ,
 				title=item.get( "title" ) or meta.get( "title" ) ,
 			)
 			if created:
 				n_new += 1
-			else:
+			elif changed:
 				n_upd += 1
+			else:
+				n_noop += 1
 
 		n_detached , n_deleted = 0 , 0
 		if prune:
@@ -268,6 +310,7 @@ class Zotero():
 		total = papers.count( self.args )
 		print(
 			f"Zotero :: snapshot -> papers/ : +{n_new} new , ~{n_upd} updated , "
+			f"={n_noop} unchanged , "
 			f"-{n_detached} source-detached , -{n_deleted} paper-deleted , "
 			f"skipped {n_no_doi} no-doi ; total = {total}"
 		)

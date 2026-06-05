@@ -61,26 +61,23 @@ class SnapshotCache:
 		return tuple( f.stat().st_mtime if f.exists() else 0.0 for f in self._watch_files )
 
 	def _refresh( self ):
-		papers = snap_module.get_common( self.args )
-		if not papers:
+		# Fast path : pull title + DOI straight from the manager
+		# source ( Zotero SQLite / Mendeley jsonl cache ) instead of
+		# round-tripping the unified output/cache/papers/ DB. The
+		# 'exists' lookup only needs these two sets , so the heavy
+		# upsert + save_snapshot path that ` prma snapshot ` uses
+		# would burn 10-30s per refresh for nothing.
+		t0 = time.time()
+		titles , dois = snap_module.titles_and_dois( self.args )
+		if not titles and not dois:
 			raise RuntimeError( "snapshot returned nothing — check --manager flag" )
-		titles: Set[ str ] = set()
-		dois:   Set[ str ] = set()
-		for d in papers.values():
-			t = d.get( "title" )
-			if t:
-				nt = utils.normalize_title( t )
-				if nt:
-					titles.add( nt )
-			doi = d.get( "doi" )
-			if doi:
-				nd = utils.normalize_doi( doi )
-				if nd:
-					dois.add( nd )
 		self._titles = titles
 		self._dois   = dois
 		self._last_refresh = time.time()
-		print( f"snapshot refreshed — {len(titles)} titles, {len(dois)} DOIs" )
+		print(
+			f"snapshot refreshed — {len(titles)} titles, {len(dois)} DOIs "
+			f"( {self._last_refresh - t0:.2f}s )"
+		)
 
 	def get( self , force: bool = False ) -> Tuple[ Set[ str ] , Set[ str ] ]:
 		now = time.time()

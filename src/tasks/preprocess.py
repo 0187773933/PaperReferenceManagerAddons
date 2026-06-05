@@ -92,6 +92,18 @@ def run( args ):
 			continue
 		jobs.append( doi )
 
+	# Fast path : nothing to do ( everything was already preprocessed ).
+	# Emit a single concise "complete" line and skip the planning print ,
+	# the tqdm bar , and the summary line -- this is the common case
+	# when ` prma md ` / ` prma text ` run on a fully-preprocessed DB.
+	if not jobs:
+		print(
+			f"PREPROCESS :: ({manager_label}) already complete "
+			f"( {skip_done} papers ; no-yolo={skip_no_yolo} "
+			f"other-manager={skip_other} )"
+		)
+		return
+
 	print(
 		f"PREPROCESS :: ({manager_label})  {len(jobs)} papers to sort -> papers/ "
 		f"( skipped: no-yolo={skip_no_yolo} "

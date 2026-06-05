@@ -16,6 +16,29 @@ class Mendeley:
 			self.snapshot = self.API.snapshot()
 		return self.snapshot
 
+	def take_titles_and_dois( self ):
+		"""Fast path for the 'exists' server : run the manager's
+		in-memory snapshot ( jsonl cache for API mode , local SQLite
+		for 'local' mode ) and return normalized ( titles , dois )
+		sets directly. No roundtrip through output/cache/papers/ ."""
+		if self.args.mendeley_source == "local":
+			snap = self.Local.snapshot()
+		else:
+			snap = self.API.snapshot()
+		titles , dois = set() , set()
+		for _ , paper in ( snap or {} ).items():
+			t = paper.get( "title" )
+			if t:
+				nt = utils.normalize_title( t )
+				if nt:
+					titles.add( nt )
+			d = paper.get( "doi" )
+			if d:
+				nd = utils.normalize_doi( d )
+				if nd:
+					dois.add( nd )
+		return titles , dois
+
 	# Take a fresh snapshot of Mendeley and push every paper into the
 	# unified output/cache/papers/{doi}.json store. NO per-manager
 	# pickle is written.
@@ -46,7 +69,7 @@ class Mendeley:
 		)
 		seen_dois = set()
 
-		n_new , n_upd , n_no_doi = 0 , 0 , 0
+		n_new , n_upd , n_noop , n_no_doi = 0 , 0 , 0 , 0
 		for paper_id , paper in snap.items():
 			doi = utils.normalize_doi( paper.get( "doi" ) )
 			if not doi:
@@ -69,14 +92,16 @@ class Mendeley:
 				"pdf_links":  paper.get( "pdf_links" ) or [] ,
 				"pdfs":       pdfs ,
 			}
-			_ , created = papers.upsert_source(
+			_ , created , changed = papers.upsert_source(
 				self.args , doi , papers.SOURCE_MENDELEY , source_fields ,
 				title=paper.get( "title" ) ,
 			)
 			if created:
 				n_new += 1
-			else:
+			elif changed:
 				n_upd += 1
+			else:
+				n_noop += 1
 
 		n_detached , n_deleted = 0 , 0
 		if prune:
@@ -87,6 +112,7 @@ class Mendeley:
 		total = papers.count( self.args )
 		print(
 			f"Mendeley :: snapshot -> papers/ : +{n_new} new , ~{n_upd} updated , "
+			f"={n_noop} unchanged , "
 			f"-{n_detached} source-detached , -{n_deleted} paper-deleted , "
 			f"skipped {n_no_doi} no-doi ; total = {total}"
 		)
