@@ -827,8 +827,6 @@ def ocr_paper(
 	try:
 		n_pdf_pages = len( pdf )
 		for page_idx , page_dets in enumerate( pages_yolo ):
-			if page_idx >= n_pdf_pages:
-				break
 			# Skip pages that have no text-bearing detections at all.
 			text_dets = [
 				d for d in page_dets
@@ -836,6 +834,14 @@ def ocr_paper(
 				and d.get( "type" ) in TEXT_DETECTION_CLASSES
 			]
 			if not text_dets:
+				continue
+			# YOLO data may reference more pages than the live PDF
+			# ( the PDF was replaced after YOLO ran ). Mark orphan-page
+			# dets as attempted so the paper isn't re-queued forever.
+			if page_idx >= n_pdf_pages:
+				for det in text_dets:
+					if engine not in ( det.get( "ocr" ) or {} ):
+						det.setdefault( "ocr" , {} )[ engine ] = ""
 				continue
 
 			page      = pdf[ page_idx ]
@@ -856,17 +862,15 @@ def ocr_paper(
 			try:
 				for det in text_dets:
 					if not force:
-						existing = ( det.get( "ocr" ) or {} ).get( engine )
-						if existing:
+						if engine in ( det.get( "ocr" ) or {} ):
 							continue
 					text = _extract_text_for_det(
 						det , textpage , page_h_pt , yolo_dpi ,
 						get_ocr_lines , force_ocr ,
 					)
-					if not text:
-						continue
 					det.setdefault( "ocr" , {} )[ engine ] = text
-					n_written += 1
+					if text:
+						n_written += 1
 			finally:
 				if textpage is not None:
 					try: textpage.close()

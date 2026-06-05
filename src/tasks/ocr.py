@@ -63,7 +63,7 @@ def _paper_fully_ocrd( paper , engine ):
 			if det.get( "type" ) not in ocr_mod.TEXT_DETECTION_CLASSES:
 				continue
 			any_text = True
-			if not ( det.get( "ocr" ) or {} ).get( engine ):
+			if engine not in ( det.get( "ocr" ) or {} ):
 				return False
 	return any_text   # if there were no text dets at all , treat as not-done
 
