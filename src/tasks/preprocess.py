@@ -8,7 +8,12 @@ prma preprocess : iterate the unified papers/ DB and add :
     ( title / abstract / introduction / background / methods /
       results / figures / tables / conclusions / future / misc /
       references ) , each value a list of [ page_idx , det_idx ]
-    pairs.
+    pairs ;
+  - paper[ 'raw_text' ]    -- '\\n'-joined raw page text from
+    pymupdf , for plain full-text indexing.
+
+raw_text is stored as None if the PDF is missing on disk or
+extraction fails ; the key is still set so idempotency holds.
 
 Honors --manager :
   --manager zotero   ( default ) -> papers with a 'zotero'   source
@@ -18,13 +23,14 @@ Honors --manager :
 For each paper :
   - skip if it has no 'yolo' field yet ( run ` prma yolo ` and
     ` prma ocr ` first ) ;
-  - skip if it already has both 'yolo_sorted_page_indexes' and
-    'sections' , unless --force is passed ;
-  - call preprocess.preprocess_paper() and save both results back
-    onto the paper record.
+  - skip if all three fields above are already present , unless
+    --force is passed ;
+  - call preprocess.preprocess_paper() and save all three results
+    back onto the paper record.
 
-Idempotent. Does NOT re-render the PDF , re-run YOLO , or re-OCR
-anything ; it only sorts and labels what's already pinned on the paper.
+Idempotent. Does NOT re-render YOLO or re-OCR anything ; sorts /
+labels what's already pinned on the paper , plus a single pymupdf
+raw-text extraction per PDF.
 """
 
 from tqdm import tqdm
@@ -61,17 +67,23 @@ def run( args ):
 	managers = _resolve_managers( args )
 	manager_label = " + ".join( managers ) if managers else "all"
 
-	# Plan the work.
+	# Plan the work. "Done" means ALL THREE output fields are already
+	# present on the paper record ; we use `in` rather than `is not
+	# None` so a paper whose pymupdf extraction failed last time (
+	# stored as None ) still counts as done and we don't retry every
+	# run. --force overrides.
+	required_keys = (
+		"yolo_sorted_page_indexes" ,
+		"sections" ,
+		"raw_text" ,
+	)
 	jobs = []
 	skip_no_yolo , skip_done , skip_other = 0 , 0 , 0
 	for doi , paper in papers.iter_all( args ):
 		if not _paper_matches_managers( paper , managers ):
 			skip_other += 1
 			continue
-		if not force and (
-			paper.get( "yolo_sorted_page_indexes" ) is not None
-			and paper.get( "sections" ) is not None
-		):
+		if not force and all( k in paper for k in required_keys ):
 			skip_done += 1
 			continue
 		yolo = paper.get( "yolo" ) or {}
@@ -87,23 +99,30 @@ def run( args ):
 	)
 
 	outer = tqdm( jobs , desc="Papers" , unit="paper" )
-	total_indexes , total_classified = 0 , 0
+	total_indexes , total_classified , total_raw = 0 , 0 , 0
 	for doi in outer:
 		paper = papers.load( args , doi )
 		if paper is None:
 			continue
+		pdf_path = paper.get( "pdf_path" )
 		try:
-			ordered , sections = pre.preprocess_paper( paper )
+			ordered , sections , raw_text = pre.preprocess_paper(
+				paper , pdf_path=pdf_path ,
+			)
 		except Exception as e:
 			print( f"PREPROCESS :: {doi}: failed ( {e} )" )
 			continue
 		paper[ "yolo_sorted_page_indexes" ] = ordered
-		paper[ "sections" ] = sections
+		paper[ "sections" ]                 = sections
+		paper[ "raw_text" ]                 = raw_text   # may be None
 		total_indexes    += sum( len( p ) for p in ordered )
 		total_classified += sum( len( v ) for v in sections.values() )
+		if raw_text:
+			total_raw += 1
 		papers.save( args , paper )
 
 	print(
 		f"PREPROCESS :: wrote {total_indexes} sorted indexes + "
-		f"{total_classified} classified into sections across {len(jobs)} papers"
+		f"{total_classified} classified into sections + "
+		f"raw_text on {total_raw} across {len(jobs)} papers"
 	)

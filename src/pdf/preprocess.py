@@ -69,17 +69,20 @@ Section-classification algorithm : two-pass over the reading order.
 
 Top-level entry point :
 
-  preprocess_paper( paper )
+  preprocess_paper( paper , pdf_path=None )
 
-  Returns ( yolo_sorted_page_indexes , sections ) :
+  Returns ( yolo_sorted_page_indexes , sections , raw_text ) :
     yolo_sorted_page_indexes : list-of-lists of det indexes in reading
       order , one inner list per page. 'abandon' / bad-bbox dets
       omitted ; each value indexes paper[ 'yolo' ][ 'pages' ][ page_idx ].
     sections : dict keyed by SECTION_KEYS , each value a list of
       [ page_idx , det_idx ] pairs.
+    raw_text : page-concatenated raw text from pymupdf
+      ( '\\n'.join( page.get_text() for page in doc ) ) , for plain
+      full-text indexing. None on missing PDF / failure.
   Does NOT mutate `paper` -- the caller assigns the results onto
-  paper[ 'yolo_sorted_page_indexes' ] and paper[ 'sections' ] and
-  persists.
+  paper[ 'yolo_sorted_page_indexes' ] , paper[ 'sections' ] , and
+  paper[ 'raw_text' ] , then persists.
 """
 
 import re
@@ -521,17 +524,48 @@ def _classify_sections( paper , ordered ):
 
 	return out
 
+def _extract_raw_text( pdf_path ):
+	"""Open the PDF with pymupdf and concatenate every page's
+	get_text() into one string ( '\\n'-joined ). For full-text
+	indexing / search. Returns None on missing PDF / failure."""
+	if not pdf_path:
+		return None
+	try:
+		import pymupdf
+	except Exception as e:
+		print( f"PREPROCESS :: pymupdf not installed ( {e} )" )
+		return None
+	try:
+		doc = pymupdf.open( str( pdf_path ) )
+	except Exception as e:
+		print( f"PREPROCESS :: pymupdf open failed for {pdf_path} ( {e} )" )
+		return None
+	try:
+		parts = []
+		for page in doc:
+			try:
+				parts.append( page.get_text() )
+			except Exception:
+				parts.append( "" )
+		return "\n".join( parts )
+	finally:
+		try: doc.close()
+		except Exception: pass
+
 
 # ---------------------------------------------------------------------------
 # Top-level entry point
 # ---------------------------------------------------------------------------
 
-def preprocess_paper( paper ):
-	"""Compute reading order + section classification for a paper.
-	Returns ( yolo_sorted_page_indexes , sections ) ; does NOT mutate
-	`paper`."""
-	yolo  = paper.get( "yolo" ) or {}
-	pages = yolo.get( "pages" ) or []
+def preprocess_paper( paper , pdf_path=None ):
+	"""Compute reading order , section classification , and the
+	raw pymupdf text dump for a paper. Returns a 3-tuple :
+	  ( yolo_sorted_page_indexes , sections , raw_text )
+	raw_text is None when pdf_path is None , the file is missing ,
+	or extraction fails. Does NOT mutate `paper`."""
+	yolo     = paper.get( "yolo" ) or {}
+	pages    = yolo.get( "pages" ) or []
 	ordered  = [ preprocess_page( page_dets ) for page_dets in pages ]
 	sections = _classify_sections( paper , ordered )
-	return ordered , sections
+	raw_text = _extract_raw_text( pdf_path )
+	return ordered , sections , raw_text

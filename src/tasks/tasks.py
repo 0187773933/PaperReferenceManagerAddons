@@ -37,6 +37,11 @@ def md( args ):
 	from . import md
 	md.run( args )
 
+def text( args ):
+	_ensure_snapshot( args )
+	from . import text
+	text.run( args )
+
 def mendeley_download( args ):
 	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley

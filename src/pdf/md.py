@@ -62,7 +62,7 @@ Text cleanup ( applied to every block before emission ) :
 Top-level entry point :
 
   paper_to_markdown( paper , image_rel_dir=None , image_abs_dir=None ,
-                     prefix=None )
+                     prefix=None , include_references=False )
 
   Returns the full Markdown document as a string ending in '\\n'.
   Pass `image_rel_dir` ( relative path , e.g. "../images/ALL" ) ,
@@ -70,6 +70,8 @@ Top-level entry point :
   ( doi_to_filename ) to inline figure / table images that
   ` prma images ` wrote ; if any of these are None or the file
   doesn't exist , the figure / table falls back to a text placeholder.
+  `include_references` defaults False -- the 'References' section is
+  omitted entirely. Pass True to render it as a numbered list.
 """
 
 import re
@@ -96,6 +98,18 @@ _JUNK_LINE_PATTERNS = (
 	# DOI breadcrumb on every page ).
 	re.compile( r"^\s*https?://\S+\s*$"                  , re.IGNORECASE ) ,
 	re.compile( r"^\s*www\.[a-z0-9.\-]+(?:/\S*)?\s*$"    , re.IGNORECASE ) ,
+	# Publisher footers / licensing chrome that wraps onto many lines.
+	# Anchor to start so a body paragraph mentioning "the terms and
+	# conditions of this study" doesn't get nuked.
+	re.compile( r"^\s*see\s+the\s+terms\s+and\s+conditions\b" , re.IGNORECASE ) ,
+	re.compile( r"^\s*terms\s+and\s+conditions\s+\("           , re.IGNORECASE ) ,
+	re.compile( r"^\s*on\s+wiley\s+online\s+library\b"         , re.IGNORECASE ) ,
+	re.compile( r"^\s*oa\s+articles?\s+are\s+governed\b"       , re.IGNORECASE ) ,
+	re.compile( r"^\s*(?:are\s+)?governed\s+by\s+the\s+applicable\s+creative\s+commons" , re.IGNORECASE ) ,
+	re.compile( r"^\s*creative\s+commons\s+(?:license|attribution)" , re.IGNORECASE ) ,
+	re.compile( r"^\s*this\s+article\s+is\s+(?:protected|licensed)\s+(?:by|under)\b" , re.IGNORECASE ) ,
+	re.compile( r"^\s*for\s+rules?\s+of\s+use\s*;?"            , re.IGNORECASE ) ,
+	re.compile( r"^\s*(?:re)?printed\s+from\b"                 , re.IGNORECASE ) ,
 )
 
 
@@ -317,7 +331,7 @@ def _render_references( pages , items , lines ):
 # ---------------------------------------------------------------------------
 
 def paper_to_markdown( paper , image_rel_dir=None , image_abs_dir=None ,
-                       prefix=None ):
+                       prefix=None , include_references=False ):
 	"""Render a paper record into a Markdown document string. Requires
 	paper[ 'sections' ] ( from preprocess ) ; returns a single string
 	ending in a newline.
@@ -326,7 +340,10 @@ def paper_to_markdown( paper , image_rel_dir=None , image_abs_dir=None ,
 	AND a matching ` {prefix}-figure-N.png ` exists in
 	image_abs_dir , figure / table detections render as Markdown
 	image links ( href = image_rel_dir/filename ) instead of italic
-	placeholders. Pass them as None to always use placeholders."""
+	placeholders. Pass them as None to always use placeholders.
+
+	`include_references` defaults False : the 'References' section is
+	omitted from the output entirely ( no H2 , no entries )."""
 	sections = paper.get( "sections" ) or {}
 	pages    = ( paper.get( "yolo" ) or {} ).get( "pages" ) or []
 	doi      = paper.get( "doi" )
@@ -341,6 +358,8 @@ def paper_to_markdown( paper , image_rel_dir=None , image_abs_dir=None ,
 		lines.append( "" )
 
 	for key , display in SECTION_ORDER:
+		if key == "references" and not include_references:
+			continue
 		items = sections.get( key ) or []
 		if not items:
 			continue

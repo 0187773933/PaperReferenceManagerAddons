@@ -159,9 +159,35 @@ def md( sub , global_parser ):
 	p.add_argument( "--force" , dest="md_force" ,
 		action="store_true" , default=False ,
 		help="Re-render even papers whose .md file already exists" )
+	p.add_argument( "--include-references" , dest="md_include_references" ,
+		action="store_true" , default=False ,
+		help="Include the References / Bibliography section in the rendered .md ( default : drop it )" )
 	p.set_defaults( _entry=tasks.md )
 	return {
-		"md_force": False ,
+		"md_force":              False ,
+		"md_include_references": False ,
+	}
+
+def text( sub , global_parser ):
+	p = sub.add_parser(
+		"text" ,
+		parents=[ global_parser ] ,
+		help="Render a plain-text document for each paper at output/text/<doi>.txt ; --source raw ( pymupdf full text , default ) or ocr ( walk yolo+ocr sections )"
+	)
+	p.add_argument( "--source" , dest="text_source" ,
+		choices=[ "raw" , "ocr" ] , default="ocr" ,
+		help="raw ( default ) -> emit paper[ 'raw_text' ] from pymupdf verbatim ; ocr -> rebuild text from yolo+ocr+sections , same content path as 'prma md'" )
+	p.add_argument( "--force" , dest="text_force" ,
+		action="store_true" , default=False ,
+		help="Re-render even papers whose .txt file already exists" )
+	p.add_argument( "--include-references" , dest="text_include_references" ,
+		action="store_true" , default=False ,
+		help="Include References / Bibliography in the output ( default : drop them ; for 'ocr' source we skip the references bucket , for 'raw' source we detect the References section in the full-text dump and truncate )" )
+	p.set_defaults( _entry=tasks.text )
+	return {
+		"text_source":              "raw" ,
+		"text_force":               False ,
+		"text_include_references":  False ,
 	}
 
 def mendeley( sub , global_parser ):
@@ -275,6 +301,7 @@ REGISTRARS = (
 	ocr        ,
 	preprocess ,
 	md         ,
+	text       ,
 	mendeley   ,
 	zotero     ,
 	crawl      ,

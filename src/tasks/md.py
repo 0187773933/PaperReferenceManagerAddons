@@ -54,7 +54,8 @@ def run( args ):
 
 	from ..pdf import md as md_mod
 
-	force = getattr( args , "md_force" , False )
+	force              = getattr( args , "md_force" , False )
+	include_references = getattr( args , "md_include_references" , False )
 	managers = _resolve_managers( args )
 	manager_label = " + ".join( managers ) if managers else "all"
 
@@ -106,6 +107,7 @@ def run( args ):
 				image_rel_dir=image_rel_dir ,
 				image_abs_dir=image_abs_dir ,
 				prefix=prefix ,
+				include_references=include_references ,
 			)
 		except Exception as e:
 			print( f"MD :: {doi}: failed ( {e} )" )
