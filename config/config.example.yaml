@@ -7,3 +7,22 @@ mendeley:
   auth_url: "https://api.mendeley.com/oauth/authorize?client_id=12345&redirect_uri=http%3a%2f%2flocalhost%3a1234&response_type=code&scope=all"
   email: "asdf@example.edu"
   password: "asdf"
+# `prma summarize` reads these. Each provider is optional ; whichever
+# you set lets `--provider <name>` use it.
+#
+# `key`   : API key. Falls back to env vars if missing :
+#             claude -> ANTHROPIC_API_KEY
+#             openai -> OPENAI_API_KEY
+#             gemini -> GEMINI_API_KEY ( fallback : GOOGLE_API_KEY )
+# `model` : optional model override. CLI --model still wins. If neither
+#           is set , a sensible per-provider default is used.
+gpts:
+  claude:
+    key:   "sk-ant-..."
+    model: "claude-opus-4-5"
+  openai:
+    key:   "sk-..."
+    model: "gpt-4o"
+  gemini:
+    key:   "AIza..."
+    model: "gemini-2.0-flash"

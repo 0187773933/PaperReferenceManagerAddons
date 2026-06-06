@@ -204,6 +204,30 @@ def methods( sub , global_parser ):
 		"methods_force": False ,
 	}
 
+def summarize( sub , global_parser ):
+	p = sub.add_parser(
+		"summarize" ,
+		parents=[ global_parser ] ,
+		help="Feed each paper's section text through an LLM and write one Markdown file per paper at output/summaries/{section}/{doi}.md with a detailed , hashtag-tagged overview. Section defaults to 'all' ( one folder per summarizable section ). Source priority : output/{section}/{doi}.txt ( if a per-section task like 'prma methods' has been run ) , then output/md/{doi}.md ( so run 'prma md' first )."
+	)
+	p.add_argument( "summarize_section" ,
+		nargs="?" , default="all" ,
+		help="Which section to summarize : all ( default ) , abstract , introduction , background , methods , results , conclusions , future" )
+	p.add_argument( "--provider" , dest="summarize_provider" ,
+		choices=[ "claude" , "openai" , "gemini" ] , default="openai" ,
+		help="LLM provider ( default : claude ). The model itself is read "
+		     "from config.yaml gpts.<provider>.model ; "
+		     "falls back to a built-in per-provider default if unset." )
+	p.add_argument( "--force" , dest="summarize_force" ,
+		action="store_true" , default=False ,
+		help="Re-summarize even papers whose .md file already exists" )
+	p.set_defaults( _entry=tasks.summarize )
+	return {
+		"summarize_section":  "all" ,
+		"summarize_provider": "claude" ,
+		"summarize_force":    False ,
+	}
+
 def mendeley( sub , global_parser ):
 	p = sub.add_parser(
 		"mendeley" ,
@@ -317,6 +341,7 @@ REGISTRARS = (
 	md         ,
 	text       ,
 	methods    ,
+	summarize  ,
 	mendeley   ,
 	zotero     ,
 	crawl      ,

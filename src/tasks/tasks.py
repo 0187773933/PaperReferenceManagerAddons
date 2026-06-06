@@ -47,6 +47,13 @@ def methods( args ):
 	from . import methods
 	methods.run( args )
 
+def summarize( args ):
+	# No snapshot here : summarize depends on md / per-section output
+	# that the user has already rendered. Running a snapshot mid-stream
+	# can't help -- it'd just add new papers that don't have md yet.
+	from . import summarize
+	summarize.run( args )
+
 def mendeley_download( args ):
 	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley
