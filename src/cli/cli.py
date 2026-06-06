@@ -242,6 +242,21 @@ def rollup( sub , global_parser ):
 		"rollup_section": "all" ,
 	}
 
+def search( sub , global_parser ):
+	p = sub.add_parser(
+		"search" ,
+		parents=[ global_parser ] ,
+		help="Run every predicate from args.searches / *.py against the text we have for each library paper ( title + raw_text + per-section LLM summaries + ` prma text ` / ` prma methods ` outputs ) and emit hits to output/searches/{search-slug}.md + a combined output/searches/searches.xlsx ( one sheet per search ). Same predicates the OpenAlex pipeline uses for missing.xlsx -- this just turns them on the LOCAL library instead."
+	)
+	p.add_argument( "--search-file" , dest="search_files" ,
+		action="append" , default=None ,
+		help="Load only this search file ( repeatable ; name relative to "
+		     "--searches , or absolute path ). Default : every *.py under --searches." )
+	p.set_defaults( _entry=tasks.search )
+	return {
+		"search_files": None ,
+	}
+
 def mendeley( sub , global_parser ):
 	p = sub.add_parser(
 		"mendeley" ,
@@ -357,6 +372,7 @@ REGISTRARS = (
 	methods    ,
 	summarize  ,
 	rollup     ,
+	search     ,
 	mendeley   ,
 	zotero     ,
 	crawl      ,

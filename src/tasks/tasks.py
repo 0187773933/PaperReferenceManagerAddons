@@ -60,6 +60,13 @@ def rollup( args ):
 	from . import summarize_rollup
 	summarize_rollup.run( args )
 
+def search( args ):
+	# No snapshot here -- search reads whatever text we already have on
+	# disk for each paper. Run prma snapshot / md / methods / summarize
+	# beforehand for a richer haystack.
+	from . import library_search
+	library_search.run( args )
+
 def mendeley_download( args ):
 	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley

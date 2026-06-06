@@ -36,9 +36,18 @@ Two sheets :
       LLM emitted across the cohort , sorted descending. Useful as a
       seed for clustering or for spotting outlier tags worth pinning.
 
-Idempotent : every run rebuilds the xlsx from the current set of .md
-files under the section folder , so adding / re-running individual
-papers and then a rollup pass produces an up-to-date workbook.
+Plus , for every extra column declared in config/rollup-extra-columns.yaml
+( e.g. "fMRI task" ) , a sibling markdown list at
+  args.output / summaries / {section}-{column-slug}.md
+listing every paper whose snippets matched , sorted by OpenAlex
+publication_date ( most recent first ). Each entry carries title , DOI ,
+ezproxy URL , local PDF link , publication date , journal , and the
+snippet text from both the LLM summary and the raw section text.
+
+Idempotent : every run rebuilds the xlsx ( and every extra-column .md )
+from the current set of .md files under the section folder , so adding /
+re-running individual papers and then a rollup pass produces an up-to-
+date workbook + lists.
 """
 
 import re
@@ -292,7 +301,12 @@ def _extract_snippets( text , spec ):
 
 def _gather_extras_for_row( row , section_key , args , extra_columns ):
 	"""For one paper , run every extra-column spec across its sources
-	and stuff the joined snippet into row[ 'extras' ][ col_name ]."""
+	and stuff the joined snippet into row[ 'extras' ][ col_name ]. The
+	per-source snippets are kept separately under row[ 'extras_by_src' ]
+	[ col_name ] = { 'summary': [ str , ... ] , 'raw': [ str , ... ] }
+	so the per-column markdown emitter ( _render_extra_column_md ) can
+	cite source provenance cleanly. The xlsx writer keeps using the
+	flat row[ 'extras' ] string."""
 	if not extra_columns:
 		return
 	# Pre-resolve the two text sources once per paper.
@@ -310,24 +324,217 @@ def _gather_extras_for_row( row , section_key , args , extra_columns ):
 		"section_text" : section_text ,
 	}
 
-	extras = {}
+	extras        = {}
+	extras_by_src = {}
 	for spec in extra_columns:
-		all_snips = []
+		all_snips   = []
+		per_src     = { "summary": [] , "raw": [] }
 		for src_name in spec[ "sources" ]:
 			src_text = sources_lookup.get( src_name )
 			if not src_text:
 				continue
+			tag = "summary" if src_name == "summary" else "raw"
 			for snip in _extract_snippets( src_text , spec ):
-				# Tag the snippet with where it came from so a reader
-				# scanning the cell can tell summary-hits from raw-hits.
-				tag = "summary" if src_name == "summary" else "raw"
+				per_src[ tag ].append( snip )
 				all_snips.append( f"[ {tag} ] {snip}" )
 				if len( all_snips ) >= spec[ "max_snippets" ]:
 					break
 			if len( all_snips ) >= spec[ "max_snippets" ]:
 				break
-		extras[ spec[ "name" ] ] = "\n\n---\n\n".join( all_snips )
-	row[ "extras" ] = extras
+		extras       [ spec[ "name" ] ] = "\n\n---\n\n".join( all_snips )
+		extras_by_src[ spec[ "name" ] ] = per_src
+	row[ "extras" ]        = extras
+	row[ "extras_by_src" ] = extras_by_src
+
+
+# ---------------------------------------------------------------------------
+# Per-extra-column Markdown emitter
+# ---------------------------------------------------------------------------
+
+# Proxy template for the Wright State ezproxy ; if you fork this for a
+# different institution , swap the host here.
+_PROXY_URL_TEMPLATE = "https://doi-org.ezproxy.libraries.wright.edu/{doi}"
+
+
+def _load_openalex_meta( args , doi ):
+	"""Read output/cache/openalex/{base64( doi )}.json if present.
+	Returns the parsed dict or {} on any miss. Quiet : missing files
+	are the normal case for papers whose openalex cache hasn't been
+	fetched yet ( i.e. ` prma ` hasn't run since they were added )."""
+	if args is None or not doi:
+		return {}
+	b64 = utils.base64_encode( doi )
+	if not b64:
+		return {}
+	fp = args.output.joinpath( "cache" , "openalex" , f"{b64}.json" )
+	if not fp.exists():
+		return {}
+	try:
+		return utils.read_json( fp ) or {}
+	except Exception:
+		return {}
+
+
+def _openalex_journal_name( oa_meta ):
+	"""Pull a human-readable journal / venue name out of an OpenAlex
+	Works record. Tries the current API field first
+	( primary_location.source.display_name ) , then the older field
+	( host_venue.display_name ) , then '' ."""
+	if not oa_meta:
+		return ""
+	prim = ( oa_meta.get( "primary_location" ) or {} )
+	src  = ( prim.get( "source" ) or {} )
+	name = src.get( "display_name" )
+	if name:
+		return name
+	hv = oa_meta.get( "host_venue" ) or {}
+	return hv.get( "display_name" ) or ""
+
+
+def _openalex_publication_date( oa_meta ):
+	"""'YYYY-MM-DD' if OpenAlex has it , else just the year , else '' .
+	Returns a string so it sorts correctly by lex order downstream."""
+	if not oa_meta:
+		return ""
+	pd = oa_meta.get( "publication_date" )
+	if pd:
+		return str( pd )
+	py = oa_meta.get( "publication_year" )
+	if py:
+		return f"{py}-01-01"
+	return ""
+
+
+def _file_url( abs_path ):
+	"""Build a file:// URL from an absolute path , URL-escaping spaces
+	and other meta characters so markdown viewers ( and shell pastes )
+	don't choke."""
+	if not abs_path:
+		return ""
+	from urllib.parse import quote
+	# quote with no safe chars eats slashes too -- keep them so the URL
+	# is recognizably a path.
+	return "file://" + quote( str( abs_path ) , safe="/:" )
+
+
+def _slug_for_filename( name ):
+	"""Turn 'fMRI task' into 'fMRI-task' so we can use the column name
+	as a filename component. Preserves letter case ( so the slug echoes
+	the user's column name ) , just collapses whitespace / punctuation
+	to '-' and trims leading / trailing dashes."""
+	s = re.sub( r"[^A-Za-z0-9._-]+" , "-" , ( name or "" ).strip() )
+	return s.strip( "-" ) or "extra"
+
+
+def _md_escape_pipe( s ):
+	"""Defensive : strip control chars and replace pipes in single-line
+	cells. Used for title fields that go into bullet points."""
+	if not s:
+		return ""
+	s = _ILLEGAL_XLSX_RE.sub( "" , s )
+	return s.strip()
+
+
+def _render_extra_column_md(
+	rows , col_spec , section_key , section_display , out_path , total_n ,
+):
+	"""Emit a single markdown list of every paper whose extras[ col_name ]
+	matched , sorted by OpenAlex publication_date ( most recent first ).
+	Each entry gets : title , doi , proxy url , local pdf link , pub
+	date , journal , and the per-source snippet text. Papers with no
+	openalex meta still appear ( published / journal fields show as
+	'(unknown)' ) and sort to the end of the list."""
+	col_name = col_spec[ "name" ]
+
+	# Filter to matching papers.
+	matched = [ r for r in rows if ( r.get( "extras" ) or {} ).get( col_name ) ]
+	if not matched:
+		# Don't write an empty file -- delete a stale one if present , so
+		# users don't get fooled by leftover content from a prior run.
+		if out_path.exists():
+			try:
+				out_path.unlink()
+			except Exception:
+				pass
+		return 0
+
+	# Sort by publication_date desc ; missing dates sort to the end.
+	def _key( r ):
+		oa = r.get( "openalex" ) or {}
+		pd = _openalex_publication_date( oa )
+		return pd or "0000-00-00"
+	matched.sort( key=_key , reverse=True )
+
+	# Build the markdown.
+	lines = []
+	lines.append( f"# {col_name} — {section_display}" )
+	lines.append( "" )
+	lines.append(
+		f"_{ len( matched ) } of { total_n } papers matched. Sorted by "
+		f"publication date ( most recent first ). Generated by `prma rollup`._"
+	)
+	lines.append( "" )
+	lines.append( "---" )
+	lines.append( "" )
+
+	for r in matched:
+		title    = _md_escape_pipe( r.get( "title" ) or "(untitled)" )
+		doi      = r.get( "doi" )    or ""
+		pdf_path = r.get( "pdf_path" )
+		oa_meta  = r.get( "openalex" ) or {}
+		pub_date = _openalex_publication_date( oa_meta ) or "(unknown)"
+		journal  = _openalex_journal_name    ( oa_meta ) or "(unknown)"
+
+		lines.append( f"## {title}" )
+		lines.append( "" )
+		if doi:
+			lines.append( f"- **DOI:** [{doi}](https://doi.org/{doi})" )
+			proxy = _PROXY_URL_TEMPLATE.format( doi=doi )
+			lines.append( f"- **Proxy:** [{proxy}]({proxy})" )
+		else:
+			lines.append( "- **DOI:** _(none)_" )
+		if pdf_path:
+			from pathlib import Path
+			pdf_name = Path( pdf_path ).name
+			lines.append( f"- **PDF:** [{pdf_name}]({_file_url( pdf_path )})" )
+		else:
+			lines.append( "- **PDF:** _(no local pdf)_" )
+		lines.append( f"- **Published:** {pub_date}" )
+		lines.append( f"- **Journal:** {journal}" )
+		lines.append( "" )
+
+		# Per-source snippets. Prefer the structured form built by
+		# _gather_extras_for_row ; fall back to the flat string when
+		# we're rendering an older row dict.
+		by_src   = ( r.get( "extras_by_src" ) or {} ).get( col_name ) or {}
+		sum_hits = by_src.get( "summary" ) or []
+		raw_hits = by_src.get( "raw"     ) or []
+		if sum_hits or raw_hits:
+			lines.append( f"**{col_name} hits:**" )
+			lines.append( "" )
+			for s in sum_hits:
+				lines.append( f"_[ from LLM summary ]_" )
+				lines.append( "" )
+				lines.append( s.strip() )
+				lines.append( "" )
+			for s in raw_hits:
+				lines.append( f"_[ from raw {section_key} text ]_" )
+				lines.append( "" )
+				lines.append( s.strip() )
+				lines.append( "" )
+		else:
+			# Fall back to the flat blob.
+			lines.append( f"**{col_name} hits:**" )
+			lines.append( "" )
+			lines.append( r[ "extras" ][ col_name ].strip() )
+			lines.append( "" )
+
+		lines.append( "---" )
+		lines.append( "" )
+
+	out_path.parent.mkdir( parents=True , exist_ok=True )
+	out_path.write_text( "\n".join( lines ) , encoding="utf-8" )
+	return len( matched )
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +603,18 @@ def _collect_rows( section_dir , args=None , section_key=None , extra_columns=No
 		# resolve_section_text per paper.
 		if extra_columns:
 			_gather_extras_for_row( parsed , section_key , args , extra_columns )
+			# Only papers that matched at least one extra column need
+			# the per-paper enrichment ( pdf path + openalex meta ) for
+			# the markdown emitter -- everyone else stays cheap.
+			if any( ( parsed.get( "extras" ) or {} ).values() ) and parsed[ "doi" ] and args is not None:
+				try:
+					from ..db import papers as papers_db
+					paper_rec = papers_db.load( args , parsed[ "doi" ] )
+				except Exception:
+					paper_rec = None
+				if paper_rec:
+					parsed[ "pdf_path" ] = paper_rec.get( "pdf_path" )
+				parsed[ "openalex" ] = _load_openalex_meta( args , parsed[ "doi" ] )
 		rows.append( parsed )
 		# Hashtag histogram : tokens that look like "#foo" only.
 		for tok in ( parsed[ "hashtags" ] or "" ).split():
@@ -550,6 +769,32 @@ def build_section_xlsx(
 		f"{len( ordered_headers )} subsection cols + {extra_n} extra cols + "
 		f"{len( tag_counter )} hashtag rows -> {out_path}"
 	)
+
+	# Per-extra-column markdown list : one .md per column , next to the
+	# xlsx , sorted by OpenAlex publication_date desc. Cheap : the
+	# per-row openalex / pdf-path lookup already happened during
+	# _collect_rows ( only for rows that matched ) , so this is a pure
+	# in-memory walk + write.
+	if extra_columns:
+		for spec in extra_columns:
+			slug    = _slug_for_filename( spec[ "name" ] )
+			md_path = out_path.parent.joinpath( f"{section_key}-{slug}.md" )
+			n_matched = _render_extra_column_md(
+				rows , spec , section_key , section_display ,
+				md_path , total_n=len( rows ) ,
+			)
+			if n_matched:
+				print(
+					f"ROLLUP    :: {section_key:<13} extra-column "
+					f"{spec[ 'name' ]!r}: {n_matched} matched papers "
+					f"-> {md_path}"
+				)
+			else:
+				print(
+					f"ROLLUP    :: {section_key:<13} extra-column "
+					f"{spec[ 'name' ]!r}: 0 matched papers ; no .md written"
+				)
+
 	return len( rows ) , len( ordered_headers ) , len( tag_counter )
 
 

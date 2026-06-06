@@ -13,6 +13,16 @@ cheaply.
 Honors --manager the same way every other task does. Skip-if-exists is
 the default ; pass --force to re-render even papers whose .txt is
 already on disk.
+
+Empty-result sentinel : when the extractor returns no text for a paper
+( e.g. the paper has yolo + sections but no 'methods' bucket and no
+methods header in raw_text -- common for editorials , letters , and
+some review chapters ) , we still write a ZERO-BYTE .txt at the target
+path. The planning loop on the next run sees out_path.exists() and
+fast-paths the paper into the 'already-done' bucket instead of
+re-walking the extractor every time. Downstream tasks ( summarize ,
+rollup ) .strip() the file contents -- empty stays empty -- so they
+correctly skip these papers too. ` --force ` re-tries from scratch.
 """
 
 from tqdm import tqdm
@@ -95,6 +105,21 @@ def run( args ):
 			print( f"METHODS :: {doi}: failed ( {e} )" )
 			continue
 		if not text:
+			# Persist an EMPTY sentinel so the planning loop on the next
+			# ` prma methods ` run sees out_path.exists() and fast-paths
+			# this paper into the 'already-done' bucket. Without this we
+			# re-walk every paper that came back empty on EVERY run --
+			# they have sections data ( so they pass the no-content gate )
+			# but no methods bucket ( so the extractor returns "" ) , a
+			# silent steady-state cost that scales with the library.
+			# --force still re-tries because the planning loop ignores
+			# exists() when force=True. Downstream tasks ( summarize ,
+			# rollup ) strip file contents -- empty stays empty -- so
+			# they correctly skip these papers too.
+			try:
+				out_path.write_text( "" , encoding="utf-8" )
+			except Exception as e:
+				print( f"METHODS :: {doi}: sentinel write failed ( {e} )" )
 			n_empty += 1
 			continue
 		try:
@@ -106,6 +131,7 @@ def run( args ):
 		total_bytes += len( text )
 
 	print(
-		f"METHODS :: wrote {n_written} .txt files "
-		f"( {total_bytes} bytes total ; no-methods-detected={n_empty} ) -> {out_dir}"
+		f"METHODS :: wrote {n_written} .txt files + {n_empty} empty sentinels "
+		f"( {total_bytes} bytes total ; sentinels mark papers with no methods so "
+		f"future runs skip them via the already-done path ) -> {out_dir}"
 	)
