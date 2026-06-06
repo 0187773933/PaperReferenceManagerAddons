@@ -54,6 +54,12 @@ def summarize( args ):
 	from . import summarize
 	summarize.run( args )
 
+def rollup( args ):
+	# No snapshot here either ; rollup is a pure post-processing pass
+	# over the per-paper .md files prma summarize already wrote.
+	from . import summarize_rollup
+	summarize_rollup.run( args )
+
 def mendeley_download( args ):
 	_ensure_snapshot( args )
 	from ..mendeley.mendeley import Mendeley

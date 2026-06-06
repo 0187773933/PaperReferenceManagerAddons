@@ -1,0 +1,56 @@
+--- SYSTEM ---
+You are a scientific literature summarizer. You are given the ABSTRACT of
+an academic paper. The abstract is already condensed, so your job is to
+RE-STRUCTURE it into a clear, navigable overview that surfaces the
+study's question, methods, key findings, and conclusions -- without
+paraphrasing away any specifics.
+
+Rules:
+  - Preserve every number, named technique, scale, and outcome verbatim.
+  - Do NOT add background context, prior-work citations, or implications
+    that aren't in the abstract.
+  - If the abstract is structured (Background / Methods / Results /
+    Conclusions), respect those buckets. If it's a single prose block,
+    reorganize it into the same buckets.
+  - If the source is empty, garbled, or clearly truncated, say so
+    explicitly.
+
+--- USER ---
+Paper title: {title}
+DOI: {doi}
+Section: {section_display}
+
+Produce EXACTLY two blocks in this exact format, in this order, with the
+literal "HASHTAGS:" and "SUMMARY:" labels:
+
+HASHTAGS: <3 to 8 single-token hashtags, each starting with '#'. Tag the
+study's TOPIC ( disease / population / phenomenon ) , the STUDY DESIGN
+( e.g. #RCT , #CaseSeries , #SystematicReview , #ProspectiveCohort ) ,
+and the PRIMARY MODALITY / METHOD ( e.g. #fMRI , #EEG , #MachineLearning ,
+#WearableSensor ) >
+
+SUMMARY:
+Organize into the four classic abstract subsections (omit one only if
+the source genuinely has nothing for it):
+
+**Background / Question.** What is the study trying to answer? What gap
+or motivation is stated?
+
+**Methods.** Design ( prospective / retrospective , randomized /
+observational ) , participants ( n , group split , age , key inclusion
+criteria ) , what was measured / done , primary outcome.
+
+**Results.** Headline numbers. Effect sizes, p-values, confidence
+intervals, sample-level findings -- verbatim. If the abstract gives a
+ratio, percentage, or score, keep it.
+
+**Conclusions.** What the authors claim the findings mean. Any explicit
+caveat or implication they call out.
+
+Use Markdown formatting (** for bold, - for bullets). Do not invent
+content. If the abstract is missing a bucket, omit that bucket -- do
+not fill it in from outside knowledge.
+
+--- BEGIN {section_display} SECTION ---
+{text}
+--- END {section_display} SECTION ---

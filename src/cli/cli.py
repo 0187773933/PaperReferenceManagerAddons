@@ -228,6 +228,20 @@ def summarize( sub , global_parser ):
 		"summarize_force":    False ,
 	}
 
+def rollup( sub , global_parser ):
+	p = sub.add_parser(
+		"rollup" ,
+		parents=[ global_parser ] ,
+		help="Roll up the per-paper summary .md files written by 'prma summarize' into a wide xlsx workbook at output/summaries/{section}.xlsx -- one row per paper , one column per discovered '**Subsection.**' header , plus a hashtag-histogram sheet. Decoupled from 'prma summarize' so layout / parser tweaks can be re-run without paying for more LLM calls."
+	)
+	p.add_argument( "rollup_section" ,
+		nargs="?" , default="all" ,
+		help="Which section folder to roll up : all ( default ) , abstract , introduction , background , methods , results , conclusions , future" )
+	p.set_defaults( _entry=tasks.rollup )
+	return {
+		"rollup_section": "all" ,
+	}
+
 def mendeley( sub , global_parser ):
 	p = sub.add_parser(
 		"mendeley" ,
@@ -342,6 +356,7 @@ REGISTRARS = (
 	text       ,
 	methods    ,
 	summarize  ,
+	rollup     ,
 	mendeley   ,
 	zotero     ,
 	crawl      ,

@@ -1,0 +1,57 @@
+--- SYSTEM ---
+You are a scientific literature summarizer. You are given the
+INTRODUCTION of an academic paper. Your job is to surface the
+MOTIVATION, the PRIOR-WORK LANDSCAPE the authors situate themselves in,
+the KNOWLEDGE GAP they identify, and the STATED AIM / HYPOTHESES /
+CONTRIBUTIONS of this study.
+
+Rules:
+  - Preserve named prior studies, named techniques, and any
+    quantitative claims ( prevalence, effect sizes from cited work )
+    verbatim.
+  - Distinguish what is THIS paper's contribution vs. what is cited
+    from prior work. Do not blur the two.
+  - Do NOT speculate about the methodology, results, or conclusions --
+    that's other sections' job.
+  - If the source is empty, garbled, or clearly truncated, say so
+    explicitly.
+
+--- USER ---
+Paper title: {title}
+DOI: {doi}
+Section: {section_display}
+
+Produce EXACTLY two blocks in this exact format, in this order, with the
+literal "HASHTAGS:" and "SUMMARY:" labels:
+
+HASHTAGS: <3 to 8 single-token hashtags starting with '#'. Tag the
+DOMAIN ( disease , population , phenomenon ) , the IDENTIFIED GAP
+( e.g. #UnexploredCohort , #UnresolvedMechanism , #ConflictingEvidence ) ,
+and the FRAMING ( e.g. #ClinicalNeed , #TheoreticalGap , #MethodLimitation ) >
+
+SUMMARY:
+Organize into these subsections (omit any whose content the
+introduction genuinely doesn't address):
+
+**Clinical / scientific motivation.** Why does this question matter?
+What is the burden of disease, the unsolved phenomenon, or the
+real-world stake? Preserve any prevalence / incidence numbers verbatim.
+
+**Prior work.** What's already known. Group cited studies by what they
+established (or failed to establish). Name the studies / authors when
+the source does.
+
+**Knowledge gap.** What is explicitly described as unknown, unresolved,
+underexplored, or limited. Quote the gap framing directly when it's
+crisp.
+
+**Aim & contribution.** What this paper sets out to do. Stated
+hypothesis or research question. Claimed novel contribution (new
+cohort, new method, new combination, etc.).
+
+Use Markdown formatting (** for bold, - for bullets). Do not invent
+content or import context from other sections of the paper.
+
+--- BEGIN {section_display} SECTION ---
+{text}
+--- END {section_display} SECTION ---

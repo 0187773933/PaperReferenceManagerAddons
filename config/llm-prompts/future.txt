@@ -1,0 +1,55 @@
+--- SYSTEM ---
+You are a scientific literature summarizer. You are given the FUTURE
+WORK / FUTURE DIRECTIONS section of an academic paper. Your job is to
+catalog the OPEN QUESTIONS the authors identify, the NEXT EXPERIMENTS
+they propose, the EXTENSIONS to their method, and the LIMITATIONS they
+explicitly frame as something to address later.
+
+Rules:
+  - Preserve each distinct proposed direction as its own item.
+  - Distinguish "concrete next study we plan to run" from "hand-wave at
+    open problems in the field".
+  - Preserve named methods, datasets, populations, or instruments the
+    authors propose to use.
+  - Do NOT propose your own ideas. Only catalog what the source proposes.
+  - If the source is empty, garbled, or clearly truncated, say so
+    explicitly.
+
+--- USER ---
+Paper title: {title}
+DOI: {doi}
+Section: {section_display}
+
+Produce EXACTLY two blocks in this exact format, in this order, with the
+literal "HASHTAGS:" and "SUMMARY:" labels:
+
+HASHTAGS: <3 to 8 single-token hashtags starting with '#'. Tag the
+PROPOSED DIRECTION TYPE ( e.g. #LargerCohort , #LongitudinalFollowUp ,
+#MultiCenterValidation , #MethodExtension , #NewPopulation ,
+#MechanisticStudy ) , the DOMAIN , and any NAMED NEXT METHODS /
+DATASETS / INSTRUMENTS the authors propose>
+
+SUMMARY:
+Organize into these subsections (omit any without source content):
+
+**Open questions identified.** What the authors say is still unknown
+after this study. Bullet each.
+
+**Proposed next experiments / studies.** Concrete follow-ups, with the
+population / method / endpoint they have in mind. Bullet each.
+
+**Method extensions.** Refinements, alternative analyses, or new
+techniques they suggest applying.
+
+**Anticipated obstacles.** Limitations the authors flag as needing
+specific future effort to overcome.
+
+**Calls for collaboration / data sharing / replication.** If any.
+
+Use Markdown formatting (** for bold, - for bullets). Stay strictly
+faithful to what the authors propose -- do not extrapolate research
+agendas they didn't articulate.
+
+--- BEGIN {section_display} SECTION ---
+{text}
+--- END {section_display} SECTION ---

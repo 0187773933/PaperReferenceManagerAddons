@@ -1,0 +1,73 @@
+# Extra columns for ` prma rollup ` .
+#
+# Each entry adds ONE column to the rolled-up xlsx ( per section ). For every
+# paper , the rollup runs a keyword / regex grep across the sources listed
+# in `sources` , snaps each hit to its surrounding sentence boundary , and
+# emits up to `max_snippets` matched snippets joined into the cell.
+#
+# Sources :
+#   summary       -- the LLM-written ` ## Summary ` body in
+#                    output/summaries/{section}/{doi}.md
+#   section_text  -- the resolved raw section text for this section
+#                    ( same source the LLM saw ) : output/{section}/{doi}.txt
+#                    if a per-section task like ` prma methods ` has been
+#                    run , else the matching " ## SectionDisplay " block
+#                    sliced out of output/md/{doi}.md.
+#
+# Tips :
+#   - Use multi-word keywords directly ( "fMRI task" ) -- word-boundary
+#     handling is automatic.
+#   - For finer-grained extraction you can add `regex:` patterns ; they
+#     run with re.IGNORECASE.
+#   - `context_chars` is the rough total snippet length around each hit ,
+#     widened outward to the nearest sentence boundary so cells stay
+#     readable.
+#   - `max_snippets` caps how many distinct hits land in one cell.
+#
+# This file is OPTIONAL. If it doesn't exist , the rollup just writes the
+# baseline subsection columns.
+
+extra_columns:
+
+  - name: "fMRI task"
+    keywords:
+      - "fMRI task"
+      - "task paradigm"
+      - "behavioral task"
+      - "scanning task"
+      - "task was"
+      - "tasks were"
+      - "imagery task"
+      - "mental imagery"
+      - "block design"
+      - "event-related design"
+      - "n-back"
+      - "go/no-go"
+      - "stop signal"
+      - "resting state"
+      - "resting-state"
+    regex:
+      - "(?:participants?|subjects?|patients?)\\s+(?:performed|completed|underwent|were\\s+(?:asked|instructed)\\s+to\\s+perform)\\s+(?:a |an |the )?([^.]+? task)"
+      - "(?:fMRI|MRI)\\s+task[s]?\\s*[:\\-]\\s*([^.\\n]+)"
+    sources: [ summary , section_text ]
+    context_chars: 350
+    max_snippets: 4
+
+  # Add more columns below in the same shape. Examples to consider :
+  #
+  # - name: "Scanner"
+  #   keywords: [ "scanner" , "field strength" , "3T" , "1.5T" , "7T" ,
+  #               "Siemens" , "GE" , "Philips" , "head coil" ]
+  #   sources: [ summary , section_text ]
+  #   context_chars: 250
+  #   max_snippets: 3
+  #
+  # - name: "Sample size"
+  #   keywords: [ "participants" , "subjects" , "patients" , "n =" ,
+  #               "sample size" , "enrolled" , "recruited" ]
+  #   regex:
+  #     - "n\\s*=\\s*\\d+"
+  #     - "(\\d+)\\s+(?:participants|subjects|patients|controls)"
+  #   sources: [ summary , section_text ]
+  #   context_chars: 200
+  #   max_snippets: 5

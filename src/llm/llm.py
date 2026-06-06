@@ -69,7 +69,7 @@ import requests
 
 DEFAULT_MODELS = {
 	"claude" : "claude-sonnet-4-5"  ,
-	"openai" : "gpt-4o"             ,
+	"openai" : "gpt-5.4-nano"             ,
 	"gemini" : "gemini-2.0-flash"   ,
 }
 
@@ -83,7 +83,7 @@ DEFAULT_MODELS = {
 # overview and its closing details survive.
 INPUT_CHAR_BUDGETS = {
 	"claude" :   600_000 ,   # claude-sonnet-4-5 : 200k token window
-	"openai" :   320_000 ,   # gpt-4o : 128k token window
+	"openai" :   400_000 ,   # gpt-4o : 128k token window
 	"gemini" : 2_500_000 ,   # gemini-2.0-flash : 1M token window
 }
 
@@ -104,10 +104,29 @@ PROVIDERS = tuple( DEFAULT_MODELS.keys() )
 
 
 # ---------------------------------------------------------------------------
-# Prompt
+# Prompt -- loaded from config/llm-prompts/<section>.txt , with all.txt as
+# the shared fallback and a built-in last-resort pair below.
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = (
+# Directory ( relative to args.config ) we look in for per-section prompts.
+PROMPT_DIR_NAME      = "llm-prompts"
+PROMPT_FALLBACK_NAME = "all"
+
+# A file is split into a SYSTEM block and a USER block by lines like
+# "--- SYSTEM ---" and "--- USER ---" ( case-insensitive , optional inner
+# whitespace ). Anything before the first marker is treated as a comment
+# and ignored.
+_PROMPT_MARKER_RE = re.compile(
+	r"^---\s*(SYSTEM|USER)\s*---\s*$" ,
+	re.IGNORECASE | re.MULTILINE       ,
+)
+
+
+# Built-in last-resort prompts. Used only when neither
+# {config}/llm-prompts/{section}.txt nor {config}/llm-prompts/all.txt
+# exists. Keep these in sync with config/llm-prompts/all.txt so behavior
+# is the same after the prompt-files migration.
+_BUILTIN_SYSTEM_PROMPT = (
 	"You are a scientific literature summarizer. You are given ONE section "
 	"of an academic paper and must produce a STRUCTURED , DETAILED OVERVIEW "
 	"of that section. Do not editorialize ; do not introduce information "
@@ -119,8 +138,7 @@ _SYSTEM_PROMPT = (
 	"empty , garbled , or clearly truncated , say so explicitly."
 )
 
-
-_USER_TEMPLATE = """\
+_BUILTIN_USER_TEMPLATE = """\
 Paper title: {title}
 DOI: {doi}
 Section: {section_display}
@@ -129,17 +147,12 @@ Produce EXACTLY two blocks in this exact format , in this order , with the
 literal "HASHTAGS:" and "SUMMARY:" labels :
 
 HASHTAGS: <3 to 8 single-token hashtags , each starting with '#' , CamelCase
-or lowercased , no spaces inside a tag , categorizing what THIS section is
-about ( methodology types , disease , modality , statistical framework ,
-study design , key technique , etc. ) >
+or lowercased , no spaces inside a tag>
 
 SUMMARY:
 <a detailed structured overview of the section. Use short paragraphs or
-bullet points. Preserve specific details : sample sizes , cohorts , inclusion
-criteria , equipment , statistical tests , thresholds , imaging modalities ,
-named scales / scores , primary and secondary endpoints , whatever is
-actually written in the source. Do not condense away the specifics. Do
-not invent or extrapolate. >
+bullet points. Preserve specific details. Do not condense away the
+specifics. Do not invent or extrapolate.>
 
 --- BEGIN {section_display} SECTION ---
 {text}
@@ -147,8 +160,69 @@ not invent or extrapolate. >
 """
 
 
-def _build_prompt( section_display , doi , title , text ):
-	return _USER_TEMPLATE.format(
+def _parse_prompt_file( raw ):
+	"""Split a prompt file on '--- SYSTEM ---' / '--- USER ---' markers.
+	Returns ( system , user_template ) , or None if either block is
+	missing. Content before the first marker is treated as a comment."""
+	markers = list( _PROMPT_MARKER_RE.finditer( raw ) )
+	if not markers:
+		return None
+	blocks = {}
+	for i , m in enumerate( markers ):
+		key   = m.group( 1 ).upper()
+		start = m.end()
+		end   = markers[ i + 1 ].start() if i + 1 < len( markers ) else len( raw )
+		blocks[ key ] = raw[ start : end ].strip( "\n" )
+	if "SYSTEM" not in blocks or "USER" not in blocks:
+		return None
+	return blocks[ "SYSTEM" ] , blocks[ "USER" ]
+
+
+def load_prompt_template( config_dir , section_key ):
+	"""Resolve the prompt template for one section. Lookup order :
+	  1. {config_dir}/llm-prompts/{section_key}.txt
+	  2. {config_dir}/llm-prompts/all.txt
+	  3. built-in ( _BUILTIN_SYSTEM_PROMPT / _BUILTIN_USER_TEMPLATE )
+	Each file must declare both '--- SYSTEM ---' and '--- USER ---'
+	blocks ; a malformed file is logged and skipped to the next candidate.
+	Returns ( system_prompt , user_template )."""
+	candidates = []
+	if config_dir is not None:
+		base = config_dir.joinpath( PROMPT_DIR_NAME )
+		if section_key:
+			candidates.append( base.joinpath( f"{section_key}.txt" ) )
+		candidates.append( base.joinpath( f"{PROMPT_FALLBACK_NAME}.txt" ) )
+
+	for path in candidates:
+		try:
+			if not path.exists():
+				continue
+		except Exception:
+			continue
+		try:
+			raw = path.read_text( encoding="utf-8" )
+		except Exception as e:
+			print( f"LLM :: could not read prompt file {path} ( {e} )" )
+			continue
+		parsed = _parse_prompt_file( raw )
+		if parsed is None:
+			print(
+				f"LLM :: prompt file {path} is missing a '--- SYSTEM ---' "
+				f"or '--- USER ---' block ; falling through to next candidate"
+			)
+			continue
+		return parsed
+
+	return _BUILTIN_SYSTEM_PROMPT , _BUILTIN_USER_TEMPLATE
+
+
+def _format_prompt( template , *, section_display , doi , title , text ):
+	"""str.format the placeholders we expose to prompt files. Silently
+	tolerates a template that doesn't use some of them ( unused keys
+	are dropped on the floor ) ; raises KeyError only if a template
+	references an unknown placeholder , which the caller catches and
+	logs per-paper."""
+	return template.format(
 		section_display = section_display ,
 		doi             = doi   or "(unknown)" ,
 		title           = title or "(untitled)" ,
@@ -456,10 +530,17 @@ def summarize(
 	provider , model , section_key , section_display ,
 	doi , title , text ,
 	config = None , timeout = 120 ,
+	prompts = None ,
 ):
 	"""Single LLM round-trip for one ( paper , section ) pair. Returns
 	{ 'hashtags' , 'summary' } on success ; {} on any failure ( the
-	caller skips and moves on )."""
+	caller skips and moves on ).
+
+	`prompts` is an optional ( system_prompt , user_template ) tuple --
+	usually pre-loaded by the task via load_prompt_template( config_dir ,
+	section_key ) so all papers in a single section pass share the same
+	template without re-reading the file. When None , the built-in
+	last-resort pair is used."""
 	provider = ( provider or "claude" ).lower()
 	if provider not in _DISPATCH:
 		print( f"LLM :: unknown provider {provider!r} ; "
@@ -485,8 +566,28 @@ def summarize(
 			f"truncated {len( text )} -> {len( clipped )} chars to fit context window"
 		)
 
-	system_prompt = _SYSTEM_PROMPT
-	user_prompt   = _build_prompt( section_display , doi , title , clipped )
+	if prompts is None:
+		system_template , user_template = _BUILTIN_SYSTEM_PROMPT , _BUILTIN_USER_TEMPLATE
+	else:
+		system_template , user_template = prompts
+	try:
+		system_prompt = _format_prompt(
+			system_template , section_display=section_display ,
+			doi=doi , title=title , text=clipped ,
+		)
+		user_prompt = _format_prompt(
+			user_template , section_display=section_display ,
+			doi=doi , title=title , text=clipped ,
+		)
+	except KeyError as e:
+		# Prompt file references an unknown {placeholder}. Surface once
+		# and bail this paper -- the caller will print the row as failed
+		# and move on , but the user's other papers will hit the same
+		# error so they should fix the prompt.
+		print(
+			f"LLM :: prompt template references unknown placeholder {e} "
+			f"( section={section_key} ) ; fix the prompt file and re-run" )
+		return {}
 
 	try:
 		raw = _DISPATCH[ provider ](

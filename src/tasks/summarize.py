@@ -164,6 +164,13 @@ def _run_one_section(
 	# .model > built-in default ).
 	resolved_model = llm.resolve_model( provider , None , config )
 
+	# Load the prompt template ONCE for this section ( same template
+	# applies to every paper in this pass ). Lookup :
+	#   1. {args.config}/llm-prompts/{section_key}.txt
+	#   2. {args.config}/llm-prompts/all.txt
+	#   3. built-in default
+	prompt_pair = llm.load_prompt_template( args.config , section_key )
+
 	# One folder per section : output/summaries/{section}/.
 	section_dir = out_root.joinpath( section_key )
 	section_dir.mkdir( parents=True , exist_ok=True )
@@ -198,38 +205,45 @@ def _run_one_section(
 		f"other-manager={skip_other} no-doi={skip_no_doi} )"
 	)
 
-	if not jobs:
-		return
+	if jobs:
+		bar = tqdm( jobs , desc=f"summarize {section_key}" , unit="paper" )
+		n_ok , n_skip = 0 , 0
+		for doi , title , text , out_path in bar:
+			bar.set_postfix_str( ( doi or "" )[ :60 ] )
+			result = llm.summarize(
+				provider , None , section_key , section_display ,
+				doi , title , text , config=config ,
+				prompts=prompt_pair ,
+			)
+			if not result:
+				n_skip += 1
+				continue
+			doc = _render_md(
+				section_display , doi , title ,
+				result.get( "hashtags" , "" ) ,
+				result.get( "summary"  , "" ) ,
+				provider , resolved_model ,
+			)
+			try:
+				out_path.write_text( doc , encoding="utf-8" )
+			except Exception as e:
+				print( f"SUMMARIZE :: {doi}: write failed ( {e} )" )
+				n_skip += 1
+				continue
+			n_ok += 1
 
-	bar = tqdm( jobs , desc=f"summarize {section_key}" , unit="paper" )
-	n_ok , n_skip = 0 , 0
-	for doi , title , text , out_path in bar:
-		bar.set_postfix_str( ( doi or "" )[ :60 ] )
-		result = llm.summarize(
-			provider , None , section_key , section_display ,
-			doi , title , text , config=config ,
+		print(
+			f"SUMMARIZE :: {section_key:<13} wrote {n_ok} new .md files "
+			f"( failed: {n_skip} ) -> {section_dir}"
 		)
-		if not result:
-			n_skip += 1
-			continue
-		doc = _render_md(
-			section_display , doi , title ,
-			result.get( "hashtags" , "" ) ,
-			result.get( "summary"  , "" ) ,
-			provider , resolved_model ,
-		)
-		try:
-			out_path.write_text( doc , encoding="utf-8" )
-		except Exception as e:
-			print( f"SUMMARIZE :: {doi}: write failed ( {e} )" )
-			n_skip += 1
-			continue
-		n_ok += 1
 
-	print(
-		f"SUMMARIZE :: {section_key:<13} wrote {n_ok} new .md files "
-		f"( failed: {n_skip} ) -> {section_dir}"
-	)
+	# A cross-paper xlsx rollup of this section is a separate command :
+	#   prma rollup {section}
+	# It scans args.output / summaries / {section} / *.md and writes
+	# args.output / summaries / {section}.xlsx with one row per paper
+	# and one column per discovered "**Subsection.**" header. Kept out
+	# of this task so it can be re-run / debugged without paying for
+	# another round of LLM calls.
 
 
 # ---------------------------------------------------------------------------
