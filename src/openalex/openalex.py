@@ -59,10 +59,12 @@ class OpenAlex():
 		cache predates the wid-persistence change pick the field up on
 		the next ` prma ` run without needing a force-refresh."""
 		snapshot_keys = snapshot.keys()
-		n_fetched = 0
-		n_cache_hit = 0
-		n_wid_persisted = 0
-		n_missing = 0
+		n_fetched            = 0
+		n_cache_hit          = 0
+		n_tombstone_hit      = 0   # cached marker from a prior failed run
+		n_marked_not_found   = 0   # tombstones we wrote on THIS run
+		n_wid_persisted      = 0
+		n_missing            = 0
 		for k , key in enumerate( tqdm( snapshot_keys , desc="Papers" , position=0 ) ):
 
 			# 1.) Download Info for Papers in Snapshot
@@ -105,6 +107,14 @@ class OpenAlex():
 				except Exception as e:
 					print( f"\nOpenAlex :: cached file {paper_cached_fp} unreadable ( {e} )" )
 					paper_data = {}
+				# Tombstone fast-path : a previous run already asked
+				# OpenAlex about this DOI and got nothing back ( 404 ,
+				# usually a malformed DOI in the source manager or a
+				# work OpenAlex doesn't index ). Don't re-query. Delete
+				# the tombstone file to force a retry on the next run.
+				if paper_data.get( "_openalex_status" ) == "not_found":
+					n_tombstone_hit += 1
+					continue
 				oa_wid = ( paper_data.get( "id" ) or "" ).rsplit( "/" , 1 )[ -1 ]
 				if self._persist_paper_wid( paper_doi_normalized , oa_wid ):
 					n_wid_persisted += 1
@@ -114,8 +124,33 @@ class OpenAlex():
 			# Cache MISS path : hit the API.
 			paper_data = self.API.get_doi( paper_doi_normalized )
 			if not paper_data:
-				print( f"\nNo OpenAlex data for DOI: {paper_doi_normalized}" )
-				n_missing += 1
+				# OpenAlex returned no data. Cache a tombstone so we
+				# don't keep re-querying the API for this DOI on every
+				# future ` prma ` run. The marker has no 'id' field so
+				# downstream code ( _persist_paper_wid , stats ) treats
+				# it as empty. The cache-HIT path above catches it via
+				# the _openalex_status check next run.
+				#
+				# To force a retry ( e.g. publisher fixed the DOI ) :
+				#   rm output/cache/openalex/<base64>.json
+				print(
+					f"\nNo OpenAlex data for DOI: {paper_doi_normalized} "
+					f"; caching as tombstone -> {paper_cached_fp.name}"
+				)
+				from datetime import datetime , timezone
+				try:
+					utils.write_json( paper_cached_fp , {
+						"_openalex_status" : "not_found" ,
+						"_attempted_doi"   : paper_doi_normalized ,
+						"_attempted_at"    : datetime.now( timezone.utc )
+							.replace( microsecond=0 ).isoformat() ,
+					} )
+				except Exception as e:
+					print(
+						f"\nOpenAlex :: could not write tombstone for "
+						f"{paper_doi_normalized} ( {e} )"
+					)
+				n_marked_not_found += 1
 				continue
 
 			# 2.) Fetch all of its Cited-By Papers
@@ -148,7 +183,9 @@ class OpenAlex():
 		print(
 			f"OpenAlex :: update_cache done -- "
 			f"fetched={n_fetched} cache-hits={n_cache_hit} "
-			f"wid-persisted={n_wid_persisted} missing-doi-or-data={n_missing}"
+			f"tombstone-hits={n_tombstone_hit} "
+			f"newly-tombstoned={n_marked_not_found} "
+			f"wid-persisted={n_wid_persisted} missing-doi={n_missing}"
 		)
 
 	def search( self , oa_index , searches ):

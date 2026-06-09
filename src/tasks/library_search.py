@@ -316,7 +316,7 @@ def _write_workbook( out_path , results ):
 	wb.remove( wb.active )
 
 	header_font = Font( bold=True , color="FFFFFF" )
-	header_fill = PatternFill( "solid" , fgColor="2F5496" )
+	header_fill = PatternFill( "solid" , fgColor="046A38" )
 	header_align = Alignment( horizontal="center" , vertical="center" , wrap_text=True )
 	wrap_top    = Alignment( wrap_text=True , vertical="top" )
 	link_top    = Alignment( wrap_text=False , vertical="top" )
