@@ -44,6 +44,34 @@ class OpenAlex():
 			return False
 		return True
 
+	def _download_references( self , paper_data ):
+		"""Ensure every referenced-work meta for `paper_data` is cached at
+		output/cache/openalex/references/{wid}.json.
+
+		Idempotent and resumable : already-cached references are skipped via
+		the per-file .exists() check, so this is safe to call on BOTH the
+		cache-HIT and cache-MISS paths. That's what makes a cancelled first
+		run recover -- the main paper file existing no longer implies its
+		references finished downloading, so we re-check them every run and
+		fill in whatever a prior run left half-done.
+
+		Returns the count of references newly downloaded on this call."""
+		referenced_works = paper_data.get( "referenced_works" )
+		if not referenced_works:
+			return 0
+		n_new = 0
+		for i , item in enumerate( tqdm( referenced_works , desc="References" , position=1 , leave=False ) ):
+			wid = item.split( "/" )[ -1 ]
+			reference_cached_fp = self.references_dir.joinpath( f"{wid}.json" )
+			if reference_cached_fp.exists():
+				continue
+			reference_data = self.API.get_id( wid )
+			if not reference_data:
+				reference_data = {}
+			utils.write_json( reference_cached_fp , reference_data )
+			n_new += 1
+		return n_new
+
 	def update_cache( self , snapshot ):
 		"""Walk the snapshot and ensure for every paper :
 		  - an OpenAlex meta JSON is cached at
@@ -118,6 +146,11 @@ class OpenAlex():
 				oa_wid = ( paper_data.get( "id" ) or "" ).rsplit( "/" , 1 )[ -1 ]
 				if self._persist_paper_wid( paper_doi_normalized , oa_wid ):
 					n_wid_persisted += 1
+				# Resume any references a cancelled prior run left half-done.
+				# The main paper file existing does NOT imply its references
+				# finished downloading ( the file is written before the
+				# reference loop ), so re-check them on every cache hit.
+				n_fetched += self._download_references( paper_data )
 				n_cache_hit += 1
 				continue
 
@@ -167,18 +200,7 @@ class OpenAlex():
 				n_wid_persisted += 1
 
 			# 3.) Download all of its References
-			referenced_works = paper_data.get( "referenced_works" )
-			if not referenced_works:
-				continue
-			for i , item in enumerate( tqdm( referenced_works , desc="References" , position=1 , leave=False ) ):
-				wid = item.split( "/" )[ -1 ]
-				reference_cached_fp = self.references_dir.joinpath( f"{wid}.json" )
-				if reference_cached_fp.exists():
-					continue
-				reference_data = self.API.get_id( wid )
-				if not reference_data:
-					reference_data = {}
-				utils.write_json( reference_cached_fp , reference_data )
+			self._download_references( paper_data )
 
 		print(
 			f"OpenAlex :: update_cache done -- "
