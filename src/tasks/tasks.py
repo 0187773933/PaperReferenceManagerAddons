@@ -8,6 +8,13 @@ def main( args ):
 	from . import main
 	main.main( args )
 
+def missing( args ):
+	# missing depends on the base pipeline ; main.missing() runs main()
+	# ( snapshot + OpenAlex cache update ) first , then computes the stats
+	# and searches that produce output/missing.xlsx.
+	from . import main
+	main.missing( args )
+
 def snapshot( args ):
 	from . import snapshot
 	snapshot.get_common( args )

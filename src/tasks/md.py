@@ -4,10 +4,19 @@ document for each paper using its 'sections' classification. Output
 path :
   args.output / md / { doi_to_filename( doi ) }.md
 
-Preprocess is run inline before rendering ( idempotent : papers that
-already have 'yolo_sorted_page_indexes' + 'sections' are skipped at
-that stage ) so 'prma md' is a one-stop command : snapshot ->
-preprocess -> render.
+Preprocess and images are both run inline before rendering ( both
+idempotent : papers that already have 'yolo_sorted_page_indexes' +
+'sections' are skipped at the preprocess stage , and papers whose
+figure crops are already on disk are skipped at the images stage ) so
+'prma md' is a one-stop command :
+
+  snapshot -> yolo -> ocr -> preprocess -> images -> render
+
+preprocess.run() already pulls every paper up through yolo + ocr
+( see src/tasks/preprocess.py ) , so after it returns each paper has
+its YOLO + OCR + sections. images.run() then crops the figures into
+output/images/ALL/ so the rendered Markdown can link real PNGs instead
+of falling back to the per-figure text placeholder.
 
 Honors --manager :
   --manager zotero   ( default ) -> papers with a 'zotero'   source
@@ -49,8 +58,17 @@ def run( args ):
 	# Make sure every paper has sections before we try to render.
 	# preprocess.run is idempotent : papers that already have
 	# 'yolo_sorted_page_indexes' + 'sections' fall through cheaply.
+	# It also pulls every paper up through yolo + ocr on the way , so
+	# this single call covers snapshot -> yolo -> ocr -> preprocess.
 	from . import preprocess as preprocess_task
 	preprocess_task.run( args )
+
+	# Crop each paper's figures to output/images/ALL/ so the rendered
+	# Markdown can link real PNGs instead of the text placeholder.
+	# Idempotent : papers whose crops already exist fall through cheaply ,
+	# and YOLO is reused from the preprocess pass above ( not re-run ).
+	from . import images as images_task
+	images_task.run( args )
 
 	from ..pdf import md as md_mod
 

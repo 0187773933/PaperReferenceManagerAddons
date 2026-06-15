@@ -49,6 +49,15 @@ def global_parser():
 		help="YOLO Model Confidence" )
 	return g
 
+def missing( sub , global_parser ):
+	p = sub.add_parser(
+		"missing" ,
+		parents=[ global_parser ] ,
+		help="Generate output/missing.xlsx : runs the base pipeline ( snapshot + OpenAlex cache update ) first , then computes the missing / cited-by / authors stats and runs the searches. Depends on the main task."
+	)
+	p.set_defaults( _entry=tasks.missing )
+	return {}
+
 def snapshot( sub , global_parser ):
 	p = sub.add_parser(
 		"snapshot" ,
@@ -362,6 +371,7 @@ def server( sub , global_parser ):
 	}
 
 REGISTRARS = (
+	missing    ,
 	snapshot   ,
 	yolo       ,
 	images     ,

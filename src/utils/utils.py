@@ -143,28 +143,81 @@ def write_xlsx( filepath , sheets ):
 
 def title_of( d ):
 	return d.get( "title" ) or d.get( "display_name" ) or ""
-def openalex_to_xlsx_row( wid , meta , cite_count ):
-	rd = meta.get( "doi" )
-	clean_doi = normalize_doi( rd ) if rd else None
+
+def _xlsx_row_from_scalars( wid , cite_count , title , year , clean_doi , pdf_url , cited_by ):
+	"""Assemble the 9-column missing.xlsx row from already-extracted
+	scalar fields. Shared by openalex_to_xlsx_row ( full OpenAlex meta )
+	and openalex_entry_to_xlsx_row ( compact cached entry ) so both paths
+	produce byte-identical rows."""
 	proxy_url = f"https://doi-org.ezproxy.libraries.wright.edu/{clean_doi}" if clean_doi else None
 	doi_url   = f"https://doi.org/{clean_doi}" if clean_doi else None
 	proxy = Link( proxy_url , proxy_url ) if proxy_url else ""
 	link  = Link( doi_url , doi_url ) if doi_url else ""
-	best_oa = meta.get( "best_oa_location" ) or {}
-	oa_block = meta.get( "open_access" ) or {}
-	pdf_url = best_oa.get( "pdf_url" ) or oa_block.get( "oa_url" )
-	pdf = Link( pdf_url , pdf_url ) if pdf_url else ""
+	pdf   = Link( pdf_url , pdf_url ) if pdf_url else ""
 	return [
 		cite_count,
-		title_of( meta ) or "(no metadata)" ,
-		meta.get( "publication_year" ) ,
+		title or "(no metadata)" ,
+		year ,
 		proxy ,
 		clean_doi ,
 		link ,
 		pdf ,
-		meta.get( "cited_by_count" ) ,
+		cited_by ,
 		wid ,
 	]
+
+def openalex_to_xlsx_row( wid , meta , cite_count ):
+	rd = meta.get( "doi" )
+	clean_doi = normalize_doi( rd ) if rd else None
+	best_oa = meta.get( "best_oa_location" ) or {}
+	oa_block = meta.get( "open_access" ) or {}
+	pdf_url = best_oa.get( "pdf_url" ) or oa_block.get( "oa_url" )
+	return _xlsx_row_from_scalars(
+		wid , cite_count ,
+		title_of( meta ) or "(no metadata)" ,
+		meta.get( "publication_year" ) ,
+		clean_doi , pdf_url , meta.get( "cited_by_count" ) ,
+	)
+
+def openalex_entry_scalars( meta ):
+	"""Extract the small , LIBRARY-INDEPENDENT fields the missing.xlsx
+	pipeline needs out of a full OpenAlex work meta dict , so we can cache
+	them per-WID and avoid re-reading the ( ~34 KB ) reference JSON on
+	every ` prma missing ` run. 'authors' is pre-deduped to ( id , name ,
+	orcid ) triples for the author tab. Does NOT include the cite_count /
+	proxy-count ( that's library-dependent and tallied fresh each run )."""
+	rd = meta.get( "doi" )
+	clean_doi = normalize_doi( rd ) if rd else None
+	best_oa = meta.get( "best_oa_location" ) or {}
+	oa_block = meta.get( "open_access" ) or {}
+	pdf_url = best_oa.get( "pdf_url" ) or oa_block.get( "oa_url" )
+	authors = []
+	seen = set()
+	for a in meta.get( "authorships" ) or []:
+		author = a.get( "author" ) or {}
+		aid = author.get( "id" )
+		if not aid or aid in seen:
+			continue
+		seen.add( aid )
+		authors.append( [ aid , author.get( "display_name" ) or "(unknown)" , author.get( "orcid" ) ] )
+	return {
+		"title":    title_of( meta ) or "(no metadata)" ,
+		"year":     meta.get( "publication_year" ) ,
+		"pubdate":  meta.get( "publication_date" ) ,   # 'YYYY-MM-DD' , for the Newest tab
+		"doi":      clean_doi ,
+		"pdf":      pdf_url ,
+		"cited_by": meta.get( "cited_by_count" ) ,
+		"authors":  authors ,
+	}
+
+def openalex_entry_to_xlsx_row( wid , entry , cite_count ):
+	"""Build a missing.xlsx row from a compact cached entry ( see
+	openalex_entry_scalars ) instead of a full OpenAlex meta."""
+	return _xlsx_row_from_scalars(
+		wid , cite_count ,
+		entry.get( "title" ) , entry.get( "year" ) ,
+		entry.get( "doi" ) , entry.get( "pdf" ) , entry.get( "cited_by" ) ,
+	)
 
 def build_library_dedup_index( snapshot ):
 	"""Build a dedup index from a library snapshot ( normalized DOIs + titles ).
@@ -184,18 +237,14 @@ def build_library_dedup_index( snapshot ):
 		"titles_list": titles_list ,
 	}
 
-def is_library_dup( meta , lib_index , fuzzy=True , threshold=FUZZ_TITLE_THRESHOLD ):
-	"""True if meta matches the library by DOI ( exact ) or title.
-	Title check: exact normalized first ; if fuzzy=True , also a
-	token_set_ratio match at >= threshold. token_set_ratio is bag-of-words
-	and false-positives on topical overlap , so pass fuzzy=False for
-	high-precision callers ( e.g. the crawler , which feeds a manual review )."""
-	rd = meta.get( "doi" )
-	rd_norm = normalize_doi( rd ) if rd else None
+def is_library_dup_fields( doi , title , lib_index , fuzzy=True , threshold=FUZZ_TITLE_THRESHOLD ):
+	"""Scalar form of is_library_dup : test a ( doi , title ) pair against
+	the library dedup index. Lets ` prma missing ` re-check dedup straight
+	from its cached entry fields without re-reading the reference JSON."""
+	rd_norm = normalize_doi( doi ) if doi else None
 	if rd_norm and rd_norm in lib_index[ "dois" ]:
 		return True
-	rt = meta.get( "title" ) or meta.get( "display_name" )
-	rt_norm = normalize_title( rt ) if rt else None
+	rt_norm = normalize_title( title ) if title else None
 	if not rt_norm:
 		return False
 	if rt_norm in lib_index[ "titles_set" ]:
@@ -208,6 +257,32 @@ def is_library_dup( meta , lib_index , fuzzy=True , threshold=FUZZ_TITLE_THRESHO
 		score_cutoff=threshold ,
 	)
 	return match is not None
+
+def is_library_dup( meta , lib_index , fuzzy=True , threshold=FUZZ_TITLE_THRESHOLD ):
+	"""True if meta matches the library by DOI ( exact ) or title.
+	Title check: exact normalized first ; if fuzzy=True , also a
+	token_set_ratio match at >= threshold. token_set_ratio is bag-of-words
+	and false-positives on topical overlap , so pass fuzzy=False for
+	high-precision callers ( e.g. the crawler , which feeds a manual review )."""
+	rt = meta.get( "title" ) or meta.get( "display_name" )
+	return is_library_dup_fields(
+		meta.get( "doi" ) , rt , lib_index ,
+		fuzzy=fuzzy , threshold=threshold ,
+	)
+
+def hash_library_index( lib_index ):
+	"""Stable fingerprint of a library dedup index ( its DOI + normalized-
+	title sets ). ` prma missing ` stamps this into its computation cache ;
+	when it matches on the next run the library is unchanged , so every
+	cached dedup decision can be reused instead of re-running ~57k fuzzy
+	title matches."""
+	import hashlib
+	h = hashlib.sha1()
+	for d in sorted( lib_index.get( "dois" ) or [] ):
+		h.update( b"D" ) ; h.update( ( d or "" ).encode( "utf-8" ) )
+	for t in sorted( lib_index.get( "titles_set" ) or [] ):
+		h.update( b"T" ) ; h.update( ( t or "" ).encode( "utf-8" ) )
+	return h.hexdigest()
 
 def load_searches( searches_dir , files=None ):
     """Load search predicates from .py files in searches_dir.

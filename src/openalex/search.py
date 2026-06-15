@@ -20,12 +20,12 @@ class OpenAlexSearch():
 
 		for name , predicate in searches:
 			matched = []
-			for wid , meta , hay , cite_count , included in tqdm( oa_index , desc=f"Search: {name}" ):
+			for wid , entry , hay , cite_count , included in tqdm( oa_index , desc=f"Search: {name}" ):
 				if not included:
 					continue
 				if not predicate( hay ):
 					continue
-				matched.append( utils.openalex_to_xlsx_row( wid , meta , cite_count ) )
+				matched.append( utils.openalex_entry_to_xlsx_row( wid , entry , cite_count ) )
 			matched.sort( key=lambda r: r[ 2 ] or 0 , reverse=True )
 
 			safe = safe_sheet_name( name )

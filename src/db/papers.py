@@ -155,6 +155,42 @@ def _utc_now_iso():
 	return datetime.now( timezone.utc ).replace( microsecond=0 ).isoformat()
 
 
+# ---------------------------------------------------------------------------
+# YOLO failure marker
+# ---------------------------------------------------------------------------
+# A PDF that YOLO can't even load ( corrupt / truncated file , PDFium
+# "Data format error" , ... ) used to be retried on every single run :
+# the planning loops in yolo / ocr / images all see a paper with no
+# 'yolo' field , queue it , run YOLO inline , and fail again. The marker
+# below records that failure so those loops can skip the paper next time
+# instead of re-attempting the same doomed load. It's cleared the moment
+# YOLO succeeds for the paper ( e.g. the file was replaced ) , and each
+# task's --force overrides the skip so the user can always force a retry.
+
+YOLO_FAILED_KEY = "yolo_failed"
+
+
+def mark_yolo_failed( args , doi , error , pdf_name=None ):
+	"""Load the paper , stamp a yolo_failed marker , and save. Called from
+	the inline-YOLO except branches in yolo / ocr / images."""
+	paper = load( args , doi )
+	if paper is None:
+		return
+	paper[ YOLO_FAILED_KEY ] = {
+		"at":    _utc_now_iso() ,
+		"error": str( error ) ,
+		"pdf":   pdf_name ,
+	}
+	save( args , paper )
+
+
+def clear_yolo_failed( paper ):
+	"""Drop any stale yolo_failed marker from an in-memory paper record.
+	Call right before saving a successful YOLO result. Returns True if a
+	marker was actually present ( so callers can log a recovery )."""
+	return paper.pop( YOLO_FAILED_KEY , None ) is not None
+
+
 def _strip_cosmetic( source ):
 	"""Drop the timestamp field that we re-stamp on every upsert , so
 	source-vs-source equality compares the substantive data only."""

@@ -29,8 +29,54 @@ class OpenAlexStats():
 		self.references_dir.mkdir( parents=True , exist_ok=True )
 
 		# Populated by stats(); reused by Search
-		self._index = []   # list of ( wid , meta , haystack , cite_count , included_in_missing )
+		self._index = []   # list of ( wid , entry , haystack , cite_count , included_in_missing )
 		self.xlsx_path = self.args.output.joinpath( "missing.xlsx" )
+
+		# Per-WID computation cache for compute(). Each reference work's
+		# library-independent derived fields ( haystack + the xlsx-row
+		# scalars + a compact author list ) plus its last dedup decision
+		# live here , so a re-run only reads / parses / dedups references
+		# it hasn't seen before instead of re-walking all ~57k reference
+		# JSONs ( ~1.9 GB ) every time. Delete this file to force a full
+		# recompute.
+		self.cache_path = self.args.output.joinpath( "cache" , "missing_index_cache.json" )
+		self._cache_version = 1
+
+	def _entry_from_meta( self , meta ):
+		"""Compact , library-independent cache entry for one reference work.
+		Everything here derives only from the work's own OpenAlex meta , so
+		it never goes stale once cached ( reference JSONs are write-once )."""
+		e = utils.openalex_entry_scalars( meta )
+		e[ "hay" ] = make_haystack( meta )
+		return e
+
+	def _load_cache( self ):
+		if not self.cache_path.exists():
+			return {}
+		try:
+			data = utils.read_json( self.cache_path ) or {}
+		except Exception as e:
+			print( f"missing :: cache unreadable ( {e} ) ; rebuilding" )
+			return {}
+		if data.get( "version" ) != self._cache_version:
+			# Schema bump : ignore the old cache rather than misread it.
+			return {}
+		return data
+
+	def _save_cache( self , lib_hash , entries ):
+		# Compact ( un-indented ) write : this file holds ~57k entries , so
+		# pretty-printing would roughly double its size and write time.
+		import json
+		payload = {
+			"version":  self._cache_version ,
+			"lib_hash": lib_hash ,
+			"entries":  entries ,
+		}
+		try:
+			with open( self.cache_path , "w" , encoding="utf-8" ) as f:
+				json.dump( payload , f , ensure_ascii=False )
+		except Exception as e:
+			print( f"missing :: could not write cache ( {e} )" )
 
 	def compute( self , snapshot ):
 		# 1. OpenAlex data we have for library papers
@@ -43,6 +89,7 @@ class OpenAlexStats():
 
 		# 2. Source of truth: snapshot
 		lib_index = utils.build_library_dedup_index( snapshot )
+		lib_hash  = utils.hash_library_index( lib_index )
 		lib_wids = set( zp.keys() ) | { fp.stem for fp in self.storage_dir.glob( "*.json" ) }
 
 		# 3. Tally backward refs
@@ -54,21 +101,54 @@ class OpenAlexStats():
 					continue
 				counts[ rw ] += 1
 
-		# 4. Single pass: load each ref, dedup, stash haystack
+		# 4. Single pass: derive each ref's fields + dedup decision , reusing
+		#    the per-WID cache where possible.
+		#    - cached entry present  : reuse haystack / row scalars / authors
+		#      ( library-independent ) for free , skipping the ~34 KB JSON
+		#      read + abstract reconstruction ;
+		#    - library unchanged ( cache lib_hash matches ) : reuse the cached
+		#      dedup decision too , skipping the fuzzy title match ;
+		#    - library changed : re-run dedup from the cached doi / title
+		#      scalars ( still no JSON read ).
+		#    `kept` becomes the next cache , so references no library paper
+		#    cites anymore are pruned automatically.
+		cache          = self._load_cache()
+		old_entries    = cache.get( "entries" ) or {}
+		dedup_reusable = bool( cache ) and cache.get( "lib_hash" ) == lib_hash
+		kept           = {}
+
 		self._index = []
 		rows , skipped = [] , 0
+		n_new_refs , n_redup = 0 , 0
 		for rw , n in tqdm( counts.most_common() , desc="Building rows" ):
-			fp = self.references_dir / f"{rw}.json"
-			meta = ( utils.read_json( fp ) or {} ) if fp.exists() else {}
-			haystack = make_haystack( meta )
+			entry = old_entries.get( rw )
+			if entry is None:
+				fp = self.references_dir / f"{rw}.json"
+				meta = ( utils.read_json( fp ) or {} ) if fp.exists() else {}
+				entry = self._entry_from_meta( meta )
+				entry[ "is_dup" ] = utils.is_library_dup_fields(
+					entry[ "doi" ] , entry[ "title" ] , lib_index )
+				n_new_refs += 1
+			elif not dedup_reusable:
+				entry[ "is_dup" ] = utils.is_library_dup_fields(
+					entry[ "doi" ] , entry[ "title" ] , lib_index )
+				n_redup += 1
 
-			is_dup = utils.is_library_dup( meta , lib_index )
-			self._index.append( ( rw , meta , haystack , n , not is_dup ) )
+			kept[ rw ] = entry
+			included = not entry[ "is_dup" ]
+			self._index.append( ( rw , entry , entry[ "hay" ] , n , included ) )
 
-			if is_dup:
+			if not included:
 				skipped += 1
 				continue
-			rows.append( utils.openalex_to_xlsx_row( rw , meta , n ) )
+			rows.append( utils.openalex_entry_to_xlsx_row( rw , entry , n ) )
+
+		self._save_cache( lib_hash , kept )
+		print(
+			f"missing :: cache -- {n_new_refs} new refs computed , "
+			f"{'dedup reused' if dedup_reusable else f'dedup re-run for {n_redup} ( library changed )'} , "
+			f"{len(kept)} entries cached"
+		)
 
 		# 5. Forward direction: tally papers citing your library (read from cached JSONs)
 		forward_counts = Counter()
@@ -91,27 +171,22 @@ class OpenAlexStats():
 				continue
 			forward_rows.append( utils.openalex_to_xlsx_row( cwid , meta , n ) )
 
-		# 6. Top 100 Authors aggregated across non-dup missing references
+		# 6. Top 100 Authors aggregated across non-dup missing references.
+		#    entry[ 'authors' ] is already deduped per paper to
+		#    ( id , name , orcid ) triples ( see openalex_entry_scalars ).
 		author_papers = Counter()
 		author_cites = Counter()
 		author_meta = {}
-		for wid , meta , hay , cite_count , included in tqdm( self._index , desc="Tallying authors" ):
+		for wid , entry , hay , cite_count , included in tqdm( self._index , desc="Tallying authors" ):
 			if not included:
 				continue
-			seen = set()
-			for a in meta.get( "authorships" ) or []:
-				author = a.get( "author" ) or {}
-				aid = author.get( "id" )
-				if not aid or aid in seen:
+			for aid , name , orcid in entry.get( "authors" ) or []:
+				if not aid:
 					continue
-				seen.add( aid )
 				author_papers[ aid ] += 1
 				author_cites[ aid ] += cite_count
 				if aid not in author_meta:
-					author_meta[ aid ] = {
-						"name": author.get( "display_name" ) or "(unknown)" ,
-						"orcid": author.get( "orcid" ) ,
-					}
+					author_meta[ aid ] = { "name": name or "(unknown)" , "orcid": orcid }
 
 		AUTHOR_HEADERS = [ "Library Cites" , "Papers" , "Author" , "ORCID" , "OpenAlex Link" ]
 		ranked_authors = sorted(
@@ -131,13 +206,32 @@ class OpenAlexStats():
 				utils.Link( aid , aid ) if aid else "" ,
 			])
 
-		# 7. Build sheets
+		# 7. Newest : the missing ( non-dup ) references sorted by most
+		#    recent publication. We sort on entry[ 'pubdate' ] ( 'YYYY-MM-DD' ,
+		#    lexicographically sortable ) with publication_year as a coarse
+		#    fallback when a work has no full date , so this is finer-grained
+		#    than sorting the rows on the Year column alone.
+		newest_index = [
+			( wid , entry , n )
+			for wid , entry , hay , n , included in self._index
+			if included
+		]
+		newest_index.sort(
+			key=lambda t: ( t[ 1 ].get( "pubdate" ) or "" , t[ 1 ].get( "year" ) or 0 ) ,
+			reverse=True ,
+		)
+		newest_rows = [
+			utils.openalex_entry_to_xlsx_row( wid , entry , n )
+			for wid , entry , n in newest_index[ :1000 ]
+		]
+
+		# 8. Build sheets
 		HEADERS_ROW = [ "Cites" , "Title" , "Year" , "Proxy" , "DOI" , "Link" , "PDF" , "OA Cited-By" , "WID" ]
 		sheets = [
 			( "Top 1000 by Cites"     , HEADERS_ROW    , rows[ :1000 ] ),
+			( "Top 1000 Newest"       , HEADERS_ROW    , newest_rows ),
 			( "Top 1000 Cited-By"     , HEADERS_ROW    , forward_rows[ :1000 ] ),
 			( f"Top {self.args.top_author_count} Authors"       , AUTHOR_HEADERS , author_rows ),
-			# ( "Top 1000 by Recency" , HEADERS_ROW , sorted( rows , key=lambda r: r[ 2 ] or 0 , reverse=True )[ :1000 ] ),
 		]
 
 		utils.write_xlsx( self.xlsx_path , sheets )

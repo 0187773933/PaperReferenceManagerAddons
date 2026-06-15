@@ -83,7 +83,7 @@ def run( args ):
 
 	# Plan the work.
 	jobs = []
-	skip_no_pdf , skip_missing , skip_done , skip_other = 0 , 0 , 0 , 0
+	skip_no_pdf , skip_missing , skip_done , skip_other , skip_failed = 0 , 0 , 0 , 0 , 0
 	needs_yolo = 0
 	for doi , paper in papers.iter_all( args ):
 		if not _paper_matches_managers( paper , managers ):
@@ -91,6 +91,12 @@ def run( args ):
 			continue
 		if not force and _paper_fully_ocrd( paper , engine ):
 			skip_done += 1
+			continue
+		# YOLO already failed to load this PDF on a previous run -- the
+		# inline-YOLO step below would just fail again , so skip it.
+		# --force overrides ; a successful YOLO clears the marker.
+		if not force and paper.get( papers.YOLO_FAILED_KEY ):
+			skip_failed += 1
 			continue
 		pdf_path = paper.get( "pdf_path" )
 		if not pdf_path:
@@ -110,7 +116,7 @@ def run( args ):
 		f"{len(jobs)} pdfs to process -> papers/ "
 		f"( will run YOLO inline for {needs_yolo} ; "
 		f"skipped: no-pdf={skip_no_pdf} not-on-disk={skip_missing} "
-		f"already-done={skip_done} other-manager={skip_other} )"
+		f"already-done={skip_done} yolo-failed={skip_failed} other-manager={skip_other} )"
 	)
 
 	outer = tqdm( jobs , desc="PDFs" , position=1 , leave=True , unit="pdf" )
@@ -131,8 +137,10 @@ def run( args ):
 				yolo_data = pdf_mod.yolo( pdf_path , do_deskew=do_deskew )
 			except Exception as e:
 				print( f"OCR :: {pdf_path.name} : YOLO failed ( {e} )" )
+				papers.mark_yolo_failed( args , doi , e , pdf_path.name )
 				continue
 			paper[ "yolo" ] = yolo_data
+			papers.clear_yolo_failed( paper )   # recovered : drop stale marker
 
 		try:
 			n = ocr_mod.ocr_paper(

@@ -3,6 +3,7 @@
 ## Addons
 
 1. `prma` : generates OpenAlex graph and missing.xlsx
+1. `prma missing` : generates missing.xlsx
 2. `prma server` : runs local 'exists' server
 3. `prma snapshot` : creates local archive file
 4. `prma yolo` : run doclayout yolo model on each pdf
