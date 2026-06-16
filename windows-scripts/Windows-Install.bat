@@ -18,7 +18,7 @@ REM --- pyenv ---
 where pyenv >nul 2>nul
 if errorlevel 1 (
     echo pyenv not found. Launching elevated installer in a new window...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows-scripts\install-pyenv.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Python-Install.ps1"
     echo.
     echo pyenv-win is installing in the elevated window.
     echo When it finishes, CLOSE and REOPEN this terminal, then re-run install.bat

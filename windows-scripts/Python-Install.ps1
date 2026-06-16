@@ -1,6 +1,5 @@
 # Bootstrap pyenv-win and install the Python version pinned in .python-version.
 # Self-elevates to an admin PowerShell. Called by ../install.bat; can be run directly.
-# Lives in windows-scripts/, so .python-version is one level up (project root).
 
 $root = Split-Path $PSScriptRoot -Parent
 $verFile = Join-Path $root ".python-version"
@@ -11,8 +10,6 @@ if (-not (Test-Path $verFile)) {
 $v = (Get-Content $verFile -Raw).Trim()
 Write-Host "Target Python: $v"
 
-# This block runs elevated. Single-quoted here-string => no interpolation here;
-# the backtick escapes resolve when the elevated shell executes the line.
 $code = @'
 param($v)
 Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
