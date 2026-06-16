@@ -10,7 +10,7 @@ if ! command -v prma >/dev/null 2>&1; then
     if ! command -v prma >/dev/null 2>&1; then
         echo
         echo "Install finished, but prma isn't on PATH in this shell yet."
-        echo "Restart your shell (or open a new terminal), then run prma.sh again."
+        echo "Restart your shell (or open a new terminal), then run Start-PRMA.sh again."
         exit 0
     fi
 fi
