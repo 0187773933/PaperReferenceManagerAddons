@@ -3,7 +3,9 @@ set -euo pipefail
 
 # Install prma as an isolated CLI via pipx, on a pyenv-managed Python.
 # Bootstraps pyenv if missing and installs the version pinned in .python-version.
-# Run from the project root.
+# Lives in unix-scripts/; cd's up to the project root so it works from anywhere.
+
+cd "$(dirname "$0")/.."
 
 EDITABLE="-e"   # drop the -e for a non-editable install
 

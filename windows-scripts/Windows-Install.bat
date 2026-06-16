@@ -2,7 +2,9 @@
 setlocal
 REM Install prma as an isolated CLI via pipx, on a pyenv-managed Python.
 REM Bootstraps pyenv-win (elevated) if missing; installs the .python-version pin.
-REM Run from the project root.
+REM Lives in windows-scripts\; cd's up to the project root so it works from anywhere.
+
+cd /d "%~dp0.."
 
 set EDITABLE=-e
 
