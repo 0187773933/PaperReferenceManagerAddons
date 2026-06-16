@@ -28,9 +28,11 @@ if errorlevel 1 (
 )
 
 REM --- ensure pinned version installed (no -s reliance on pyenv-win) ---
-pyenv versions --bare | findstr /x "%PYVER%" >nul
-if errorlevel 1 pyenv install %PYVER%
-pyenv rehash
+REM pyenv on Windows is pyenv.bat; without 'call' it never returns and this
+REM script would silently die before reaching the pipx install below.
+call pyenv versions --bare | findstr /x "%PYVER%" >nul
+if errorlevel 1 call pyenv install %PYVER%
+call pyenv rehash
 
 REM pyenv-win layout: no bin/ dir, python.exe sits directly under versions\<v>\
 set PYTHON=%USERPROFILE%\.pyenv\pyenv-win\versions\%PYVER%\python.exe
