@@ -5,6 +5,7 @@ REM Bootstraps pyenv-win (elevated) if missing; installs the .python-version pin
 REM Lives in windows-scripts\; cd's up to the project root so it works from anywhere.
 
 cd /d "%~dp0.."
+set "ROOT=%CD%"
 
 set EDITABLE=-e
 
@@ -48,10 +49,12 @@ if errorlevel 1 (
 )
 
 pipx uninstall prma >nul 2>nul
-pipx install --python "%PYTHON%" %EDITABLE% .
+pipx install --python "%PYTHON%" %EDITABLE% "%ROOT%"
 if errorlevel 1 ( echo Install failed. & exit /b 1 )
 
-pipx runpip prma install -r requirements.txt
+REM runpip passes args straight to pip, which resolves relative paths against its
+REM own cwd -- use an absolute path so requirements.txt is always found.
+pipx runpip prma install -r "%ROOT%\requirements.txt"
 pipx inject prma "numpy<2"
 
 echo Done. Installed with: %PYTHON%

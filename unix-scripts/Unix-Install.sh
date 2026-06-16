@@ -6,6 +6,7 @@ set -euo pipefail
 # Lives in unix-scripts/; cd's up to the project root so it works from anywhere.
 
 cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 
 EDITABLE="-e"   # drop the -e for a non-editable install
 
@@ -43,10 +44,11 @@ fi
 
 # Fresh install so --python actually takes effect.
 pipx uninstall prma >/dev/null 2>&1 || true
-pipx install --python "$PYTHON" $EDITABLE .
+pipx install --python "$PYTHON" $EDITABLE "$ROOT"
 
 # Runtime deps via real pip (honors flags like --only-binary in requirements.txt).
-pipx runpip prma install -r requirements.txt
+# Absolute path: runpip resolves relative paths against pip's own cwd, not ours.
+pipx runpip prma install -r "$ROOT/requirements.txt"
 
 # Pin numpy below 2 last so it wins.
 pipx inject prma 'numpy<2'
