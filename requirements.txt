@@ -10,24 +10,10 @@ pypdfium2
 doclayout-yolo
 Pillow
 deskew
-'numpy<2'
 huggingface_hub
-# OCR backends for `prma zotero/mendeley ocr` ( all optional ; the
-# dispatcher falls back to tesseract automatically if the requested
-# engine isn't installed ).
-# - rapid  ( default , PP-OCRv5 on ONNX Runtime , ~0.2s/page CPU )
-# - paddle ( same models on paddlepaddle , 5-30x slower )
-# - surya  ( transformer , best quality on complex pages , slow )
-# - tesseract ( brew install tesseract / apt install tesseract-ocr )
-# - mineru ( end-to-end with formulas/tables ; bypasses YOLO ; slow on CPU
-#            and 20GB+ download , so it is OPT-IN -- install separately :
-#            pip install 'mineru[pipeline]' )
 rapidocr-onnxruntime
 paddlepaddle
 paddleocr
 surya-ocr
-
-# Stuck-word splitter used to repair "furthertechnicaladvantage" style
-# OCR / CID-extract output ; guarded so real long words stay intact.
-# Pure-python , tiny.
 wordninja
+pymupdf
