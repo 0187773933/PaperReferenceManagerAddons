@@ -22,4 +22,7 @@ pause
 exit /b 0
 
 :ready
+REM prma resolves --config (and other paths) relative to the current directory,
+REM so run from the project root, not from windows-scripts\.
+cd /d "%~dp0.."
 cmd /k prma --help

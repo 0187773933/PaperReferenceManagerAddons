@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec prma --mendeley
+exec prma missing --mendeley

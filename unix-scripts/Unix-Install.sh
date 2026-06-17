@@ -53,6 +53,15 @@ pipx runpip prma install -r "$ROOT/requirements.txt"
 # Pin numpy below 2 last so it wins.
 pipx inject prma 'numpy<2'
 
+# Playwright ships as a pip dependency, but its browser binaries are a separate
+# download. The bare 'playwright' command isn't on PATH (it lives inside prma's
+# pipx venv), so invoke it through that venv's python. PIPX_LOCAL_VENVS resolves
+# the venvs dir wherever pipx put it (varies by machine).
+PIPX_VENVS="$(pipx environment --value PIPX_LOCAL_VENVS)"
+echo "Installing Playwright Chromium browser..."
+"$PIPX_VENVS/prma/bin/python" -m playwright install chromium \
+    || echo "WARNING: 'playwright install chromium' failed -- browser login won't work until it succeeds."
+
 echo "Done. Installed with: $PYTHON"
 echo "Try: prma --help"
 echo "(If 'prma' isn't found, restart your shell so the new PATH takes effect.)"

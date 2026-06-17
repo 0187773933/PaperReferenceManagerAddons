@@ -15,4 +15,8 @@ if ! command -v prma >/dev/null 2>&1; then
     fi
 fi
 
+# prma resolves --config (and other paths) relative to the current directory,
+# so run from the project root, not from unix-scripts/.
+cd "$(dirname "$0")/.."
+
 prma --help

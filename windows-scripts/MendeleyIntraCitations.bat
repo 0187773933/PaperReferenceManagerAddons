@@ -1,3 +1,3 @@
 @echo off
-prma --mendeley
+prma missing --mendeley
 pause

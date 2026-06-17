@@ -57,6 +57,15 @@ REM own cwd -- use an absolute path so requirements.txt is always found.
 pipx runpip prma install -r "%ROOT%\requirements.txt"
 pipx inject prma "numpy<2"
 
+REM Playwright ships as a pip dependency, but its browser binaries are a separate
+REM download. The bare 'playwright' command isn't on PATH (it lives inside prma's
+REM pipx venv), so invoke it through that venv's python. PIPX_LOCAL_VENVS resolves
+REM the venvs dir wherever pipx put it (varies by machine).
+for /f "delims=" %%i in ('pipx environment --value PIPX_LOCAL_VENVS') do set "PIPX_VENVS=%%i"
+echo Installing Playwright Chromium browser...
+"%PIPX_VENVS%\prma\Scripts\python.exe" -m playwright install chromium
+if errorlevel 1 echo WARNING: 'playwright install chromium' failed -- browser login won't work until it succeeds.
+
 echo Done. Installed with: %PYTHON%
 echo Try: prma --help
 echo (If 'prma' isn't found, open a new terminal so the new PATH takes effect.)
