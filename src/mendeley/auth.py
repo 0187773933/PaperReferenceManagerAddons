@@ -3,10 +3,16 @@
 import time
 import urllib.parse
 import random
-import requests
+from curl_cffi import requests
 from playwright.sync_api import sync_playwright
 
 from ..utils import utils
+
+# Mendeley's API now sits behind a Cloudflare managed challenge that plain
+# `requests` cannot pass (it returns a 403 "Just a moment..." page with
+# cf-mitigated: challenge). curl_cffi impersonates a real Chrome TLS/JA3
+# fingerprint, which clears the challenge for both /oauth/token and the API.
+IMPERSONATE = "chrome"
 
 class MendeleyAuth:
 	def __init__( self , args ):
@@ -40,7 +46,7 @@ class MendeleyAuth:
 		payload[ "client_id" ]     = self.client_id
 		payload[ "client_secret" ] = self.client_secret
 		payload[ "redirect_uri" ]  = self.redirect_uri
-		r = requests.post( self.token_url , data=payload , timeout=30 )
+		r = requests.post( self.token_url , data=payload , impersonate=IMPERSONATE , timeout=30 )
 		r.raise_for_status()
 		token = r.json()
 		token[ "_expires_at" ] = time.time() + token.get( "expires_in" , 3600 ) - 60
@@ -61,7 +67,7 @@ class MendeleyAuth:
 			token.setdefault( "refresh_token" , refresh_token )
 			print( "Refresh successful." )
 			return token
-		except requests.HTTPError as e:
+		except requests.exceptions.HTTPError as e:
 			print( f"Refresh failed: {e}" )
 			return None
 

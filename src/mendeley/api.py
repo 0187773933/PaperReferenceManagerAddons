@@ -1,13 +1,29 @@
 import json
-import requests
+from curl_cffi import requests
 from pathlib import Path
 import time
 from pprint import pprint
 from rapidfuzz import fuzz , process
 from tqdm import tqdm
 
-from .auth import MendeleyAuth
+from .auth import MendeleyAuth , IMPERSONATE
 from ..utils import utils
+
+
+def _next_link( resp ):
+	"""curl_cffi has no requests-style `.links`, so parse the Link header
+	for the rel="next" pagination URL ourselves."""
+	link = resp.headers.get( "Link" ) or resp.headers.get( "link" )
+	if not link:
+		return None
+	for part in link.split( "," ):
+		segs = part.split( ";" )
+		if len( segs ) < 2:
+			continue
+		url = segs[ 0 ].strip().strip( "<>" )
+		if any( s.strip() == 'rel="next"' for s in segs[ 1: ] ):
+			return url
+	return None
 
 class MendeleyAPI():
 	def __init__( self , args ):
@@ -29,7 +45,7 @@ class MendeleyAPI():
 		if not self.access_token:
 			self.access_token = self.Auth.get_access_token()
 		if not self.session:
-			self.session = requests.Session()
+			self.session = requests.Session( impersonate=IMPERSONATE )
 			self.session.headers[ "Authorization" ] = f"Bearer {self.access_token}"
 
 	def files_for_document( self , document_id ):
@@ -61,6 +77,7 @@ class MendeleyAPI():
 				raise RuntimeError( "Mendeley file response did not include Location header" )
 			file_response = requests.get(
 				download_url ,
+				impersonate=IMPERSONATE ,
 				timeout=120
 			)
 			file_response.raise_for_status()
@@ -113,7 +130,7 @@ class MendeleyAPI():
 				}
 				yield doc
 			params = None
-			url = r.links.get( "next" , {} ).get( "url" )
+			url = _next_link( r )
 
 	def snapshot( self ):
 		papers = {}

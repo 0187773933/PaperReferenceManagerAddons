@@ -2,6 +2,7 @@
 pyyaml
 tqdm
 requests
+curl_cffi
 openpyxl
 rapidfuzz
 playwright
