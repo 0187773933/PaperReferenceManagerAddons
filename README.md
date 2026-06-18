@@ -22,6 +22,9 @@
 - [ ] add .bib / .ris options
 	- https://github.com/sciunto-org/python-bibtexparser
 	- https://github.com/MrTango/rispy
+- [ ] Web of Science Integration
+	- https://developer.clarivate.com/applications
+	- https://developer.clarivate.com/apis/wos
 
 ## Misc
 

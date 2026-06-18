@@ -36,6 +36,7 @@ write the file system directly. No in-process caching ; concurrent
 writers would race , so don't.
 """
 
+import re
 from pathlib import Path
 from datetime import datetime , timezone
 
@@ -45,6 +46,51 @@ from ..utils import utils
 # doesn't leak into other modules ).
 SOURCE_ZOTERO   = "zotero"
 SOURCE_MENDELEY = "mendeley"
+
+
+# ---------------------------------------------------------------------------
+# Primary key
+# ---------------------------------------------------------------------------
+# A record's primary key is its real normalized DOI when it has one , else a
+# SYNTHETIC key of the form  nodoi-<source>-<sanitized item id> . This lets a
+# paper that has no DOI ( yet ) still live in the unified store and flow through
+# the PDF pipeline ( yolo / images / md / methods / text / ocr / preprocess )
+# exactly like a DOI'd paper -- those tasks only ever treat the key as opaque.
+#
+# DOI stays a real field on the record ( null for no-doi papers ) ; the synthetic
+# key is stored separately under 'key'. Consumers that genuinely need a real DOI
+# ( OpenAlex meta fetch , the doi.org url ) gate on paper[ 'doi' ] truthiness.
+
+NO_DOI_PREFIX = "nodoi-"
+
+
+def synthetic_key( source_name , source_item_key ):
+	"""Stable , filesystem / Windows-safe primary key for a paper that has no
+	DOI. Built from the manager name + that manager's own item id ( Zotero
+	item key / Mendeley id ) so it's stable across runs and never empty."""
+	safe = re.sub( r"[^A-Za-z0-9]+" , "-" , str( source_item_key or "" ) ).strip( "-" )
+	return f"{NO_DOI_PREFIX}{source_name}-{safe}"
+
+
+def is_synthetic_key( key ):
+	return bool( key ) and str( key ).startswith( NO_DOI_PREFIX )
+
+
+def record_key( paper ):
+	"""Primary key of a record : its real normalized DOI if present , else its
+	synthetic 'key'. Returns None for a record that has neither."""
+	doi = utils.normalize_doi( ( paper or {} ).get( "doi" ) )
+	if doi:
+		return doi
+	return ( paper or {} ).get( "key" )
+
+
+def _normalize_lookup( key ):
+	"""Normalize a lookup key. Synthetic ( nodoi-... ) keys pass through
+	unchanged ; everything else goes through DOI normalization."""
+	if is_synthetic_key( key ):
+		return key
+	return utils.normalize_doi( key )
 
 
 # ---------------------------------------------------------------------------
@@ -58,10 +104,11 @@ def papers_dir( args ):
 	return d
 
 
-def paper_path( args , doi ):
-	"""Path to one paper's JSON file. Caller is responsible for passing
-	an already-normalized DOI."""
-	prefix = utils.doi_to_filename( doi )
+def paper_path( args , key ):
+	"""Path to one paper's JSON file. `key` is the record's primary key --
+	a normalized DOI or a synthetic nodoi-... key ; both are filename-safe
+	once run through doi_to_filename ( synthetic keys carry no / \\ : )."""
+	prefix = utils.doi_to_filename( key )
 	return papers_dir( args ).joinpath( f"{prefix}.json" )
 
 
@@ -69,13 +116,14 @@ def paper_path( args , doi ):
 # Read
 # ---------------------------------------------------------------------------
 
-def load( args , doi ):
-	"""Load a paper record by DOI , or None if not in the DB.
-	Normalizes the DOI before looking up so callers can pass raw input."""
-	doi = utils.normalize_doi( doi )
-	if not doi:
+def load( args , key ):
+	"""Load a paper record by primary key ( normalized DOI or synthetic
+	nodoi-... key ) , or None if not in the DB. Normalizes the key before
+	looking up so callers can pass raw input."""
+	key = _normalize_lookup( key )
+	if not key:
 		return None
-	p = paper_path( args , doi )
+	p = paper_path( args , key )
 	if not p.exists():
 		return None
 	try:
@@ -84,23 +132,25 @@ def load( args , doi ):
 		return None
 
 
-def exists( args , doi ):
-	doi = utils.normalize_doi( doi )
-	if not doi:
+def exists( args , key ):
+	key = _normalize_lookup( key )
+	if not key:
 		return False
-	return paper_path( args , doi ).exists()
+	return paper_path( args , key ).exists()
 
 
 def iter_all( args ):
-	"""Yield every ( doi , paper_dict ) currently in the DB."""
+	"""Yield every ( key , paper_dict ) currently in the DB , where key is
+	the record's primary key ( normalized DOI , or synthetic nodoi-... key
+	for papers that have no DOI )."""
 	for p in sorted( papers_dir( args ).glob( "*.json" ) ):
 		try:
 			data = utils.read_json( p )
 		except Exception:
 			continue
-		doi = data.get( "doi" )
-		if doi:
-			yield doi , data
+		key = record_key( data )
+		if key:
+			yield key , data
 
 
 def count( args ):
@@ -135,18 +185,19 @@ def _resolve_pdf_path( paper ):
 
 
 def save( args , paper ):
-	"""Write a paper record to disk. Requires paper[ 'doi' ] to be set
-	and normalizable. Returns the path written. Side effects :
-	  - normalizes the DOI in-place ,
+	"""Write a paper record to disk. Requires a primary key -- either a
+	normalizable paper[ 'doi' ] or a synthetic paper[ 'key' ]. Returns the
+	path written. Side effects :
+	  - normalizes the DOI in-place ( left as None for no-doi papers ) ,
 	  - recomputes paper[ 'pdf_path' ] ( first existing across sources ) ,
 	  - stamps paper[ 'updated_at' ] ."""
-	doi = utils.normalize_doi( paper.get( "doi" ) )
-	if not doi:
-		raise ValueError( "papers.save : paper[ 'doi' ] is required" )
-	paper[ "doi" ] = doi
+	paper[ "doi" ] = utils.normalize_doi( paper.get( "doi" ) )
+	key = record_key( paper )
+	if not key:
+		raise ValueError( "papers.save : paper needs a 'doi' or synthetic 'key'" )
 	paper[ "pdf_path" ] = _resolve_pdf_path( paper )
 	paper[ "updated_at" ] = _utc_now_iso()
-	p = paper_path( args , doi )
+	p = paper_path( args , key )
 	utils.write_json( p , paper )
 	return p
 
@@ -199,7 +250,7 @@ def _strip_cosmetic( source ):
 
 def upsert_source(
 	args , doi , source_name , source_fields ,
-	title=None ,
+	title=None , key=None ,
 ):
 	"""Insert or update one paper's record :
 	  - creates the paper if missing ;
@@ -220,18 +271,27 @@ def upsert_source(
 	cheap -- otherwise we'd JSON-rewrite every 100KB+ paper file even
 	when nothing actually changed.
 
+	A paper with no DOI is keyed by the synthetic `key` ( see synthetic_key )
+	the caller passes ; its 'doi' field stays None. When a real DOI is given
+	it wins and `key` is ignored.
+
 	Returns ( paper , was_created , was_changed ) :
 	  - was_created : the paper didn't exist before this call ;
 	  - was_changed : save() actually ran ( file was rewritten ).
 	    Always True when was_created is True."""
-	doi = utils.normalize_doi( doi )
-	if not doi:
+	nd = utils.normalize_doi( doi )
+	if nd:
+		pkey , real_doi = nd , nd
+	elif key:
+		pkey , real_doi = key , None
+	else:
 		return None , False , False
-	existing = load( args , doi )
+	existing = load( args , pkey )
 	created = existing is None
 	if created:
 		existing = {
-			"doi":        doi ,
+			"doi":        real_doi ,
+			"key":        pkey ,
 			"title":      None ,
 			"sources":    {} ,
 			"pdf_path":   None ,
@@ -255,13 +315,14 @@ def upsert_source(
 	return existing , created , True
 
 
-def remove_source( args , doi , source_name ):
-	"""Detach a source from a paper. If no sources remain the file is
-	deleted entirely. Returns True if anything changed."""
-	doi = utils.normalize_doi( doi )
-	if not doi:
+def remove_source( args , key , source_name ):
+	"""Detach a source from a paper ( looked up by primary key -- DOI or
+	synthetic nodoi-... key ). If no sources remain the file is deleted
+	entirely. Returns True if anything changed."""
+	key = _normalize_lookup( key )
+	if not key:
 		return False
-	paper = load( args , doi )
+	paper = load( args , key )
 	if not paper:
 		return False
 	srcs = paper.get( "sources" , {} )
@@ -269,45 +330,45 @@ def remove_source( args , doi , source_name ):
 		return False
 	del srcs[ source_name ]
 	if not srcs:
-		paper_path( args , doi ).unlink( missing_ok=True )
+		paper_path( args , key ).unlink( missing_ok=True )
 		return True
 	save( args , paper )
 	return True
 
 
-def prune_source( args , source_name , kept_dois ):
+def prune_source( args , source_name , kept_keys ):
 	"""Sync semantics for `source_name` : any paper in the DB that has
-	`sources[ source_name ]` but whose DOI is NOT in `kept_dois` gets
-	that source detached. If a paper ends up with no sources at all ,
+	`sources[ source_name ]` but whose primary key is NOT in `kept_keys`
+	gets that source detached. If a paper ends up with no sources at all ,
 	its file is deleted entirely.
 
 	Returns ( n_source_removed , n_paper_deleted ).
 
 	Use this after a full snapshot of a single manager : collect every
-	DOI you saw in the snapshot into `kept_dois` , then call this to
-	bring the DB in sync with what's actually still in that manager.
-	Only safe to call when the snapshot is authoritative ( e.g. the
-	Zotero SQLite is a full local copy ; the Mendeley API uses
-	incremental fetch from a cache , so a missed page would cause
-	false-positive deletions there )."""
-	# Normalize the kept set once so caller can pass raw DOIs.
+	key you saw in the snapshot ( real DOIs and synthetic nodoi-... keys )
+	into `kept_keys` , then call this to bring the DB in sync with what's
+	actually still in that manager. Only safe to call when the snapshot is
+	authoritative ( e.g. the Zotero SQLite is a full local copy ; the
+	Mendeley API uses incremental fetch from a cache , so a missed page
+	would cause false-positive deletions there )."""
+	# Normalize the kept set once so caller can pass raw DOIs / synthetic keys.
 	kept_norm = set()
-	for d in kept_dois or []:
-		nd = utils.normalize_doi( d )
-		if nd:
-			kept_norm.add( nd )
+	for d in kept_keys or []:
+		nk = _normalize_lookup( d )
+		if nk:
+			kept_norm.add( nk )
 
 	n_source_removed , n_paper_deleted = 0 , 0
 	# Materialize the list so we can mutate the directory while iterating.
-	for doi , paper in list( iter_all( args ) ):
+	for key , paper in list( iter_all( args ) ):
 		srcs = paper.get( "sources" ) or {}
 		if source_name not in srcs:
 			continue
-		if doi in kept_norm:
+		if key in kept_norm:
 			continue
 		del srcs[ source_name ]
 		if not srcs:
-			paper_path( args , doi ).unlink( missing_ok=True )
+			paper_path( args , key ).unlink( missing_ok=True )
 			n_paper_deleted += 1
 		else:
 			save( args , paper )
@@ -331,12 +392,14 @@ def snapshot_view( args ):
 	the minimal fields are filled in ; everything else is passed
 	through under 'sources' for callers that want more detail."""
 	out = {}
-	for doi , paper in iter_all( args ):
-		out[ doi ] = {
-			"doi":      doi ,
-			"id":       doi ,                # legacy code keys on 'id'
+	for key , paper in iter_all( args ):
+		real_doi = utils.normalize_doi( paper.get( "doi" ) )
+		out[ key ] = {
+			"doi":      real_doi ,            # None for no-doi papers
+			"id":       key ,                 # legacy code keys on 'id' ; drives
+			                                  # OpenAlex's per-paper cache file
 			"title":    paper.get( "title" ) ,
-			"url":      f"https://doi.org/{doi}" ,
+			"url":      f"https://doi.org/{real_doi}" if real_doi else None ,
 			"pdfs":     list( _all_pdfs( paper ) ) ,
 			"pdf_path": paper.get( "pdf_path" ) ,
 			"sources":  paper.get( "sources" , {} ) ,
