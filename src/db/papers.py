@@ -223,7 +223,8 @@ YOLO_FAILED_KEY = "yolo_failed"
 
 def mark_yolo_failed( args , doi , error , pdf_name=None ):
 	"""Load the paper , stamp a yolo_failed marker , and save. Called from
-	the inline-YOLO except branches in yolo / ocr / images."""
+	the inline-YOLO except branches in yolo / ocr / images. Also surfaces the
+	failure in the unified problems log under kind 'yolo'."""
 	paper = load( args , doi )
 	if paper is None:
 		return
@@ -233,13 +234,17 @@ def mark_yolo_failed( args , doi , error , pdf_name=None ):
 		"pdf":   pdf_name ,
 	}
 	save( args , paper )
+	report_problem( args , "yolo" , doi , detail=str( error ) , extra={ "pdf": pdf_name } )
 
 
-def clear_yolo_failed( paper ):
-	"""Drop any stale yolo_failed marker from an in-memory paper record.
-	Call right before saving a successful YOLO result. Returns True if a
-	marker was actually present ( so callers can log a recovery )."""
-	return paper.pop( YOLO_FAILED_KEY , None ) is not None
+def clear_yolo_failed( args , paper ):
+	"""Drop any stale yolo_failed marker from an in-memory paper record and
+	the matching 'yolo' problems-log entry. Call right before saving a
+	successful YOLO result. Returns True if a marker was actually present
+	( so callers can log a recovery )."""
+	had = paper.pop( YOLO_FAILED_KEY , None ) is not None
+	clear_problem( args , "yolo" , record_key( paper ) )
+	return had
 
 
 def _strip_cosmetic( source ):
@@ -374,6 +379,173 @@ def prune_source( args , source_name , kept_keys ):
 			save( args , paper )
 			n_source_removed += 1
 	return n_source_removed , n_paper_deleted
+
+
+# ---------------------------------------------------------------------------
+# Problems log
+# ---------------------------------------------------------------------------
+# ONE human-readable record of everything the pipeline couldn't fully
+# process , so trouble spots aren't buried in task scrollback. Every stage
+# reports as it goes and clears entries when a later run recovers , so the
+# file reflects CURRENT problems , not a growing history.
+#
+#   output/cache/problems.json
+#   {
+#     "<kind>": {
+#       "<id>": { "kind" , "id" , "detail" , "first_seen" , "last_seen" ,
+#                 ...kind-specific extras } ,
+#       ...
+#     } ,
+#     ...
+#   }
+#
+# kinds currently in use :
+#   non_imported:zotero   - snapshot skipped a Zotero item ( no doi/title/pdf )
+#   non_imported:mendeley - same , for Mendeley
+#   openalex_meta         - OpenAlex returned nothing for the paper's DOI
+#   openalex_ref          - a referenced work came back empty from OpenAlex
+#   yolo                  - PDF couldn't be loaded / parsed by YOLO
+#   ocr                   - OCR engine failed on a PDF
+#
+# Each entry is keyed by id inside its kind , so re-reporting the same
+# failure just refreshes last_seen instead of duplicating ( the "unique
+# list" guarantee ). Snapshot kinds are replaced wholesale each run
+# ( replace_problem_kind ) so resolved items drop out ; per-paper failures
+# are upserted ( report_problem* ) and removed on success ( clear_problem* ).
+
+PROBLEMS_FILE = "problems.json"
+
+
+def problems_path( args ):
+	"""Path to the unified problems log."""
+	return args.output.joinpath( "cache" , PROBLEMS_FILE )
+
+
+def load_problems( args ):
+	"""Whole problems log as a { kind: { id: entry } } dict ( {} if none )."""
+	p = problems_path( args )
+	if not p.exists():
+		return {}
+	try:
+		return utils.read_json( p ) or {}
+	except Exception:
+		return {}
+
+
+def _save_problems( args , data ):
+	# Drop empty kinds so a fully-recovered library leaves a tidy {} .
+	data = { k: v for k , v in data.items() if v }
+	p = problems_path( args )
+	p.parent.mkdir( parents=True , exist_ok=True )
+	utils.write_json( p , data )
+
+
+def _coerce_problem( it ):
+	"""Normalize one reported item into ( ident , detail , extra ). Accepts a
+	bare id , a ( id , detail ) / ( id , detail , extra ) tuple , or a dict
+	carrying an 'id' ( + optional 'detail' ) plus arbitrary extra fields."""
+	if isinstance( it , dict ):
+		d = dict( it )
+		return d.pop( "id" , None ) , d.pop( "detail" , None ) , ( d or None )
+	if isinstance( it , ( tuple , list ) ):
+		ident  = it[ 0 ] if len( it ) > 0 else None
+		detail = it[ 1 ] if len( it ) > 1 else None
+		extra  = it[ 2 ] if len( it ) > 2 else None
+		return ident , detail , extra
+	return it , None , None
+
+
+def _problem_entry( kind , ident , detail , extra , now , prev=None ):
+	e = dict( prev or {} )
+	e[ "kind" ] = kind
+	e[ "id" ]   = str( ident )
+	if detail is not None:
+		e[ "detail" ] = detail
+	if extra:
+		e.update( extra )
+	e.setdefault( "first_seen" , now )
+	e[ "last_seen" ] = now
+	return e
+
+
+def report_problems( args , kind , items ):
+	"""Bulk upsert problems of `kind` ( one read+write for the batch ).
+	`items` is an iterable of anything _coerce_problem accepts. Returns the
+	number of entries written. Prefer this over a report_problem() loop when
+	you have many at once ( e.g. a paper's failed references )."""
+	items = list( items or [] )
+	if not items:
+		return 0
+	now = _utc_now_iso()
+	data = load_problems( args )
+	bucket = data.setdefault( kind , {} )
+	n = 0
+	for it in items:
+		ident , detail , extra = _coerce_problem( it )
+		if ident is None:
+			continue
+		key = str( ident )
+		bucket[ key ] = _problem_entry( kind , ident , detail , extra , now , bucket.get( key ) )
+		n += 1
+	if n:
+		_save_problems( args , data )
+	return n
+
+
+def report_problem( args , kind , ident , detail=None , extra=None ):
+	"""Upsert a single problem. See report_problems for bulk."""
+	return report_problems( args , kind , [ ( ident , detail , extra ) ] )
+
+
+def clear_problems( args , kind , idents ):
+	"""Drop the given ids from `kind` ( call when a later run succeeds ).
+	Returns how many were actually present and removed."""
+	idents = [ str( i ) for i in ( idents or [] ) if i is not None ]
+	if not idents:
+		return 0
+	data = load_problems( args )
+	bucket = data.get( kind )
+	if not bucket:
+		return 0
+	n = sum( 1 for i in idents if bucket.pop( i , None ) is not None )
+	if n:
+		_save_problems( args , data )
+	return n
+
+
+def clear_problem( args , kind , ident ):
+	"""Drop a single id from `kind`. Returns True if it was present."""
+	return clear_problems( args , kind , [ ident ] ) > 0
+
+
+def replace_problem_kind( args , kind , items ):
+	"""Replace ALL entries of `kind` with `items` ( wholesale ). Use when the
+	caller knows the COMPLETE current set for that kind -- e.g. a manager
+	snapshot listing every skipped item -- so entries that no longer qualify
+	( the item gained a title / DOI ) drop out. first_seen is preserved for
+	ids that survive. Returns the resulting count."""
+	now = _utc_now_iso()
+	data = load_problems( args )
+	prev = data.get( kind ) or {}
+	bucket = {}
+	for it in ( items or [] ):
+		ident , detail , extra = _coerce_problem( it )
+		if ident is None:
+			continue
+		key = str( ident )
+		bucket[ key ] = _problem_entry( kind , ident , detail , extra , now , prev.get( key ) )
+	data[ kind ] = bucket
+	_save_problems( args , data )
+	return len( bucket )
+
+
+def save_non_imported( args , source_name , items ):
+	"""Record the manager items a snapshot skipped ( no DOI , no title , and
+	no PDF -- nothing for the pipeline to act on ) into the unified problems
+	log under kind 'non_imported:<source>'. Replaced wholesale each snapshot
+	so an item that later gains a title / DOI drops off automatically.
+	Returns the count recorded."""
+	return replace_problem_kind( args , f"non_imported:{source_name}" , items )
 
 
 # ---------------------------------------------------------------------------

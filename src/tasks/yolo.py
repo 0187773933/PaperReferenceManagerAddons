@@ -101,7 +101,7 @@ def run( args ):
 		if paper is None:
 			continue
 		paper[ "yolo" ] = result
-		papers.clear_yolo_failed( paper )   # recovered : drop any stale marker
+		papers.clear_yolo_failed( args , paper )   # recovered : drop any stale marker
 		papers.save( args , paper )
 		n_ok += 1
 

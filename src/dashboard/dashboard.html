@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma dashboard</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
+    --chip:#262c37;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header {
+    position:sticky; top:0; z-index:5; background:var(--panel);
+    border-bottom:1px solid var(--line); padding:12px 18px;
+  }
+  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .counts { color:var(--muted); font-size:12px; display:flex; gap:14px; flex-wrap:wrap; }
+  .counts b { color:var(--fg); font-weight:600; }
+  .grow { flex:1; }
+  button {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
+  }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.primary { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  .navlink {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
+  }
+  .navlink:hover { border-color:var(--accent); }
+  .controls { display:flex; gap:10px; align-items:center; margin-top:11px; flex-wrap:wrap; }
+  input[type=search] {
+    flex:1; min-width:240px; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:10px 13px; font-size:14px;
+  }
+  input[type=search]:focus { outline:none; border-color:var(--accent); }
+  select {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:8px; padding:9px 10px; font-size:13px;
+  }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; }
+  .tab {
+    padding:7px 13px; border-radius:7px; cursor:pointer; font-size:13px;
+    background:var(--chip); border:1px solid transparent; color:var(--muted);
+  }
+  .tab.active { color:var(--fg); border-color:var(--accent); background:var(--panel2); }
+  .tab .n { color:var(--muted); font-size:11px; margin-left:5px; }
+  .hint { color:var(--muted); font-size:11px; }
+  thead th.sortable:hover { color:var(--fg); }
+  thead th.active { color:var(--accent); }
+  th .arrow { font-size:10px; margin-left:3px; }
+  .end { color:var(--muted); text-align:center; padding:18px; font-size:12px; }
+  main { padding:16px 18px 60px; }
+  .status { color:var(--muted); font-size:12px; margin:4px 2px 12px; }
+  .build {
+    margin:48px auto; max-width:520px; text-align:center; color:var(--muted);
+    background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:34px;
+  }
+  .build h2 { color:var(--fg); font-size:16px; margin:0 0 8px; }
+  .spinner {
+    width:26px; height:26px; margin:0 auto 16px; border-radius:50%;
+    border:3px solid var(--line); border-top-color:var(--accent); animation:spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th {
+    position:sticky; top:0; text-align:left; color:var(--muted); font-weight:600;
+    padding:8px 10px; border-bottom:1px solid var(--line); background:var(--bg); white-space:nowrap;
+  }
+  tbody td { padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:hover { background:var(--panel); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; color:var(--fg); white-space:nowrap; }
+  td.title { max-width:640px; }
+  .tt { font-weight:500; }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .links a { color:var(--accent); text-decoration:none; margin-right:9px; white-space:nowrap; }
+  .links a:hover { text-decoration:underline; }
+  .pill {
+    display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px;
+    background:var(--chip); color:var(--muted); margin-left:6px;
+  }
+  .pill.lib { background:#13301f; color:#5fd99a; }
+  .pill.ref { background:#1a2740; color:#7fb6ff; }
+  .pill.cb  { background:#2e2440; color:#c79bff; }
+  .empty { color:var(--muted); padding:40px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma dashboard</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/status" title="How far each paper has made it through the pipeline">▦ Status</a>
+    <a class="navlink" href="/errors" title="Items the pipeline couldn't fully process">⚠ Errors</a>
+    <button id="refresh">↻ Rebuild</button>
+  </div>
+  <div class="controls">
+    <input type="search" id="q" placeholder='Search…  fMRI NOT EEG · "inner speech" OR aphasia · -review' autocomplete="off">
+  </div>
+  <div class="controls">
+    <div class="tabs" id="tabs"></div>
+    <div class="grow"></div>
+    <div class="hint">click a column to sort · scroll for more</div>
+  </div>
+</header>
+<main>
+  <div class="status" id="status"></div>
+  <div id="view"></div>
+</main>
+<script>
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+// External papers NOT in your collection.
+//   references = works that the papers you've collected cite / list in their
+//               bibliographies, but that you haven't collected yourself.
+//   cited_by   = newer works that cite the papers you've collected.
+const TABS = [
+  { id:"external",   label:"All missing", countKey:null,
+    tip:"Every paper connected to your collection that isn't in it yet" },
+  { id:"references", label:"In bibliographies", countKey:"references",
+    tip:"Papers cited by the ones you've collected, that you don't have" },
+  { id:"cited_by",   label:"Newer / citing", countKey:"cited_by",
+    tip:"Newer papers that cite the ones you've collected, that you don't have" },
+  { id:"authors",    label:"Authors", countKey:"authors",
+    tip:"Most-frequent authors across the missing papers" },
+];
+let META = {};
+let activeTab = "external";
+let ready = false;
+
+const $ = s => document.querySelector(s);
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+function links(r){
+  const out = [];
+  if(r.doi){
+    out.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank">DOI</a>`);
+    out.push(`<a href="${PROXY}${esc(r.doi)}" target="_blank">Proxy</a>`);
+  }
+  if(r.pdf)  out.push(`<a href="${esc(r.pdf)}" target="_blank">PDF</a>`);
+  if(r.wid)  out.push(`<a href="https://openalex.org/${esc(r.wid)}" target="_blank">OA</a>`);
+  return out.join(" ");
+}
+
+const fmt = n => (n||0).toLocaleString();
+function renderCounts(){
+  if(!ready){ $("#counts").innerHTML = ""; return; }
+  $("#counts").innerHTML =
+    `<span><b>${fmt(META.have)}</b> in library</span>`+
+    `<span><b>${fmt((META.references||0)+(META.cited_by||0))}</b> papers you don't have</span>`+
+    (META.built_at?`<span>indexed ${esc(META.built_at)}</span>`:"");
+}
+function tabCount(t){
+  if(t.id==="external") return (META.references||0)+(META.cited_by||0);
+  return t.countKey?META[t.countKey]:null;
+}
+function renderTabs(){
+  if(!ready){ $("#tabs").innerHTML = ""; return; }
+  $("#tabs").innerHTML = TABS.map(t=>{
+    const c = tabCount(t);
+    const badge = (c!=null)?`<span class="n">${fmt(c)}</span>`:"";
+    return `<div class="tab ${t.id===activeTab?'active':''}" data-tab="${t.id}" title="${esc(t.tip||t.label)}">${t.label}${badge}</div>`;
+  }).join("");
+  document.querySelectorAll(".tab").forEach(el=>{
+    el.onclick = ()=>{ activeTab = el.dataset.tab; renderTabs(); newSearch(); };
+  });
+}
+
+// Paper-pool columns. key=null -> not sortable. def = default direction
+// when you first click the column.
+const PAGE = 100;
+const PCOLS = [
+  { key:"lib_cites", label:"Conn.", title:"How many of your library papers connect to this work", def:"desc" },
+  { key:"cited_by",  label:"OA cites", title:"Global OpenAlex citation count", def:"desc" },
+  { key:"title",     label:"Title", def:"asc"  },
+  { key:"year",      label:"Year", def:"desc" },
+  { key:null,        label:"Links" },
+];
+const TAB_LABEL = { external:"missing papers", references:"in bibliographies", cited_by:"newer / citing" };
+// Per-tab search state ( query / sort column / direction / paging cursor ).
+let cur = { q:"", sort:"lib_cites", dir:"desc", offset:0, total:0, loading:false, done:false };
+
+function rowHtml(r){
+  return `<tr>
+      <td class="num">${r.lib_cites!=null?r.lib_cites:"·"}</td>
+      <td class="num">${r.cited_by!=null?r.cited_by:""}</td>
+      <td class="title"><div class="tt">${esc(r.title)}</div>
+        <div class="meta">${esc(r.journal||"")}${r.hashtags?(" · "+esc(r.hashtags)):""}</div></td>
+      <td class="num">${r.year||""}</td>
+      <td class="links">${links(r)}</td>
+    </tr>`;
+}
+function headHtml(){
+  return "<tr>"+PCOLS.map(c=>{
+    if(!c.key) return `<th>${c.label}</th>`;
+    const on = c.key===cur.sort;
+    const arrow = on ? (cur.dir==="desc"?"▼":"▲") : "";
+    return `<th class="sortable${on?' active':''}" data-sort="${c.key}" title="${c.title||''}">`+
+           `${c.label}<span class="arrow">${arrow}</span></th>`;
+  }).join("")+"</tr>";
+}
+function renderShell(){
+  $("#view").innerHTML = `<table><thead>${headHtml()}</thead><tbody id="tb"></tbody></table>`;
+  $("#view").querySelectorAll("th.sortable").forEach(th=>{
+    th.onclick = ()=>{
+      const k = th.dataset.sort;
+      if(cur.sort===k) cur.dir = cur.dir==="desc" ? "asc" : "desc";
+      else { cur.sort = k; cur.dir = (PCOLS.find(c=>c.key===k)||{}).def || "desc"; }
+      newSearch();
+    };
+  });
+}
+
+async function loadMore(){
+  if(!ready || cur.loading || cur.done || activeTab==="authors") return;
+  cur.loading = true;
+  const url = `/api/search?q=${encodeURIComponent(cur.q)}&pool=${activeTab}`+
+              `&sort=${cur.sort}&dir=${cur.dir}&limit=${PAGE}&offset=${cur.offset}`;
+  let d;
+  try { d = await (await fetch(url)).json(); }
+  catch(e){ cur.loading=false; return; }
+  if(d.status!=="ready"){ cur.loading=false; return; }
+  cur.total = d.total;
+  const tb = $("#tb");
+  if(tb && d.results.length) tb.insertAdjacentHTML("beforeend", d.results.map(rowHtml).join(""));
+  cur.offset += d.results.length;
+  if(cur.offset>=cur.total || d.results.length===0) cur.done = true;
+  if(tb && cur.total===0) $("#view").innerHTML = `<div class="empty">No matches.</div>`;
+  $("#status").textContent =
+    `${cur.offset.toLocaleString()} of ${cur.total.toLocaleString()} `+
+    `${TAB_LABEL[activeTab]||"results"}`+(cur.q?` for “${cur.q}”`:"")+
+    (cur.done?" · all loaded":" · scroll for more");
+  cur.loading = false;
+  // Keep pulling until the viewport is filled ( so short result sets and big
+  // screens still show a scrollbar to trigger more ).
+  if(!cur.done && document.body.offsetHeight <= window.innerHeight + 300) loadMore();
+}
+
+async function renderAuthors(){
+  $("#status").textContent = "Loading authors…";
+  const d = await (await fetch(`/api/authors?limit=1000`)).json();
+  if(!d.results || !d.results.length){ $("#view").innerHTML = `<div class="empty">No authors.</div>`; return; }
+  const rows = d.results.map(r=>`
+    <tr><td class="num">${r.lib_cites}</td><td class="num">${r.papers}</td>
+      <td class="title"><div class="tt">${esc(r.author)}</div></td>
+      <td class="links">
+        ${r.orcid?`<a href="${esc(r.orcid)}" target="_blank">ORCID</a>`:""}
+        ${r.openalex?`<a href="${esc(r.openalex)}" target="_blank">OA</a>`:""}</td></tr>`).join("");
+  $("#view").innerHTML = `<table><thead><tr><th>Lib cites</th><th>Papers</th><th>Author</th><th>Links</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $("#status").textContent = `${d.total} authors across the missing references pool.`;
+}
+
+function newSearch(){
+  if(!ready) return;
+  cur.q = $("#q").value.trim();
+  cur.offset = 0; cur.total = 0; cur.done = false; cur.loading = false;
+  window.scrollTo(0,0);
+  if(activeTab==="authors"){ renderAuthors(); return; }
+  $("#status").textContent = "Searching…";
+  renderShell();
+  loadMore();
+}
+
+window.addEventListener("scroll", ()=>{
+  if(window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) loadMore();
+}, { passive:true });
+
+function showBuilding(msg){
+  ready = false;
+  renderCounts(); renderTabs();
+  $("#status").textContent = "";
+  $("#view").innerHTML =
+    `<div class="build"><div class="spinner"></div>
+       <h2>Building index…</h2>
+       <div>${esc(msg||"Streaming the OpenAlex cache off disk. The first build can take a few minutes on a large library; later ones are incremental.")}</div>
+     </div>`;
+}
+
+let pollTimer = null;
+async function pollUntilReady(){
+  try { META = await (await fetch("/api/meta")).json(); } catch(e){ META = {}; }
+  if(META.status === "ready"){
+    ready = true;
+    clearTimeout(pollTimer);
+    renderCounts(); renderTabs(); newSearch();
+    return;
+  }
+  if(META.status === "error"){
+    $("#view").innerHTML = `<div class="build"><h2>Index build failed</h2><div>${esc(META.error||"")}</div></div>`;
+    return;
+  }
+  showBuilding(META.message);
+  pollTimer = setTimeout(pollUntilReady, 2500);
+}
+
+let timer=null;
+$("#q").addEventListener("input", ()=>{ clearTimeout(timer); timer=setTimeout(newSearch, 200); });
+$("#refresh").addEventListener("click", async ()=>{
+  $("#refresh").disabled = true;
+  try { await fetch("/api/refresh",{method:"POST"}); } catch(e){}
+  showBuilding();
+  pollUntilReady();
+  $("#refresh").disabled = false;
+});
+
+pollUntilReady();
+</script>
+</body>
+</html>

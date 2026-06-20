@@ -189,7 +189,7 @@ def run( args ):
 				papers.mark_yolo_failed( args , doi , e , pdf_path.name )
 				continue
 			paper[ "yolo" ] = yolo_data
-			papers.clear_yolo_failed( paper )   # recovered : drop stale marker
+			papers.clear_yolo_failed( args , paper )   # recovered : drop stale marker
 			papers.save( args , paper )
 
 		# Count detections by type so we can both ( a ) explain "wrote 0

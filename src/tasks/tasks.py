@@ -19,6 +19,12 @@ def snapshot( args ):
 	from . import snapshot
 	snapshot.get_common( args )
 
+def status( args ):
+	# Snapshot ( unless --skip-snapshot ) then tally pipeline completeness ;
+	# writes output/cache/status.json for the dashboard's /status page.
+	from . import status
+	status.run( args )
+
 def yolo( args ):
 	_ensure_snapshot( args )
 	from . import yolo
@@ -81,8 +87,18 @@ def mendeley_download( args ):
 	m.download()
 
 def server( args ):
+	# The server now hosts BOTH the lightweight /exists endpoint and the
+	# full-text-search dashboard ( GET / ). The dashboard serves the index
+	# ` prma reindex ` persisted to disk -- see src/server/server.py.
 	from ..server.server import run
 	run( args )
+
+def reindex( args ):
+	# Build ( or incrementally refresh ) the dashboard's own full-text index
+	# and persist it to disk. A running ` prma server ` picks the fresh index
+	# up automatically. Independent of the missing.xlsx pipeline.
+	from ..dashboard import indexer
+	indexer.reindex( args , full=getattr( args , "reindex_full" , False ) )
 
 def crawl( args ):
 	from . import crawl

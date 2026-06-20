@@ -140,7 +140,7 @@ def run( args ):
 				papers.mark_yolo_failed( args , doi , e , pdf_path.name )
 				continue
 			paper[ "yolo" ] = yolo_data
-			papers.clear_yolo_failed( paper )   # recovered : drop stale marker
+			papers.clear_yolo_failed( args , paper )   # recovered : drop stale marker
 
 		try:
 			n = ocr_mod.ocr_paper(
@@ -151,9 +151,11 @@ def run( args ):
 			)
 		except Exception as e:
 			print( f"OCR :: {pdf_path.name} : failed ( {e} )" )
+			papers.report_problem( args , "ocr" , doi , detail=str( e ) , extra={ "pdf": pdf_path.name } )
 			continue
 
 		total_pinned += n
+		papers.clear_problem( args , "ocr" , doi )   # recovered : drop stale entry
 		# yolo_data was mutated in place -- save it back.
 		papers.save( args , paper )
 

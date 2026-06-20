@@ -44,7 +44,7 @@ class OpenAlex():
 			return False
 		return True
 
-	def _download_references( self , paper_data ):
+	def _download_references( self , paper_data , citing_key=None ):
 		"""Ensure every referenced-work meta for `paper_data` is cached at
 		output/cache/openalex/references/{wid}.json.
 
@@ -55,11 +55,20 @@ class OpenAlex():
 		references finished downloading, so we re-check them every run and
 		fill in whatever a prior run left half-done.
 
-		Returns the count of references newly downloaded on this call."""
+		`citing_key` is the key of the paper whose bibliography this is ( its
+		normalized DOI ) ; it's stamped onto each failed-reference problem so
+		the errors page can group the missing reference under the paper that
+		cites it rather than as an orphan.
+
+		Returns ( n_new , failed , ok ) where n_new is the count newly
+		downloaded this call , failed is a list of problem dicts for
+		referenced works OpenAlex returned nothing for , and ok is the list
+		of wids that came back with data ( used to clear any stale problem )."""
 		referenced_works = paper_data.get( "referenced_works" )
 		if not referenced_works:
-			return 0
+			return 0 , [] , []
 		n_new = 0
+		failed , ok = [] , []
 		for i , item in enumerate( tqdm( referenced_works , desc="References" , position=1 , leave=False ) ):
 			wid = item.split( "/" )[ -1 ]
 			reference_cached_fp = self.references_dir.joinpath( f"{wid}.json" )
@@ -67,10 +76,20 @@ class OpenAlex():
 				continue
 			reference_data = self.API.get_id( wid )
 			if not reference_data:
+				# OpenAlex gave us nothing for this referenced work. Cache an
+				# empty marker so we don't re-query , and flag it as a problem
+				# attributed to the citing paper.
 				reference_data = {}
+				failed.append( {
+					"id":     wid ,
+					"detail": "OpenAlex returned no data for referenced work" ,
+					"paper":  citing_key ,
+				} )
+			else:
+				ok.append( wid )
 			utils.write_json( reference_cached_fp , reference_data )
 			n_new += 1
-		return n_new
+		return n_new , failed , ok
 
 	def update_cache( self , snapshot ):
 		"""Walk the snapshot and ensure for every paper :
@@ -93,6 +112,12 @@ class OpenAlex():
 		n_marked_not_found   = 0   # tombstones we wrote on THIS run
 		n_wid_persisted      = 0
 		n_missing            = 0
+		# Problems-log accumulators , flushed once after the loop ( see
+		# papers_db problems API ). meta = papers OpenAlex couldn't resolve ;
+		# refs = referenced works that came back empty. ok_* clear entries
+		# that recovered this run.
+		failed_meta , ok_meta = [] , []
+		failed_refs , ok_refs = [] , []
 		for k , key in enumerate( tqdm( snapshot_keys , desc="Papers" , position=0 ) ):
 
 			# 1.) Download Info for Papers in Snapshot
@@ -100,6 +125,7 @@ class OpenAlex():
 			paper_title = snapshot[ key ].get( "title" )
 			paper_title_normalized = utils.openalex_normalize_title( paper_title )
 			_id = snapshot[ key ].get( "id" )
+			had_no_doi = not paper_doi   # so we can clear its problem if it resolves
 			_cached_fp = self.storage_dir.joinpath( f"{_id}.json" )
 			if not paper_doi:
 				if _cached_fp.exists():
@@ -115,13 +141,19 @@ class OpenAlex():
 						print( "still nothing" , snapshot[ key ] , search_results )
 					utils.write_json( _cached_fp , { "id": _id , "doi": paper_doi , "title": paper_title } )
 			if not paper_doi:
+				failed_meta.append( ( _id , "no DOI ; OpenAlex title search found nothing" ) )
 				n_missing += 1
 				continue
 			paper_doi_normalized = utils.normalize_doi( paper_doi )
 			if not paper_doi_normalized:
 				print( f"\nCould not normalize DOI: {paper_doi!r} ({paper_title})" )
+				failed_meta.append( ( _id , f"unparseable DOI: {paper_doi!r}" ) )
 				n_missing += 1
 				continue
+			# Resolved to a usable DOI -- if it started life with no DOI ,
+			# clear the no-DOI problem we may have logged on a prior run.
+			if had_no_doi:
+				ok_meta.append( _id )
 			paper_doi_b64 = utils.base64_encode( paper_doi_normalized )
 			paper_cached_fp = self.storage_dir.joinpath( f"{paper_doi_b64}.json" )
 
@@ -142,15 +174,22 @@ class OpenAlex():
 				# the tombstone file to force a retry on the next run.
 				if paper_data.get( "_openalex_status" ) == "not_found":
 					n_tombstone_hit += 1
+					# Still an unresolved paper -- keep it in the problems log
+					# ( refreshes last_seen even though we don't re-query ).
+					failed_meta.append( ( paper_doi_normalized , "OpenAlex returned no data ( cached tombstone )" ) )
 					continue
 				oa_wid = ( paper_data.get( "id" ) or "" ).rsplit( "/" , 1 )[ -1 ]
 				if self._persist_paper_wid( paper_doi_normalized , oa_wid ):
 					n_wid_persisted += 1
+				ok_meta.append( paper_doi_normalized )   # resolved -> clear any stale problem
 				# Resume any references a cancelled prior run left half-done.
 				# The main paper file existing does NOT imply its references
 				# finished downloading ( the file is written before the
 				# reference loop ), so re-check them on every cache hit.
-				n_fetched += self._download_references( paper_data )
+				n_new , rf , rk = self._download_references( paper_data , citing_key=paper_doi_normalized )
+				n_fetched += n_new
+				failed_refs.extend( rf )
+				ok_refs.extend( rk )
 				n_cache_hit += 1
 				continue
 
@@ -183,6 +222,7 @@ class OpenAlex():
 						f"\nOpenAlex :: could not write tombstone for "
 						f"{paper_doi_normalized} ( {e} )"
 					)
+				failed_meta.append( ( paper_doi_normalized , "OpenAlex returned no data ( 404 / unindexed )" ) )
 				n_marked_not_found += 1
 				continue
 
@@ -194,20 +234,33 @@ class OpenAlex():
 				paper_data[ "cited_by_works" ] = []
 			utils.write_json( paper_cached_fp , paper_data )
 			n_fetched += 1
+			ok_meta.append( paper_doi_normalized )   # resolved -> clear any stale problem
 
 			# Pin the wid onto the db/papers/ record now that we have it.
 			if self._persist_paper_wid( paper_doi_normalized , oa_wid ):
 				n_wid_persisted += 1
 
 			# 3.) Download all of its References
-			self._download_references( paper_data )
+			n_new , rf , rk = self._download_references( paper_data , citing_key=paper_doi_normalized )
+			n_fetched += n_new
+			failed_refs.extend( rf )
+			ok_refs.extend( rk )
+
+		# Flush the problems log once : clear what recovered , record what
+		# failed. Clear before report so a DOI that flipped failed->ok ( or
+		# vice-versa ) lands in the right state.
+		papers_db.clear_problems(  self.args , "openalex_meta" , ok_meta )
+		papers_db.report_problems( self.args , "openalex_meta" , failed_meta )
+		papers_db.clear_problems(  self.args , "openalex_ref"  , ok_refs )
+		papers_db.report_problems( self.args , "openalex_ref"  , failed_refs )
 
 		print(
 			f"OpenAlex :: update_cache done -- "
 			f"fetched={n_fetched} cache-hits={n_cache_hit} "
 			f"tombstone-hits={n_tombstone_hit} "
 			f"newly-tombstoned={n_marked_not_found} "
-			f"wid-persisted={n_wid_persisted} missing-doi={n_missing}"
+			f"wid-persisted={n_wid_persisted} missing-doi={n_missing} "
+			f"problems( meta={len( failed_meta )} refs={len( failed_refs )} )"
 		)
 
 	def search( self , oa_index , searches ):

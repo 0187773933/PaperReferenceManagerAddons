@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · errors</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --warn:#ffb454; --red:#ff6b6b;
+    --chip:#262c37;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header {
+    position:sticky; top:0; z-index:5; background:var(--panel);
+    border-bottom:1px solid var(--line); padding:12px 18px;
+  }
+  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .counts { color:var(--muted); font-size:12px; display:flex; gap:14px; flex-wrap:wrap; }
+  .counts b { color:var(--fg); font-weight:600; }
+  .grow { flex:1; }
+  button {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
+  }
+  button:hover { border-color:var(--accent); }
+  .navlink {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
+  }
+  .navlink:hover { border-color:var(--accent); }
+  .controls { display:flex; gap:10px; align-items:center; margin-top:11px; flex-wrap:wrap; }
+  input[type=search] {
+    flex:1; min-width:240px; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:10px 13px; font-size:14px;
+  }
+  input[type=search]:focus { outline:none; border-color:var(--accent); }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-top:11px; }
+  .tab {
+    padding:7px 13px; border-radius:7px; cursor:pointer; font-size:13px;
+    background:var(--chip); border:1px solid transparent; color:var(--muted);
+  }
+  .tab.active { color:var(--fg); border-color:var(--accent); background:var(--panel2); }
+  .tab .n { color:var(--muted); font-size:11px; margin-left:5px; }
+  main { padding:16px 18px 60px; }
+  .status { color:var(--muted); font-size:12px; margin:4px 2px 12px; display:flex; gap:14px; align-items:center; }
+  .status a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  .status a:hover { text-decoration:underline; }
+
+  .card { border:1px solid var(--line); border-radius:10px; margin-bottom:10px; background:var(--panel); overflow:hidden; }
+  .chead { display:flex; align-items:center; gap:12px; padding:11px 14px; cursor:pointer; }
+  .chead:hover { background:var(--panel2); }
+  .caret { color:var(--muted); width:12px; flex:none; transition:transform .12s ease; }
+  .card.open .caret { transform:rotate(90deg); }
+  .gtitle { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gid {
+    color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:380px;
+  }
+  .badges { display:flex; gap:5px; flex-wrap:wrap; }
+  .gcount { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .badge {
+    display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px;
+    background:var(--chip); color:var(--muted); white-space:nowrap;
+  }
+  .badge.snap { background:#2e2440; color:#c79bff; }
+  .badge.oa   { background:#1a2740; color:#7fb6ff; }
+  .badge.pdf  { background:#3a2a13; color:#ffb454; }
+  .cbody { display:none; border-top:1px solid var(--line); padding:6px 0; background:var(--bg); }
+  .card.open .cbody { display:block; }
+  .hlinks { padding:6px 14px 2px; }
+  .hlinks a { color:var(--accent); text-decoration:none; margin-right:10px; font-size:12px; }
+  .hlinks a:hover { text-decoration:underline; }
+
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  tbody td { padding:8px 14px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td { border-bottom:none; }
+  td.kcol { white-space:nowrap; width:1%; }
+  td.detail { color:var(--fg); }
+  td.when { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; font-size:12px; width:1%; }
+  td.plinks { white-space:nowrap; width:1%; }
+  td.plinks a { color:var(--accent); text-decoration:none; margin-right:9px; }
+  td.plinks a:hover { text-decoration:underline; }
+  .extra { color:var(--muted); font-size:12px; margin-top:3px; }
+  .extra .k { color:var(--fg); }
+  .pid { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; }
+
+  .empty { color:var(--muted); padding:48px; text-align:center; }
+  .empty.ok { color:#5fd99a; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma · errors</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/">← Dashboard</a>
+    <a class="navlink" href="/status">▦ Status</a>
+    <button id="reload">↻ Reload</button>
+  </div>
+  <div class="controls">
+    <input type="search" id="q" placeholder="Filter by title, id or detail…" autocomplete="off">
+  </div>
+  <div class="tabs" id="tabs"></div>
+</header>
+<main>
+  <div class="status" id="status"></div>
+  <div id="view"></div>
+</main>
+<script>
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+
+// Friendly labels + badge class for the known problem kinds. Unknown kinds
+// fall through to their raw name so new kinds still show up.
+const KINDS = {
+  "non_imported:zotero":   { label:"Not imported · Zotero",   badge:"snap" },
+  "non_imported:mendeley": { label:"Not imported · Mendeley", badge:"snap" },
+  "openalex_meta":         { label:"OpenAlex · no metadata",  badge:"oa"   },
+  "openalex_ref":          { label:"OpenAlex · reference",    badge:"oa"   },
+  "yolo":                  { label:"PDF parse · YOLO",        badge:"pdf"  },
+  "ocr":                   { label:"OCR failed",              badge:"pdf"  },
+};
+function kindInfo(k){ return KINDS[k] || { label:k, badge:"" }; }
+
+let DATA = { total:0, paper_count:0, generated_at:null, groups:[] };
+let activeKind = "all";
+const openSet = new Set();   // group ids currently expanded ( survives re-render )
+
+const $ = s => document.querySelector(s);
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const isDoi = id => /^10\.\S+\/\S+/.test(String(id||""));
+const isWid = id => /^W\d+$/.test(String(id||""));
+const when  = s => esc(String(s||"").replace("T"," ").replace("+00:00"," UTC"));
+
+// External links for an id ( DOI -> doi.org + proxy ; WID -> OpenAlex ).
+function idLinks(id){
+  id = String(id||""); const out = [];
+  if(isDoi(id)){
+    out.push(`<a href="https://doi.org/${esc(id)}" target="_blank">DOI</a>`);
+    out.push(`<a href="${PROXY}${esc(id)}" target="_blank">Proxy</a>`);
+  } else if(isWid(id)){
+    out.push(`<a href="https://openalex.org/${esc(id)}" target="_blank">OA</a>`);
+  }
+  return out;
+}
+
+// Render a problem's kind-specific extra fields ( everything non-core ).
+const CORE = new Set(["kind","id","detail","first_seen","last_seen","paper","url"]);
+function extras(it){
+  const parts = [];
+  for(const k of Object.keys(it)){
+    if(CORE.has(k)) continue;
+    let v = it[k];
+    if(v==null || v==="" || (Array.isArray(v)&&!v.length)) continue;
+    if(Array.isArray(v)) v = v.join(", ");
+    else if(typeof v === "object") v = JSON.stringify(v);
+    parts.push(`<span class="k">${esc(k)}</span>: ${esc(v)}`);
+  }
+  return parts.length ? `<div class="extra">${parts.join(" · ")}</div>` : "";
+}
+
+function groupMatches(g, q){
+  if(activeKind!=="all" && !g.kinds.includes(activeKind)) return false;
+  if(!q) return true;
+  const hay = (String(g.id||"")+" "+String(g.title||"")+" "+
+    g.problems.map(p=>(p.id||"")+" "+(p.detail||"")).join(" ")).toLowerCase();
+  return hay.includes(q);
+}
+function visibleGroups(){
+  const q = $("#q").value.trim().toLowerCase();
+  return DATA.groups.filter(g=>groupMatches(g,q));
+}
+
+function renderCounts(){
+  $("#counts").innerHTML =
+    `<span><b>${(DATA.total||0).toLocaleString()}</b> problems</span>`+
+    `<span>across <b>${(DATA.paper_count||0).toLocaleString()}</b> papers</span>`+
+    (DATA.generated_at?`<span>updated ${esc(DATA.generated_at)}</span>`:"");
+}
+function renderTabs(){
+  // per-kind counts = number of GROUPS that contain that kind
+  const counts = {};
+  for(const g of DATA.groups) for(const k of g.kinds) counts[k]=(counts[k]||0)+1;
+  const kinds = Object.keys(counts).sort();
+  const tabs = [{ kind:"all", label:"All papers", count:DATA.paper_count }]
+    .concat(kinds.map(k=>({ kind:k, label:kindInfo(k).label, count:counts[k] })));
+  $("#tabs").innerHTML = tabs.map(t=>
+    `<div class="tab ${t.kind===activeKind?'active':''}" data-kind="${esc(t.kind)}">`+
+    `${esc(t.label)}<span class="n">${(t.count||0).toLocaleString()}</span></div>`).join("");
+  document.querySelectorAll(".tab").forEach(el=>{
+    el.onclick = ()=>{ activeKind = el.dataset.kind; renderTabs(); renderView(); };
+  });
+}
+
+function problemRow(p){
+  const ki = kindInfo(p.kind);
+  // a reference problem's own id ( the missing WID ) is worth showing + linking
+  const showId = p.paper && p.id && p.id!==p.paper;
+  const idLine = showId ? `<div class="pid">${esc(p.id)}</div>` : "";
+  return `<tr>
+    <td class="kcol"><span class="badge ${ki.badge}">${esc(ki.label)}</span></td>
+    <td class="detail">${esc(p.detail||"")}${idLine}${extras(p)}</td>
+    <td class="when">${when(p.last_seen)}</td>
+    <td class="plinks">${idLinks(p.id).join(" ")}</td>
+  </tr>`;
+}
+function cardHtml(g){
+  const open = openSet.has(g.id);
+  const badges = g.kinds.map(k=>`<span class="badge ${kindInfo(k).badge}">${esc(kindInfo(k).label)}</span>`).join("");
+  const head = g.title
+    ? `<span class="gtitle">${esc(g.title)}</span><span class="gid">${esc(g.id)}</span>`
+    : `<span class="gtitle gid" style="max-width:none">${esc(g.id)}</span>`;
+  const hlinks = idLinks(g.id);
+  const hlinkHtml = hlinks.length ? `<div class="hlinks">${hlinks.join(" ")}</div>` : "";
+  return `<div class="card ${open?'open':''}" data-id="${esc(g.id)}">
+    <div class="chead">
+      <span class="caret">▸</span>
+      ${head}
+      <div class="grow"></div>
+      <div class="badges">${badges}</div>
+      <span class="gcount">${g.count} problem${g.count===1?'':'s'}</span>
+    </div>
+    <div class="cbody">
+      ${hlinkHtml}
+      <table><tbody>${g.problems.map(problemRow).join("")}</tbody></table>
+    </div>
+  </div>`;
+}
+function renderView(){
+  const groups = visibleGroups();
+  if(!groups.length){
+    $("#view").innerHTML = (DATA.total||0)===0
+      ? `<div class="empty ok">✓ No problems — everything imported and processed cleanly.</div>`
+      : `<div class="empty">Nothing matches this filter.</div>`;
+    $("#status").textContent = "";
+    return;
+  }
+  $("#view").innerHTML = groups.map(cardHtml).join("");
+  $("#view").querySelectorAll(".card").forEach(card=>{
+    card.querySelector(".chead").onclick = ()=>{
+      const id = card.dataset.id;
+      if(openSet.has(id)) openSet.delete(id); else openSet.add(id);
+      card.classList.toggle("open");
+    };
+  });
+  const probs = groups.reduce((a,g)=>a+g.count,0);
+  $("#status").innerHTML =
+    `<span>${groups.length.toLocaleString()} papers · ${probs.toLocaleString()} problems`+
+    (activeKind==="all"?"":` · ${esc(kindInfo(activeKind).label)}`)+`</span>`+
+    `<a id="expandAll">expand all</a><a id="collapseAll">collapse all</a>`;
+  $("#expandAll").onclick   = ()=>{ groups.forEach(g=>openSet.add(g.id));   renderView(); };
+  $("#collapseAll").onclick = ()=>{ groups.forEach(g=>openSet.delete(g.id)); renderView(); };
+}
+
+async function load(){
+  $("#status").textContent = "Loading…";
+  try { DATA = await (await fetch("/api/errors")).json(); }
+  catch(e){ $("#view").innerHTML = `<div class="empty">Couldn't load /api/errors: ${esc(e.message||e)}</div>`; return; }
+  renderCounts(); renderTabs(); renderView();
+}
+
+let timer=null;
+$("#q").addEventListener("input", ()=>{ clearTimeout(timer); timer=setTimeout(renderView, 150); });
+$("#reload").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

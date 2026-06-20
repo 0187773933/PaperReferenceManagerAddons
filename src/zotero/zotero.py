@@ -263,6 +263,7 @@ class Zotero():
 		# entirely. Use --no-prune to disable.
 		prune = not getattr( self.args , "no_prune" , False )
 		seen_keys = set()
+		non_imported = []
 
 		n_new , n_upd , n_noop , n_no_doi = 0 , 0 , 0 , 0
 		for key , item in full.items():
@@ -284,6 +285,18 @@ class Zotero():
 				pkey = doi
 			else:
 				if not ( title or pdfs ):
+					# Nothing for the pipeline to act on -- record it so the
+					# user can see what their library holds that we skip.
+					non_imported.append( {
+						"id":          key or item.get( "itemID" ) ,
+						"itemID":      item.get( "itemID" ) ,
+						"type":        item.get( "type" ) ,
+						"url":         meta.get( "url" ) ,
+						"date":        meta.get( "date" ) ,
+						"creators":    item.get( "creators" ) or [] ,
+						"tags":        item.get( "tags" ) or [] ,
+						"collections": item.get( "collections" ) or [] ,
+					} )
 					continue
 				# Prefer the Zotero item key ; fall back to the always-unique
 				# itemID for orphan placeholder items whose key is None.
@@ -320,10 +333,15 @@ class Zotero():
 				self.args , papers.SOURCE_ZOTERO , seen_keys ,
 			)
 
+		n_skipped = papers.save_non_imported(
+			self.args , papers.SOURCE_ZOTERO , non_imported ,
+		)
+
 		total = papers.count( self.args )
 		print(
 			f"Zotero :: snapshot -> papers/ : +{n_new} new , ~{n_upd} updated , "
 			f"={n_noop} unchanged , "
 			f"-{n_detached} source-detached , -{n_deleted} paper-deleted , "
-			f"included {n_no_doi} no-doi ; total = {total}"
+			f"included {n_no_doi} no-doi , skipped {n_skipped} non-imported ; "
+			f"total = {total}"
 		)

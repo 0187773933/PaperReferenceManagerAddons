@@ -76,6 +76,15 @@ def snapshot( sub , global_parser ):
 		"prune_mendeley": False ,
 	}
 
+def status( sub , global_parser ):
+	p = sub.add_parser(
+		"status" ,
+		parents=[ global_parser ] ,
+		help="Take a snapshot , then tally how far every paper has made it through the pipeline ( pdf / openalex / yolo / ocr / sections / md / text / methods / summaries ) -- done vs missing vs failed per stage. Prints a report and writes output/cache/status.json for the dashboard's /status page. Pass --skip-snapshot to tally the existing DB without refreshing."
+	)
+	p.set_defaults( _entry=tasks.status )
+	return {}
+
 def yolo( sub , global_parser ):
 	p = sub.add_parser(
 		"yolo" ,
@@ -348,11 +357,24 @@ def crawl( sub , global_parser ):
 		"crawl_out_name":       None  ,
 	}
 
+def reindex( sub , global_parser ):
+	p = sub.add_parser(
+		"reindex" ,
+		parents=[ global_parser ] ,
+		help="Refresh the OpenAlex cache ( snapshot + fetch new papers ) , then (re)build the dashboard's OWN full-text search index by streaming the OpenAlex cache off disk , and persist it. Incremental : adding papers only re-reads the new papers + their new references , not everything. A running ` prma server ` auto-picks-up the fresh index. Use --skip-snapshot to index the existing cache without re-fetching ; --full to rebuild from scratch."
+	)
+	p.add_argument( "--full" , dest="reindex_full" , action="store_true" , default=False ,
+		help="Ignore the saved index state and rebuild from scratch ( e.g. after regenerating text / summaries , which the per-paper signature doesn't watch )" )
+	p.set_defaults( _entry=tasks.reindex )
+	return {
+		"reindex_full": False ,
+	}
+
 def server( sub , global_parser ):
 	p = sub.add_parser(
 		"server" ,
 		parents=[ global_parser ] ,
-		help="Run the local 'exists' HTTP server for browser userscripts"
+		help="Run the local HTTP server : the 'exists' endpoint for browser userscripts ( POST /exists ) AND the full-text-search dashboard ( GET / ). The dashboard serves the index that ` prma reindex ` persists to disk -- it loads instantly and auto-reloads when you re-run reindex. If no index exists yet , it builds one lazily on first open."
 	)
 	p.add_argument( "--host"     , default=os.environ.get( "SERVER_HOST" , "127.0.0.1" ) ,
 		help="Bind host ( env SERVER_HOST )" )
@@ -373,6 +395,7 @@ def server( sub , global_parser ):
 REGISTRARS = (
 	missing    ,
 	snapshot   ,
+	status     ,
 	yolo       ,
 	images     ,
 	ocr        ,
@@ -386,6 +409,7 @@ REGISTRARS = (
 	mendeley   ,
 	zotero     ,
 	crawl      ,
+	reindex    ,
 	server     ,
 )
 

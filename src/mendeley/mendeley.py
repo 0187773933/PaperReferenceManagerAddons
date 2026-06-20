@@ -61,6 +61,7 @@ class Mendeley:
 			and not getattr( self.args , "no_prune" , False )
 		)
 		seen_keys = set()
+		non_imported = []
 
 		n_new , n_upd , n_noop , n_no_doi = 0 , 0 , 0 , 0
 		for paper_id , paper in snap.items():
@@ -78,6 +79,15 @@ class Mendeley:
 				pkey = doi
 			else:
 				if not ( title or pdfs ):
+					# Nothing for the pipeline to act on -- record it so the
+					# user can see what their library holds that we skip.
+					non_imported.append( {
+						"id":       paper.get( "id" ) or paper_id ,
+						"type":     paper.get( "type" ) ,
+						"url":      paper.get( "url" ) ,
+						"date":     paper.get( "date" ) ,
+						"modified": paper.get( "modified" ) ,
+					} )
 					continue
 				pkey = papers.synthetic_key(
 					papers.SOURCE_MENDELEY , paper.get( "id" ) or paper_id ,
@@ -111,12 +121,17 @@ class Mendeley:
 				self.args , papers.SOURCE_MENDELEY , seen_keys ,
 			)
 
+		n_skipped = papers.save_non_imported(
+			self.args , papers.SOURCE_MENDELEY , non_imported ,
+		)
+
 		total = papers.count( self.args )
 		print(
 			f"Mendeley :: snapshot -> papers/ : +{n_new} new , ~{n_upd} updated , "
 			f"={n_noop} unchanged , "
 			f"-{n_detached} source-detached , -{n_deleted} paper-deleted , "
-			f"included {n_no_doi} no-doi ; total = {total}"
+			f"included {n_no_doi} no-doi , skipped {n_skipped} non-imported ; "
+			f"total = {total}"
 		)
 
 	def download( self ):
