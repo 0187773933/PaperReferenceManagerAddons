@@ -49,7 +49,13 @@ from ..utils import utils
 from .       import index as dash_index
 
 
-STATE_VERSION = 6
+# Bump whenever the per-paper entry SHAPE changes ( fields added / removed )
+# so a stale on-disk index is discarded and fully rebuilt -- the incremental
+# path only re-reads papers whose FILE changed , so new fields on unchanged
+# papers would otherwise never get populated.
+#   7 -> 8 : library entries gained montage / has_md + full-text OCR haystack
+#   8 -> 9 : library entries gained created_at ( In-Library "Added" column )
+STATE_VERSION = 9
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +74,22 @@ def _make_haystack( meta ):
 	title    = meta.get( "title" ) or meta.get( "display_name" ) or ""
 	abstract = _reconstruct_abstract( meta.get( "abstract_inverted_index" ) )
 	return ( title + " " + abstract ).lower()
+
+
+def _ocr_fulltext( paper ):
+	"""Concatenate the OCR text pinned on a library paper's YOLO detections
+	( ` prma ocr ` output ) into one blob -- the full body text , so the
+	'In Library' tab searches the WHOLE paper , not just title + abstract.
+	One engine's text per detection ( whichever is present )."""
+	parts = []
+	for page in ( ( paper.get( "yolo" ) or {} ).get( "pages" ) or [] ):
+		for det in ( page or [] ):
+			ocr = det.get( "ocr" ) or {}
+			for v in ocr.values():
+				if v:
+					parts.append( v )
+					break
+	return " ".join( parts )
 
 
 def _work_entry( meta ):
@@ -130,6 +152,8 @@ def _empty_state():
 		"paper_state": {} ,   # FILENAME -> { sig , key , wid , doi , title , ref_wids , cb_wids }
 		"ref_meta":    {} ,   # wid -> reference entry ( incl 'hay' )
 		"cb_meta":     {} ,   # wid -> cited-by entry ( incl 'hay' )
+		"lib_meta":    {} ,   # paper key -> library entry ( incl 'hay' ) -- the
+		                      # papers you HAVE , searchable on their own tab
 	}
 
 
@@ -174,6 +198,7 @@ def build( args , full=False , log=print , progress=None ):
 	paper_state = state[ "paper_state" ]
 	ref_meta    = state[ "ref_meta" ]
 	cb_meta     = state[ "cb_meta" ]
+	lib_meta    = state.setdefault( "lib_meta" , {} )
 
 	oa_dir   = Path( args.output ).joinpath( "cache" , "openalex" )
 	refs_dir = oa_dir.joinpath( "references" )
@@ -246,10 +271,40 @@ def build( args , full=False , log=print , progress=None ):
 			"cb_wids":  cb_wids ,
 		}
 
+		# Searchable entry for the paper ITSELF ( the "In Library" tab ). Built
+		# from the library record + its OpenAlex meta when present. The haystack
+		# is SPECIAL for the library : title + abstract + the FULL-TEXT OCR body
+		# ( prma ocr ) , so you can full-text-search papers you have. This is the
+		# ONLY place the library gets a haystack -- the external pools never
+		# include these ( they're filtered out by lib_wids + dedup ).
+		lib_e     = utils.openalex_entry_scalars( oa ) if oa else {}
+		lib_title = paper.get( "title" ) or lib_e.get( "title" ) or "(untitled)"
+		abstract  = _reconstruct_abstract( oa.get( "abstract_inverted_index" ) ) if oa else ""
+		ocr_body  = _ocr_fulltext( paper )
+		prefix    = utils.doi_to_filename( key )
+		montage_fp= Path( args.output ).joinpath( "images" , f"{prefix}-Figures.png" )
+		md_fp     = Path( args.output ).joinpath( "md" , f"{prefix}.md" )
+		lib_meta[ key ] = {
+			"key":        key ,
+			"wid":        wid ,
+			"title":      lib_title ,
+			"doi":        doi or lib_e.get( "doi" ) ,
+			"year":       lib_e.get( "year" ) ,
+			"pubdate":    lib_e.get( "pubdate" ) or "" ,
+			"cited_by":   lib_e.get( "cited_by" ) ,
+			"authors":    lib_e.get( "authors" ) or [] ,
+			"pdf":        paper.get( "pdf_path" ) or "" , # LOCAL path -> served via /pdf?key=
+			"montage":    f"/images/{prefix}-Figures.png" if montage_fp.exists() else "" ,
+			"has_md":     md_fp.exists() ,                # -> "Read" accordion available
+			"created_at": paper.get( "created_at" ) or "" , # when first added to the library
+			"hay":        ( lib_title + " " + abstract + " " + ocr_body ).lower() ,
+		}
+
 	# Drop papers whose file is gone.
 	for fn in list( paper_state.keys() ):
 		if fn not in present:
-			paper_state.pop( fn )
+			gone = paper_state.pop( fn )
+			lib_meta.pop( ( gone or {} ).get( "key" ) , None )
 			changed = True
 
 	if not changed:
@@ -389,6 +444,7 @@ def _pools( state , top_n=100 ):
 	cited_by   = _pool_rows( cb_tally , state.get( "cb_meta" ) or {} ,
 		state.get( "cb_dup" ) or {} , lib_wids , "cited_by" )
 	authors    = dash_index.build_authors( references , top_n )
+	library    = _lib_rows( state.get( "lib_meta" ) or {} )
 
 	return {
 		"built_at":      state.get( "built_at" ) ,
@@ -397,7 +453,35 @@ def _pools( state , top_n=100 ):
 		"references":    references ,
 		"cited_by":      cited_by ,
 		"authors":       authors ,
+		"library":       library ,
 	}
+
+
+def _lib_rows( lib_meta ):
+	"""Servable rows for the 'In Library' tab : the papers you HAVE , as their
+	own searchable pool. Kept entirely separate from the external pools."""
+	rows = []
+	for key , e in ( lib_meta or {} ).items():
+		rows.append( {
+			"pool":      "library" ,
+			"key":       key ,
+			"wid":       e.get( "wid" ) or "" ,
+			"title":     e.get( "title" ) or "(untitled)" ,
+			"doi":       e.get( "doi" ) ,
+			"year":      e.get( "year" ) ,
+			"journal":   "" ,
+			"cited_by":  e.get( "cited_by" ) ,
+			"lib_cites": None ,                 # N/A for your own papers
+			"pdf":        e.get( "pdf" ) or "" ,
+			"pdf_local":  True ,                 # local file -> open via /pdf?key=
+			"montage":    e.get( "montage" ) or "" ,   # prma images grid -> /images/...
+			"has_md":     bool( e.get( "has_md" ) ) ,  # prma md -> "Read" accordion
+			"pubdate":    e.get( "pubdate" ) or "" ,
+			"created_at": e.get( "created_at" ) or "" ,  # In-Library "Added" column
+			"authors":    e.get( "authors" ) or [] ,
+			"hay":        e.get( "hay" ) or "" ,
+		} )
+	return rows
 
 
 def load_pools( args , top_n=100 ):

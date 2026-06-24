@@ -37,7 +37,16 @@ class OpenAlexAPI():
 					time.sleep( retry )
 					continue
 				else:
-					print( f"\nOpenAlex {r.status_code}: {r.url} {r.text[:200]}" )
+					# 404 is the EXPECTED "this work no longer exists" signal :
+					# OpenAlex continuously merges duplicate works and deletes the
+					# loser's id , so other papers' referenced_works / cited_by
+					# lists routinely point at ids that now 404. Every caller
+					# already treats None as "no data" and records it in the
+					# problems log , so don't spam the console with the HTML body.
+					# Other ( genuinely unexpected ) statuses still get a concise
+					# one-liner -- without the noisy response body.
+					if r.status_code != 404:
+						print( f"\nOpenAlex {r.status_code}: {r.url}" )
 					return None
 			except requests.exceptions.RequestException as e:
 				wait = min( 2 ** attempt , 60 )

@@ -70,6 +70,19 @@
     border:3px solid var(--line); border-top-color:var(--accent); animation:spin 1s linear infinite;
   }
   @keyframes spin { to { transform:rotate(360deg); } }
+  /* Live --watch processing toast ( bottom-right ). Hidden unless the
+     background worker is scanning / processing a newly added paper. */
+  #procbar {
+    position:fixed; right:18px; bottom:18px; z-index:50; max-width:340px;
+    display:none; align-items:center; gap:11px;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:11px 14px; box-shadow:0 6px 24px rgba(0,0,0,.28);
+    color:var(--fg); font-size:13px;
+  }
+  #procbar.show { display:flex; }
+  #procbar .spinner { width:18px; height:18px; margin:0; border-width:2px; flex:none; }
+  #procbar .pb-sub { color:var(--muted); font-size:11px; margin-top:2px; }
+  #procbar .pb-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   thead th {
     position:sticky; top:0; text-align:left; color:var(--muted); font-weight:600;
@@ -91,6 +104,33 @@
   .pill.ref { background:#1a2740; color:#7fb6ff; }
   .pill.cb  { background:#2e2440; color:#c79bff; }
   .empty { color:var(--muted); padding:40px; text-align:center; }
+  /* In-Library "Read" accordion */
+  tr.readrow td { background:var(--panel); padding:10px 14px 16px; }
+  .reader { max-width:860px; }
+  .readempty { color:var(--muted); }
+  details.acc { border:1px solid var(--line); border-radius:8px; margin:8px 0; background:var(--panel2); }
+  details.acc > summary {
+    cursor:pointer; padding:9px 12px; font-weight:600; list-style:none; user-select:none;
+  }
+  details.acc > summary::-webkit-details-marker { display:none; }
+  details.acc > summary::before { content:"▸"; color:var(--muted); margin-right:8px; }
+  details.acc[open] > summary::before { content:"▾"; }
+  details.acc[open] > summary { border-bottom:1px solid var(--line); }
+  .accbody { padding:10px 14px; }
+  .accbody p { margin:0 0 10px; }
+  .accbody h4 { margin:14px 0 6px; font-size:14px; }
+  .accbody img { max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px; margin:8px 0; display:block; }
+  .accbody a { color:var(--accent); }
+  /* Skip / hide control + the header "Show skipped" toggle. */
+  .skipbtn {
+    background:transparent; border:1px solid var(--line); color:var(--muted);
+    border-radius:6px; padding:3px 9px; cursor:pointer; font-size:12px; white-space:nowrap;
+  }
+  .skipbtn:hover { color:var(--fg); border-color:var(--muted); }
+  .skipbtn.skipped { color:var(--accent); border-color:var(--accent); }
+  tr.dim { opacity:.45; }
+  tr.dim:hover { opacity:.75; }
+  #toggleSkipped.active { color:var(--accent); border-color:var(--accent); }
 </style>
 </head>
 <body>
@@ -101,6 +141,7 @@
     <div class="grow"></div>
     <a class="navlink" href="/status" title="How far each paper has made it through the pipeline">▦ Status</a>
     <a class="navlink" href="/errors" title="Items the pipeline couldn't fully process">⚠ Errors</a>
+    <button id="toggleSkipped" title="Show / hide the papers you've skipped">🚫 Show skipped</button>
     <button id="refresh">↻ Rebuild</button>
   </div>
   <div class="controls">
@@ -116,6 +157,13 @@
   <div class="status" id="status"></div>
   <div id="view"></div>
 </main>
+<div id="procbar">
+  <div class="spinner"></div>
+  <div style="min-width:0">
+    <div class="pb-title" id="pb-title"></div>
+    <div class="pb-sub" id="pb-sub"></div>
+  </div>
+</div>
 <script>
 const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
 // External papers NOT in your collection.
@@ -131,6 +179,8 @@ const TABS = [
     tip:"Newer papers that cite the ones you've collected, that you don't have" },
   { id:"authors",    label:"Authors", countKey:"authors",
     tip:"Most-frequent authors across the missing papers" },
+  { id:"library",    label:"In Library", countKey:"library",
+    tip:"Search the papers you already have in Zotero / Mendeley" },
 ];
 let META = {};
 let activeTab = "external";
@@ -146,12 +196,23 @@ function links(r){
     out.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank">DOI</a>`);
     out.push(`<a href="${PROXY}${esc(r.doi)}" target="_blank">Proxy</a>`);
   }
-  if(r.pdf)  out.push(`<a href="${esc(r.pdf)}" target="_blank">PDF</a>`);
+  if(r.pdf){
+    // Library papers carry a LOCAL path -> stream it via /pdf?key= ; external
+    // rows carry a remote OA pdf url -> link straight to it.
+    const href = r.pdf_local ? `/pdf?key=${encodeURIComponent(r.key)}` : esc(r.pdf);
+    out.push(`<a href="${href}" target="_blank">PDF</a>`);
+  }
   if(r.wid)  out.push(`<a href="https://openalex.org/${esc(r.wid)}" target="_blank">OA</a>`);
+  // Library extras : montage grid ( prma images ) + section reader ( prma md ).
+  if(r.montage) out.push(`<a href="${esc(r.montage)}" target="_blank" title="Figure montage">Figures</a>`);
+  if(r.has_md)  out.push(`<a href="#" class="readlink" data-key="${esc(r.key)}">Read</a>`);
   return out.join(" ");
 }
 
 const fmt = n => (n||0).toLocaleString();
+// created_at is an ISO-8601 stamp ( "2026-06-23T19:26:56+00:00" ) ; show just
+// the date in the cell, keep the full timestamp in the tooltip.
+const fmtDate = s => s ? String(s).slice(0,10) : "";
 function renderCounts(){
   if(!ready){ $("#counts").innerHTML = ""; return; }
   $("#counts").innerHTML =
@@ -175,32 +236,53 @@ function renderTabs(){
   });
 }
 
-// Paper-pool columns. key=null -> not sortable. def = default direction
-// when you first click the column.
+// Paper-pool columns. key=null -> not sortable. def = default direction when
+// you first click the column. Each carries its own cell renderer so the body
+// stays in sync with the header and columns can differ per tab.
 const PAGE = 100;
-const PCOLS = [
-  { key:"lib_cites", label:"Conn.", title:"How many of your library papers connect to this work", def:"desc" },
-  { key:"cited_by",  label:"OA cites", title:"Global OpenAlex citation count", def:"desc" },
-  { key:"title",     label:"Title", def:"asc"  },
-  { key:"year",      label:"Year", def:"desc" },
-  { key:null,        label:"Links" },
+const COLS_BASE = [
+  { key:"lib_cites", label:"Conn.", title:"How many of your library papers connect to this work", def:"desc",
+    cell:r=>`<td class="num">${r.lib_cites!=null?r.lib_cites:"·"}</td>` },
+  { key:"cited_by",  label:"OA cites", title:"Global OpenAlex citation count", def:"desc",
+    cell:r=>`<td class="num">${r.cited_by!=null?r.cited_by:""}</td>` },
+  { key:"title",     label:"Title", def:"asc",
+    cell:r=>`<td class="title"><div class="tt">${esc(r.title)}</div>`+
+            `<div class="meta">${esc(r.journal||"")}${r.hashtags?(" · "+esc(r.hashtags)):""}</div></td>` },
+  { key:"year",      label:"Year", def:"desc",
+    cell:r=>`<td class="num">${r.year||""}</td>` },
+  { key:null,        label:"Links",
+    cell:r=>`<td class="links">${links(r)}</td>` },
 ];
-const TAB_LABEL = { external:"missing papers", references:"in bibliographies", cited_by:"newer / citing" };
+// "In Library" only : when each paper was first added ( created_at in its
+// output/cache/papers/<key>.json record ). Inserted just before Links.
+const COL_ADDED = { key:"created_at", label:"Added",
+  title:"When this paper was first added to your library", def:"desc",
+  cell:r=>`<td class="num" title="${esc(r.created_at||'')}">${esc(fmtDate(r.created_at))}</td>` };
+// Skip / hide control. Not sortable. Persisted server-side ( POST /api/skip ) so
+// skipped papers stay hidden across reloads ; the data is never deleted.
+const COL_SKIP = { key:null, label:"",
+  cell:r=>`<td class="skipcell"><button class="skipbtn${r.skipped?' skipped':''}" `+
+          `data-key="${esc(r.key)}" `+
+          `title="${r.skipped?'Restore this paper to the list':'Hide this paper from the list'}">`+
+          `${r.skipped?'Unskip':'Skip'}</button></td>` };
+function cols(){
+  const c = COLS_BASE.slice();                  // [..., Year, Links]
+  if(activeTab==="library") c.splice(c.length-1, 0, COL_ADDED); // before Links
+  c.splice(c.length-1, 0, COL_SKIP);            // Skip sits just before Links
+  return c;
+}
+const TAB_LABEL = { external:"missing papers", references:"in bibliographies", cited_by:"newer / citing", library:"library papers" };
 // Per-tab search state ( query / sort column / direction / paging cursor ).
 let cur = { q:"", sort:"lib_cites", dir:"desc", offset:0, total:0, loading:false, done:false };
+// When false ( default ) skipped papers are filtered out of every list ; the
+// header "Show skipped" toggle flips it so you can revisit / un-skip them.
+let showSkipped = false;
 
 function rowHtml(r){
-  return `<tr>
-      <td class="num">${r.lib_cites!=null?r.lib_cites:"·"}</td>
-      <td class="num">${r.cited_by!=null?r.cited_by:""}</td>
-      <td class="title"><div class="tt">${esc(r.title)}</div>
-        <div class="meta">${esc(r.journal||"")}${r.hashtags?(" · "+esc(r.hashtags)):""}</div></td>
-      <td class="num">${r.year||""}</td>
-      <td class="links">${links(r)}</td>
-    </tr>`;
+  return `<tr data-key="${esc(r.key)}"${r.skipped?' class="dim"':''}>`+cols().map(c=>c.cell(r)).join("")+`</tr>`;
 }
 function headHtml(){
-  return "<tr>"+PCOLS.map(c=>{
+  return "<tr>"+cols().map(c=>{
     if(!c.key) return `<th>${c.label}</th>`;
     const on = c.key===cur.sort;
     const arrow = on ? (cur.dir==="desc"?"▼":"▲") : "";
@@ -214,17 +296,25 @@ function renderShell(){
     th.onclick = ()=>{
       const k = th.dataset.sort;
       if(cur.sort===k) cur.dir = cur.dir==="desc" ? "asc" : "desc";
-      else { cur.sort = k; cur.dir = (PCOLS.find(c=>c.key===k)||{}).def || "desc"; }
+      else { cur.sort = k; cur.dir = (cols().find(c=>c.key===k)||{}).def || "desc"; }
       newSearch();
     };
   });
 }
 
+function showCountStatus(){
+  $("#status").textContent =
+    `${cur.offset.toLocaleString()} of ${cur.total.toLocaleString()} `+
+    `${TAB_LABEL[activeTab]||"results"}`+(cur.q?` for “${cur.q}”`:"")+
+    (showSkipped?" · incl. skipped":"")+
+    (cur.done?" · all loaded":" · scroll for more");
+}
 async function loadMore(){
   if(!ready || cur.loading || cur.done || activeTab==="authors") return;
   cur.loading = true;
   const url = `/api/search?q=${encodeURIComponent(cur.q)}&pool=${activeTab}`+
-              `&sort=${cur.sort}&dir=${cur.dir}&limit=${PAGE}&offset=${cur.offset}`;
+              `&sort=${cur.sort}&dir=${cur.dir}&limit=${PAGE}&offset=${cur.offset}`+
+              `&hide_skipped=${showSkipped?0:1}`;
   let d;
   try { d = await (await fetch(url)).json(); }
   catch(e){ cur.loading=false; return; }
@@ -233,12 +323,16 @@ async function loadMore(){
   const tb = $("#tb");
   if(tb && d.results.length) tb.insertAdjacentHTML("beforeend", d.results.map(rowHtml).join(""));
   cur.offset += d.results.length;
+  // The next batch is in -> now drop the rows you skipped earlier in this view
+  // ( they lingered, dimmed, so you could undo ). Take any open Read row too.
+  if(tb) tb.querySelectorAll("tr.pending-skip").forEach(tr=>{
+    const sib = tr.nextElementSibling;
+    if(sib && sib.classList.contains("readrow")) sib.remove();
+    tr.remove();
+  });
   if(cur.offset>=cur.total || d.results.length===0) cur.done = true;
   if(tb && cur.total===0) $("#view").innerHTML = `<div class="empty">No matches.</div>`;
-  $("#status").textContent =
-    `${cur.offset.toLocaleString()} of ${cur.total.toLocaleString()} `+
-    `${TAB_LABEL[activeTab]||"results"}`+(cur.q?` for “${cur.q}”`:"")+
-    (cur.done?" · all loaded":" · scroll for more");
+  showCountStatus();
   cur.loading = false;
   // Keep pulling until the viewport is filled ( so short result sets and big
   // screens still show a scrollbar to trigger more ).
@@ -265,6 +359,9 @@ function newSearch(){
   cur.offset = 0; cur.total = 0; cur.done = false; cur.loading = false;
   window.scrollTo(0,0);
   if(activeTab==="authors"){ renderAuthors(); return; }
+  // If the active sort column doesn't exist on this tab ( e.g. leaving the
+  // library tab while sorted by "Added" ), fall back to the default sort.
+  if(!cols().some(c=>c.key && c.key===cur.sort)){ cur.sort="lib_cites"; cur.dir="desc"; }
   $("#status").textContent = "Searching…";
   renderShell();
   loadMore();
@@ -273,6 +370,64 @@ function newSearch(){
 window.addEventListener("scroll", ()=>{
   if(window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) loadMore();
 }, { passive:true });
+
+// "Read" : pull the paper's prma-md sections and toggle an inline accordion
+// row beneath it. Delegated off #view so it survives table re-renders.
+function secHtml(s){
+  return `<details class="acc"><summary>${esc(s.title)}</summary>`+
+         `<div class="accbody">${s.html||""}</div></details>`;
+}
+$("#view").addEventListener("click", async (e)=>{
+  const a = e.target.closest(".readlink");
+  if(!a) return;
+  e.preventDefault();
+  const tr = a.closest("tr");
+  const sib = tr.nextElementSibling;
+  if(sib && sib.classList.contains("readrow")){ sib.remove(); a.textContent="Read"; return; }
+  a.textContent = "Loading…";
+  let d;
+  try { d = await (await fetch(`/api/paper?key=${encodeURIComponent(a.dataset.key)}`)).json(); }
+  catch(err){ a.textContent="Read"; return; }
+  a.textContent = "Hide";
+  const body = (!d || !d.available)
+    ? `<div class="readempty">No rendered Markdown for this paper — run <code>prma md</code>.</div>`
+    : `<div class="reader">${(d.sections||[]).map(secHtml).join("")}</div>`;
+  tr.insertAdjacentHTML("afterend",
+    `<tr class="readrow"><td colspan="${cols().length}">${body}</td></tr>`);
+});
+
+// Skip / unskip a paper. Persist server-side, then ( default view ) drop the row
+// from the list right away, or ( "Show skipped" on ) just flip its marked state.
+// Delegated off #view so it survives table re-renders.
+$("#view").addEventListener("click", async (e)=>{
+  const b = e.target.closest(".skipbtn");
+  if(!b) return;
+  e.preventDefault();
+  const key = b.dataset.key;
+  const willSkip = !b.classList.contains("skipped");
+  b.disabled = true;
+  try {
+    await fetch("/api/skip", { method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ key, skipped: willSkip }) });
+  } catch(err){ b.disabled=false; return; }
+  b.disabled = false;
+  const tr = b.closest("tr");
+  // Reflect the new state on the row, but DON'T remove it here. Skipped rows
+  // linger ( dimmed, with an Unskip button ) so you can change your mind; they're
+  // only dropped once you scroll far enough to pull the next batch ( loadMore ).
+  b.classList.toggle("skipped", willSkip);
+  b.textContent = willSkip ? "Unskip" : "Skip";
+  b.title = willSkip ? "Restore this paper to the list" : "Hide this paper from the list";
+  tr.classList.toggle("dim", willSkip);
+  // In the default ( hide-skipped ) view, mark the row for removal on the next
+  // batch and keep the server paging offset aligned: skipping shrinks the
+  // server's filtered list by one, unskipping grows it back.
+  if(!showSkipped){
+    tr.classList.toggle("pending-skip", willSkip);
+    cur.offset = Math.max(0, cur.offset + (willSkip ? -1 : 1));
+  }
+});
 
 function showBuilding(msg){
   ready = false;
@@ -311,8 +466,67 @@ $("#refresh").addEventListener("click", async ()=>{
   pollUntilReady();
   $("#refresh").disabled = false;
 });
+$("#toggleSkipped").addEventListener("click", ()=>{
+  showSkipped = !showSkipped;
+  const btn = $("#toggleSkipped");
+  btn.textContent = showSkipped ? "🚫 Hide skipped" : "🚫 Show skipped";
+  btn.classList.toggle("active", showSkipped);
+  if(ready) newSearch();
+});
 
 pollUntilReady();
+
+// ---- Live --watch processing banner ----------------------------------------
+// Independent of the index-build poll above. Hits /api/jobs on a steady timer:
+// shows a toast while the background worker ( ` prma server --watch ` ) is
+// scanning / processing a paper you just added to Zotero / Mendeley, and
+// silently refreshes counts + the current view when a batch finishes, so new
+// rows appear without a manual Rebuild. When the server runs without --watch,
+// /api/jobs reports disabled and this stays completely quiet.
+const STAGE_LABEL = {
+  starting:"starting", openalex:"OpenAlex", yolo:"layout (YOLO)", ocr:"OCR",
+  images:"figures", methods:"methods", md:"markdown", summarize:"summary",
+  reindex:"indexing", done:"done",
+};
+function showProc(title, sub){
+  $("#pb-title").textContent = title;
+  $("#pb-sub").textContent = sub || "";
+  $("#procbar").classList.add("show");
+}
+function hideProc(){ $("#procbar").classList.remove("show"); }
+
+let procBusy = false, jobsTimer = null;
+async function pollJobs(){
+  let j;
+  try { j = await (await fetch("/api/jobs")).json(); }
+  catch(e){ j = { enabled:false }; }
+  if(j && j.enabled){
+    const a = j.active;
+    if(a){
+      procBusy = true;
+      showProc(`Processing “${a.title || a.key}”`, `${STAGE_LABEL[a.stage] || a.stage}…`);
+    } else if(j.scanning){
+      procBusy = true;
+      showProc("Checking your library…", "looking for newly added papers");
+    } else {
+      hideProc();
+      if(procBusy){
+        // A batch just finished -> pull fresh counts + re-run the current
+        // search so the new paper(s) show up. Only once the index is serving.
+        procBusy = false;
+        if(ready){
+          try { META = await (await fetch("/api/meta")).json(); } catch(e){}
+          renderCounts();
+          newSearch();
+        }
+      }
+    }
+  } else {
+    hideProc();
+  }
+  jobsTimer = setTimeout(pollJobs, 2000);
+}
+pollJobs();
 </script>
 </body>
 </html>

@@ -107,10 +107,14 @@ def _matches( hay , clauses ):
 
 
 _SORT_KEYS = {
-	"lib_cites": lambda r: ( r.get( "lib_cites" ) or 0 , r.get( "cited_by" ) or 0 ) ,
-	"cited_by":  lambda r: ( r.get( "cited_by" )  or 0 , r.get( "lib_cites" ) or 0 ) ,
-	"year":      lambda r: ( r.get( "year" )      or 0 , r.get( "cited_by" ) or 0 ) ,
-	"title":     lambda r: ( r.get( "title" )     or "" ).lower() ,
+	"lib_cites":  lambda r: ( r.get( "lib_cites" ) or 0 , r.get( "cited_by" ) or 0 ) ,
+	"cited_by":   lambda r: ( r.get( "cited_by" )  or 0 , r.get( "lib_cites" ) or 0 ) ,
+	"year":       lambda r: ( r.get( "year" )      or 0 , r.get( "cited_by" ) or 0 ) ,
+	"title":      lambda r: ( r.get( "title" )     or "" ).lower() ,
+	# created_at is the per-paper record's ISO-8601 timestamp ( In-Library
+	# "Added" column ) ; lexicographic order == chronological. Blank ( older
+	# records that predate the field ) sorts last on the default desc.
+	"created_at": lambda r: ( r.get( "created_at" ) or "" ) ,
 }
 
 

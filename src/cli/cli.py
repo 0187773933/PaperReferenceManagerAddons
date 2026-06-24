@@ -357,6 +357,22 @@ def crawl( sub , global_parser ):
 		"crawl_out_name":       None  ,
 	}
 
+def process( sub , global_parser ):
+	p = sub.add_parser(
+		"process" ,
+		parents=[ global_parser ] ,
+		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> md ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper. Pass --summarize to also run the LLM summary ( costs money )."
+	)
+	p.add_argument( "process_query" ,
+		help="DOI ( exact ) or title ( fuzzy-matched ) of the paper to process" )
+	p.add_argument( "--summarize" , dest="process_summarize" ,
+		action="store_true" , default=False ,
+		help="Also run the LLM summarize stage ( off by default ; costs LLM calls )" )
+	p.set_defaults( _entry=tasks.process )
+	return {
+		"process_summarize": False ,
+	}
+
 def reindex( sub , global_parser ):
 	p = sub.add_parser(
 		"reindex" ,
@@ -384,12 +400,30 @@ def server( sub , global_parser ):
 		help="Min seconds between source stat() checks" )
 	p.add_argument( "--ttl"      , type=float , default=60.0 ,
 		help="TTL for managers without an mtime watch ( Mendeley API )" )
+	p.add_argument( "--watch" , dest="watch" , action="store_true" , default=False ,
+		help="Live processing : a background worker detects papers you add to "
+		     "your manager , runs the full per-paper suite on each "
+		     "( openalex -> yolo -> ocr -> images -> methods -> md ) , and "
+		     "rebuilds the dashboard index so new papers appear automatically. "
+		     "Off by default ( the suite is CPU-heavy )." )
+	p.add_argument( "--watch-summarize" , dest="watch_summarize" ,
+		action="store_true" , default=False ,
+		help="Also run the LLM summarize stage on each auto-processed paper "
+		     "( only meaningful with --watch ; costs LLM calls )." )
+	p.add_argument( "--no-watch-backlog" , dest="watch_backlog" ,
+		action="store_false" , default=True ,
+		help="With --watch , skip the startup backlog sweep ( don't process "
+		     "papers already in the library that have undone tasks ; only act "
+		     "on papers added after the server starts )." )
 	p.set_defaults( _entry=tasks.server )
 	return {
-		"host":     "127.0.0.1" ,
-		"port":     9371        ,
-		"debounce": 0.5         ,
-		"ttl":      60.0        ,
+		"host":            "127.0.0.1" ,
+		"port":            9371        ,
+		"debounce":        0.5         ,
+		"ttl":             60.0        ,
+		"watch":           False       ,
+		"watch_summarize": False       ,
+		"watch_backlog":   True        ,
 	}
 
 REGISTRARS = (
@@ -409,6 +443,7 @@ REGISTRARS = (
 	mendeley   ,
 	zotero     ,
 	crawl      ,
+	process    ,
 	reindex    ,
 	server     ,
 )

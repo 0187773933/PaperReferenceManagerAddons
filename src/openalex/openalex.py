@@ -132,13 +132,15 @@ class OpenAlex():
 					n_cache_hit += 1
 					continue
 				else:
-					print( "searching title" , paper_title_normalized )
+					# No-DOI item ( e.g. a ProQuest / webpage entry ) : try an
+					# OpenAlex title search. A miss here is expected for non-
+					# article items and is recorded in failed_meta below ( and
+					# surfaced on the errors page ) , so we don't print. Cache the
+					# result ( a doi or None ) so we never re-search it.
 					search_results = self.API.search_title( paper_title_normalized )
 					paper_dois = [ p.get( "doi" ) for p in search_results if p.get( "doi" ) is not None ]
 					if paper_dois:
 						paper_doi = paper_dois[ 0 ] # Todo
-					else:
-						print( "still nothing" , snapshot[ key ] , search_results )
 					utils.write_json( _cached_fp , { "id": _id , "doi": paper_doi , "title": paper_title } )
 			if not paper_doi:
 				failed_meta.append( ( _id , "no DOI ; OpenAlex title search found nothing" ) )
@@ -205,10 +207,10 @@ class OpenAlex():
 				#
 				# To force a retry ( e.g. publisher fixed the DOI ) :
 				#   rm output/cache/openalex/<base64>.json
-				print(
-					f"\nNo OpenAlex data for DOI: {paper_doi_normalized} "
-					f"; caching as tombstone -> {paper_cached_fp.name}"
-				)
+				#
+				# Expected and common ( unindexed work or a malformed DOI in the
+				# source manager ) -- recorded in failed_meta below and counted as
+				# `newly-tombstoned` in the run summary , so no per-DOI print.
 				from datetime import datetime , timezone
 				try:
 					utils.write_json( paper_cached_fp , {

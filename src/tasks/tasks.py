@@ -103,3 +103,11 @@ def reindex( args ):
 def crawl( args ):
 	from . import crawl
 	crawl.crawl( args )
+
+def process( args ):
+	# Find one paper by DOI / title and run the full per-paper suite on just
+	# it ( openalex -> yolo -> ocr -> images -> methods -> md [ -> summarize ] ) ,
+	# then reindex so the dashboard reflects it. Shares run_suite() with the
+	# server's live --watch worker.
+	from . import process as process_task
+	process_task.run( args )

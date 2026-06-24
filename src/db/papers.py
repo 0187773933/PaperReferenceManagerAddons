@@ -139,10 +139,42 @@ def exists( args , key ):
 	return paper_path( args , key ).exists()
 
 
-def iter_all( args ):
+def iter_all( args , only=None ):
 	"""Yield every ( key , paper_dict ) currently in the DB , where key is
 	the record's primary key ( normalized DOI , or synthetic nodoi-... key
-	for papers that have no DOI )."""
+	for papers that have no DOI ).
+
+	SCOPING. `only` -- or ` getattr( args , 'only_keys' , None ) ` when `only`
+	is left at its default -- is an optional iterable of primary keys ( raw
+	DOIs / synthetic keys , normalized here ). When present , iteration is
+	restricted to JUST those papers and they're loaded DIRECTLY by key ( no
+	full-directory walk ) , so a one-paper scope reads one file instead of
+	the whole library. This is the single chokepoint that lets ` prma process
+	<doi> ` and the server's live --watch worker run the per-paper PDF tasks
+	( yolo / ocr / images / preprocess / md / methods / summarize -- they ALL
+	plan off iter_all ) against one freshly-added paper : the caller sets
+	` args.only_keys = { key } ` , every task auto-scopes , and the caller
+	clears it again.
+
+	CAUTION : the snapshot-diff helper ( tasks/snapshot._snapshot_dois ) and
+	the dashboard indexer must see the WHOLE library , so callers MUST set
+	only_keys ONLY around the scoped task phase -- never across a snapshot or
+	reindex."""
+	scope = only if only is not None else getattr( args , "only_keys" , None )
+	if scope is not None:
+		seen = set()
+		for raw in scope:
+			nk = _normalize_lookup( raw )
+			if not nk or nk in seen:
+				continue
+			seen.add( nk )
+			paper = load( args , nk )
+			if paper is None:
+				continue
+			key = record_key( paper )
+			if key:
+				yield key , paper
+		return
 	for p in sorted( papers_dir( args ).glob( "*.json" ) ):
 		try:
 			data = utils.read_json( p )

@@ -15,13 +15,20 @@ Both end up calling run( args ). The args namespace must have:
     host , port , debounce , ttl
 """
 
+import os
+import re
+import sys
+import html
 import json
 import time
+import shutil
+import contextlib
+import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler , HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from urllib.parse import urlparse , parse_qs
+from urllib.parse import urlparse , parse_qs , unquote
 from typing import Dict , List , Optional , Set , Tuple
 
 from rapidfuzz import fuzz , process
@@ -76,10 +83,17 @@ class DashboardData:
 		self.references  = []
 		self.cited_by    = []
 		self.authors     = []
+		self.library     = []
 		self.built_at    = None
 		self.lib_count   = 0
 		self.missing_count = 0
 		self._loaded_mtime = 0.0   # mtime of the on-disk index we last loaded
+		# Skip set : dashboard row keys the user has hidden ( the 'Skip' button ).
+		# Independent of the index ; loaded once and kept in memory , persisted on
+		# every change. Copy-on-write ( see set_skip ) so search readers never
+		# iterate a mutating set.
+		self.skipped     = set()
+		self._skip_lock  = threading.Lock()
 
 	def ensure_build( self , refresh=False ):
 		"""Start a background build if one isn't already running. Non-blocking ,
@@ -132,6 +146,7 @@ class DashboardData:
 			self.references    = pools.get( "references" ) or []
 			self.cited_by      = pools.get( "cited_by" )   or []
 			self.authors       = pools.get( "authors" )    or []
+			self.library       = pools.get( "library" )    or []
 			self.built_at      = pools.get( "built_at" )
 			self.lib_count     = pools.get( "lib_count" , 0 )
 			self.missing_count = pools.get( "missing_count" , len( self.references ) )
@@ -163,6 +178,29 @@ class DashboardData:
 			print( "dashboard :: detected fresher on-disk index ; reloading" )
 			self.load_from_disk()
 
+	def rebuild_after_process( self ):
+		"""Rebuild the index off disk ( no network ) after the live --watch
+		worker processed new paper(s) , and swap the fresh pools in WITHOUT
+		flipping the dashboard into the 'building' state -- a user mid-search
+		isn't interrupted ; the new rows just show up on their next query.
+		The build is incremental ( only the changed papers + their new refs )
+		so this is cheap. Errors are logged , never raised.
+
+		If a manual build happens to be running ( status 'building' ) we leave
+		its state alone ; otherwise we mark 'ready' so the fresh pools are
+		immediately queryable even if nobody has opened the dashboard yet."""
+		from ..dashboard import indexer
+		try:
+			pools = indexer.build( self.args )
+			self._apply_pools( pools )
+			self._loaded_mtime = indexer.state_mtime( self.args )
+			with self._build_lock:
+				if self.status != "building":
+					self.status = "ready"
+					self.error  = ""
+		except Exception as e:
+			print( f"dashboard :: post-process reindex failed ( {e} )" )
+
 	def meta( self ):
 		with self._data_lock:
 			return {
@@ -173,6 +211,7 @@ class DashboardData:
 				"references":    len( self.references ) , # missing : you cite them
 				"cited_by":      len( self.cited_by ) ,   # missing : they cite you
 				"authors":       len( self.authors ) ,
+				"library":       len( self.library ) ,    # searchable : papers you HAVE
 				"built_at":      self.built_at ,
 				"manager":       getattr( self.args , "manager" , "" ) ,
 			}
@@ -182,6 +221,8 @@ class DashboardData:
 			return self.references
 		if name == "cited_by":
 			return self.cited_by
+		if name == "library":
+			return self.library
 		if name == "external":
 			# Everything you don't have : works you cite + works citing you ,
 			# deduped by WID ( a work can be on both sides ).
@@ -194,23 +235,63 @@ class DashboardData:
 			return out
 		return []
 
-	def search( self , query , pool , sort , limit , offset=0 , direction=None ):
+	def load_skips( self ):
+		"""Populate the in-memory skip set from disk ( call at startup )."""
+		from ..db import skips
+		try:
+			self.skipped = skips.load( self.args )
+		except Exception as e:
+			print( f"dashboard :: could not load skip list ( {e} )" )
+			self.skipped = set()
+
+	def set_skip( self , key , skipped ):
+		"""Record ( skipped=True ) or clear ( False ) a row's skipped state and
+		persist it. Copy-on-write : rebind self.skipped to a NEW set so a
+		concurrent search() reader holding the old reference never iterates a
+		mutating set. Returns the new boolean state."""
+		from ..db import skips
+		key = ( key or "" ).strip()
+		if not key:
+			return False
+		with self._skip_lock:
+			s = set( self.skipped )
+			if skipped: s.add( key )
+			else:       s.discard( key )
+			self.skipped = s
+			try:
+				skips.save( self.args , s )
+			except Exception as e:
+				print( f"dashboard :: could not persist skip list ( {e} )" )
+		return bool( skipped )
+
+	def search( self , query , pool , sort , limit , offset=0 , direction=None ,
+			hide_skipped=True ):
 		from ..dashboard import index as dash_index
+		skipped = self.skipped   # copy-on-write set : safe to read lock-free
 		with self._data_lock:
 			if self.status != "ready":
 				return { "status": self.status , "pool": pool , "total": 0 ,
 					"shown": 0 , "offset": offset , "results": [] }
 			rows = self._pool( pool )
+			# Drop skipped rows BEFORE sort + paging so total / offset stay
+			# correct ( the data is still in the pool -- this is just the view ).
+			if hide_skipped and skipped:
+				rows = [ r for r in rows if r.get( "key" ) not in skipped ]
 			total , page = dash_index.search(
 				rows , query , sort=sort , limit=limit ,
 				offset=offset , direction=direction )
+		results = []
+		for r in page:
+			pub = dash_index.to_public( r )
+			pub[ "skipped" ] = r.get( "key" ) in skipped
+			results.append( pub )
 		return {
 			"status":  "ready" ,
 			"pool":    pool ,
 			"total":   total ,
 			"offset":  offset ,
 			"shown":   len( page ) ,
-			"results": [ dash_index.to_public( r ) for r in page ] ,
+			"results": results ,
 		}
 
 	def author_table( self , limit ):
@@ -252,6 +333,77 @@ def _load_status_html():
 # Serializes status recomputes so a flurry of /status loads can't kick off
 # several full library walks at once ; they share the one in-flight result.
 _STATUS_LOCK = threading.Lock()
+
+
+def _md_inline( s ):
+	"""Inline Markdown -> HTML for one block : images , links , bold. Text is
+	HTML-escaped first ; the markdown delimiters ( ! [ ] ( ) * ) survive
+	escaping so the regexes still match. Image regex runs before the link
+	regex so '![alt](src)' isn't mis-parsed as a link."""
+	s = html.escape( s )
+	s = re.sub( r"!\[([^\]]*)\]\(([^)]+)\)" ,
+		r'<img alt="\1" src="\2" loading="lazy">' , s )
+	s = re.sub( r"\[([^\]]+)\]\(([^)]+)\)" ,
+		r'<a href="\2" target="_blank">\1</a>' , s )
+	s = re.sub( r"\*\*([^*]+)\*\*" , r"<strong>\1</strong>" , s )
+	return s
+
+
+def _md_to_html( md ):
+	"""Minimal Markdown -> HTML covering exactly what ` prma md ` emits :
+	'### ' subsection headings , **bold** captions , ![img](src) figures ,
+	[text](url) links , and blank-line-separated paragraphs."""
+	out = []
+	for block in re.split( r"\n\s*\n" , md ):
+		block = block.strip( "\n" )
+		if not block.strip():
+			continue
+		m = re.match( r"^#{3,6}\s+(.*)$" , block.strip() )
+		if m and "\n" not in block.strip():
+			out.append( f"<h4>{_md_inline( m.group( 1 ) )}</h4>" )
+		else:
+			out.append( f"<p>{_md_inline( block ).replace( chr( 10 ) , '<br>' )}</p>" )
+	return "\n".join( out )
+
+
+def _paper_md_payload( args , key ):
+	"""Split a library paper's ` prma md ` render into per-section HTML for the
+	'Read' accordion. Relative image links ( ../images/... ) are rewritten to
+	the server's /images/ route so figures resolve. Sections split on the
+	'## ' headers the md renderer emits ; the '# Title' line becomes the page
+	title , anything before the first '## ' becomes an 'Overview' section."""
+	from ..db import papers as papers_db
+	paper  = papers_db.load( args , key )
+	rk     = papers_db.record_key( paper ) if paper else key
+	prefix = utils.doi_to_filename( rk ) if rk else None
+	md_path = args.output.joinpath( "md" , f"{prefix}.md" ) if prefix else None
+	if not ( md_path and md_path.exists() ):
+		return { "available": False }
+	try:
+		text = md_path.read_text( encoding="utf-8" )
+	except Exception as e:
+		return { "available": False , "error": str( e ) }
+	text = text.replace( "](../images/" , "](/images/" )
+
+	title , raw = ( paper or {} ).get( "title" ) or "" , []
+	cur , buf = None , []
+	for line in text.splitlines():
+		if line.startswith( "## " ):
+			if cur is not None or any( s.strip() for s in buf ):
+				raw.append( ( cur , buf ) )
+			cur , buf = line[ 3: ].strip() , []
+		elif line.startswith( "# " ) and cur is None and not title:
+			title = line[ 2: ].strip()
+		else:
+			buf.append( line )
+	if cur is not None or any( s.strip() for s in buf ):
+		raw.append( ( cur , buf ) )
+
+	sections = [
+		{ "title": ( t or "Overview" ) , "html": _md_to_html( "\n".join( b ) ) }
+		for t , b in raw
+	]
+	return { "available": True , "key": key , "title": title , "sections": sections }
 
 
 def _status_payload( args , regen=False ):
@@ -436,6 +588,382 @@ class SnapshotCache:
 		return self._titles , self._dois
 
 
+# ---------------------------------------------------------------------------
+# Clean , bounded progress for the live --watch worker
+# ---------------------------------------------------------------------------
+# The per-paper suite runs SIX library tasks ( yolo / ocr / images / methods /
+# md ) , each of which prints its own planning + summary lines and spins up its
+# own tqdm bar -- so processing a batch of new papers floods the console. For
+# the background worker we don't want that : we swallow ALL of that sub-task
+# chatter and render our own tidy , self-updating single status line ( one
+# carriage-returned row : paper k/N -> stage bar -> elapsed -> title ). The rich ,
+# granular live view lives on the dashboard's /api/jobs toast ; the console just
+# needs to stay readable.
+
+@contextlib.contextmanager
+def _silence_tasks():
+	"""Silence the per-task chatter while the worker processes papers :
+	  - swallow stdout ( every ` YOLO :: ... ` / ` OCR :: ... ` / planning line
+	    the tasks print ) ;
+	  - disable every tqdm bar the tasks create ( tqdm writes to stderr ) .
+	Yields the REAL stdout so the worker can draw its own progress block on it.
+	Restored on exit even if a stage raises.
+
+	Process-wide for the duration ( the /exists request log is also quiet while
+	a paper processes ) -- acceptable : --watch is opted into for background
+	processing , and the rich live view is on the dashboard."""
+	import tqdm as _tqdm_pkg
+	tqdm_cls   = _tqdm_pkg.std.tqdm
+	orig_init  = tqdm_cls.__init__
+	real_stdout = sys.stdout
+	devnull = open( os.devnull , "w" )
+
+	def _disabled_init( self , *a , **k ):
+		k[ "disable" ] = True          # force-off ; overrides any caller value
+		orig_init( self , *a , **k )
+
+	try:
+		sys.stdout = devnull
+		tqdm_cls.__init__ = _disabled_init
+		yield real_stdout
+	finally:
+		sys.stdout = real_stdout
+		tqdm_cls.__init__ = orig_init
+		try: devnull.close()
+		except Exception: pass
+
+
+def _progress_bar( frac , width=22 ):
+	frac = 0.0 if frac < 0 else ( 1.0 if frac > 1 else frac )
+	fill = int( round( frac * width ) )
+	return "█" * fill + "░" * ( width - fill )
+
+
+class _LiveStatus:
+	"""A single self-updating status line for the watch worker -- the same
+	technique tqdm uses ( carriage-return rewrite of ONE line ) , chosen over a
+	multi-line ANSI block because that stacks / garbles the moment a line wraps
+	at the terminal width. Everything stays on one nested line :
+
+	  watch · 2/12 · [███████░░░] 3/6 ocr · 14s · Multi-echo versus single-echo…
+
+	  paper k/N  ·  stage bar s/S <stage>  ·  elapsed in this stage  ·  title
+
+	Processing is strictly sequential ( run_suite finishes yolo before ocr , … ) ;
+	this line just advances through the stages. A 1 Hz ticker keeps the elapsed
+	counter live so a long OCR never looks frozen , and the line is truncated to
+	the terminal width so it can never wrap onto a second row. When stdout isn't
+	a TTY ( piped / logged ) it degrades to one printed line per PAPER -- no
+	carriage returns or cursor codes to garble a logfile."""
+
+	def __init__( self , stream , total_papers , stages ):
+		self.s        = stream
+		self.total    = max( 1 , total_papers )
+		self.stages   = list( stages )
+		self.n_stages = max( 1 , len( self.stages ) )
+		self.tty      = bool( getattr( stream , "isatty" , lambda: False )() )
+		self.paper_i  = 0
+		self.title    = ""
+		self.stage_i  = 0
+		self.stage    = ""
+		self.t_stage  = time.time()
+		self._active  = False   # have we drawn a live line that needs clearing?
+		self._lock    = threading.Lock()
+		self._stop    = False
+		self._ticker  = threading.Thread( target=self._tick_loop , daemon=True )
+		self._ticker.start()
+
+	def start_paper( self , i , title ):
+		self.paper_i = i
+		self.title   = title or ""
+		self.stage_i = 0
+		self.stage   = ""
+		self.t_stage = time.time()
+		self._render( new_paper=True )
+
+	def start_stage( self , stage ):
+		self.stage   = stage
+		self.stage_i = ( self.stages.index( stage ) + 1 ) if stage in self.stages \
+		             else min( self.stage_i + 1 , self.n_stages )
+		self.t_stage = time.time()
+		self._render( new_paper=False )
+
+	def _tick_loop( self ):
+		while not self._stop:
+			time.sleep( 1.0 )
+			self._render( new_paper=False , tick=True )
+
+	def _render( self , new_paper , tick=False ):
+		with self._lock:
+			if self._stop:
+				return
+			elapsed = int( time.time() - self.t_stage )
+			if self.tty:
+				bar  = _progress_bar( self.stage_i / self.n_stages , width=10 )
+				line = ( f"watch · {self.paper_i}/{self.total} · [{bar}] "
+				         f"{self.stage_i}/{self.n_stages} {self.stage or '…'} · "
+				         f"{elapsed}s · {self.title}" )
+				width = shutil.get_terminal_size( ( 100 , 24 ) ).columns
+				if len( line ) > width - 1:
+					line = line[ : width - 2 ] + "…"
+				self.s.write( "\r\033[K" + line )      # col 0 , clear to EOL , rewrite
+				self.s.flush()
+				self._active = True
+			elif new_paper:
+				# Non-TTY : one line per paper ( the heartbeat / per-stage churn
+				# would just spam a logfile ).
+				self.s.write( f"watch :: processing [{self.paper_i}/{self.total}] {self.title}\n" )
+				self.s.flush()
+
+	def close( self , msg=None ):
+		self._stop = True
+		with self._lock:
+			if self.tty and self._active:
+				self.s.write( "\r\033[K" )    # wipe the live line
+				self._active = False
+			if msg:
+				self.s.write( msg + "\n" )
+			self.s.flush()
+
+
+class ProcessWorker:
+	"""
+	Live processing ( ` prma server --watch ` ).
+
+	A background daemon thread that watches the same source the SnapshotCache
+	watches ( Zotero SQLite mtime ; a TTL poll for Mendeley's API ) and , when
+	the library changes , brings the unified DB in sync and runs the full
+	per-paper suite on every paper that's NEW since the last sync :
+
+	  get_common( snapshot + auto OpenAlex for new DOIs )
+	    -> for each new key : process.run_suite ( yolo -> ocr -> images ->
+	       methods -> md [ -> summarize ] , scoped to that one paper )
+	    -> ONE dashboard reindex for the batch
+
+	On startup it first sweeps the BACKLOG -- every library paper that still has
+	undone pipeline work ( no yolo / md / methods ) -- and processes it quietly
+	in the background ( disable with backlog=False ) , then watches for newly
+	added papers from there on.
+
+	Console output stays tidy : all the sub-task chatter is silenced and progress
+	is shown as one self-updating status line ( see
+	_silence_tasks / _LiveStatus ). The granular live view is on the
+	dashboard's /api/jobs toast , which this also feeds via a thread-safe job log.
+
+	We reuse the SnapshotCache's watch-file signature so the worker and the
+	/exists hot path agree on "did the source change", and seed last_sig at
+	startup so the WATCH side only acts on papers added AFTER boot ( the backlog
+	sweep handles what's already there ).
+	"""
+
+	# Floor on how often we re-stat the source , even under a tight mtime
+	# change loop , so a burst of Zotero writes coalesces into one scan.
+	_MIN_INTERVAL = 2.0
+
+	def __init__( self , args , dash , cache , summarize=False , backlog=True ):
+		self.args      = args
+		self.dash      = dash
+		self.cache     = cache
+		self.summarize = summarize
+		self.backlog   = backlog
+		self._lock     = threading.Lock()
+		self._active   = None     # job dict currently processing , or None
+		self._recent   = []       # finished jobs , newest first ( capped )
+		self._scanning = False
+		# Seed from the current source signature so the WATCH side is a no-op at
+		# boot : it only acts on changes AFTER the server comes up. ( The backlog
+		# sweep , below , is what processes papers already in the library. )
+		self._last_sig  = cache._source_sig()
+		self._last_scan = time.time()
+
+	# -- public ( read by the /api/jobs handler ) ----------------------------
+
+	def snapshot_jobs( self ):
+		with self._lock:
+			return {
+				"enabled":  True ,
+				"scanning": self._scanning ,
+				"active":   dict( self._active ) if self._active else None ,
+				"recent":   [ dict( j ) for j in self._recent[ :20 ] ] ,
+			}
+
+	# -- lifecycle -----------------------------------------------------------
+
+	def start( self ):
+		t = threading.Thread( target=self._loop , daemon=True )
+		t.start()
+		return self
+
+	def _loop( self ):
+		# First , clear whatever's already undone in the library ( background ) ,
+		# then settle into watching for newly added papers.
+		if self.backlog:
+			try:
+				self._run_backlog()
+			except Exception as e:
+				print( f"watch :: backlog sweep failed ( {e!r} )" )
+		while True:
+			try:
+				self._tick()
+			except Exception as e:
+				print( f"watch :: tick failed ( {e!r} )" )
+			time.sleep( self._MIN_INTERVAL )
+
+	# -- backlog : finish papers with undone pipeline work -------------------
+
+	def _backlog_keys( self ):
+		"""Library papers that still have undone pipeline work : a PDF on disk
+		but missing yolo data , the rendered md , or the methods extract. Cheap
+		identity + file-existence scan ( one stat per output ). Papers YOLO has
+		already failed on are skipped so we don't retry a doomed PDF every boot.
+		Newest-updated first , so the freshest additions clear soonest."""
+		from ..db    import papers as papers_db
+		from ..utils import utils
+		md_dir      = self.args.output.joinpath( "md" )
+		methods_dir = self.args.output.joinpath( "methods" )
+		need = []
+		for key , paper in papers_db.iter_all( self.args ):
+			if not paper.get( "pdf_path" ):
+				continue                               # nothing to process
+			if paper.get( papers_db.YOLO_FAILED_KEY ):
+				continue                               # don't retry a dead PDF
+			prefix      = utils.doi_to_filename( key )
+			has_yolo    = bool( ( paper.get( "yolo" ) or {} ).get( "pages" ) )
+			has_md      = md_dir.joinpath( f"{prefix}.md" ).exists()
+			has_methods = methods_dir.joinpath( f"{prefix}.txt" ).exists()
+			if not ( has_yolo and has_md and has_methods ):
+				need.append( ( paper.get( "updated_at" ) or "" , key ) )
+		need.sort( reverse=True )
+		return [ k for _ , k in need ]
+
+	def _run_backlog( self ):
+		keys = self._backlog_keys()
+		if not keys:
+			print( "watch :: backlog clear -- every library paper is processed" )
+			return
+		print(
+			f"watch :: backlog -- {len( keys )} paper(s) with undone tasks ; "
+			f"processing quietly in the background ( Ctrl-C to stop )"
+		)
+		self._process_batch( keys , label="backlog" )
+
+	# -- one polling tick ----------------------------------------------------
+
+	def _should_scan( self ):
+		"""True when the source changed since we last looked ( Zotero mtime ) ,
+		or -- for a manager with no file to watch ( Mendeley ) -- when the TTL
+		has elapsed."""
+		sig = self.cache._source_sig()
+		now = time.time()
+		if sig is None:
+			if ( now - self._last_scan ) >= self.cache.ttl:
+				self._last_scan = now
+				return True
+			return False
+		if sig != self._last_sig:
+			self._last_sig  = sig
+			self._last_scan = now
+			return True
+		return False
+
+	def _tick( self ):
+		if not self._should_scan():
+			return
+
+		with self._lock:
+			self._scanning = True
+		try:
+			new_keys = self._snapshot_and_diff()
+		finally:
+			with self._lock:
+				self._scanning = False
+
+		if not new_keys:
+			return
+
+		print( f"watch :: {len( new_keys )} new paper(s) -> processing" )
+		self._process_batch( new_keys , label="new" )
+
+	def _snapshot_and_diff( self ):
+		"""Snapshot the manager into the unified DB and return the primary
+		keys that are NEW since the previous DB state ( sorted ). get_common
+		also auto-fetches OpenAlex meta for the new DOIs as a side effect."""
+		from ..db    import papers as papers_db
+		before = { k for k , _ in papers_db.iter_all( self.args ) }
+		view   = snap_module.get_common( self.args )
+		after  = set( view.keys() )
+		return sorted( after - before )
+
+	def _stage_seq( self ):
+		"""The stages run_suite drives ( for the progress block ) , in order."""
+		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "md" ]
+		if self.summarize:
+			seq.append( "summarize" )
+		return seq
+
+	def _process_batch( self , keys , label ):
+		"""Process a list of paper keys ( a backlog sweep or a batch of newly
+		added papers ) one at a time , scoped to each , with all sub-task chatter
+		silenced and a single tidy nested-bar block on the console. Feeds the
+		/api/jobs log as it goes , then does ONE quiet dashboard reindex for the
+		whole batch at the end."""
+		from ..db    import papers as papers_db
+		from ..tasks import process as process_task
+		stages = self._stage_seq()
+		n_ok , n_err = 0 , 0
+		t0 = time.time()
+
+		with _silence_tasks() as real_stdout:
+			prog_ui = _LiveStatus( real_stdout , len( keys ) , stages )
+			try:
+				for i , key in enumerate( keys , 1 ):
+					title = ( papers_db.load( self.args , key ) or {} ).get( "title" ) or key
+					job = {
+						"key": key , "title": title , "stage": "starting" ,
+						"status": "processing" , "started": time.time() ,
+					}
+					with self._lock:
+						self._active = job
+					prog_ui.start_paper( i , title )
+
+					def prog( stage , _job=job ):
+						with self._lock:
+							_job[ "stage" ] = stage
+						prog_ui.start_stage( stage )
+
+					try:
+						# reindex=False : one batch-level rebuild below covers all.
+						process_task.run_suite(
+							self.args , [ key ] ,
+							summarize = self.summarize ,
+							progress  = prog ,
+							reindex   = False ,
+						)
+						job[ "status" ] = "done"
+						n_ok += 1
+					except Exception as e:
+						job[ "status" ] = "error"
+						job[ "error" ]  = str( e )
+						n_err += 1
+					finally:
+						job[ "finished" ] = time.time()
+						with self._lock:
+							self._active = None
+							self._recent.insert( 0 , job )
+							del self._recent[ 50: ]
+			finally:
+				prog_ui.close()
+
+		# One reindex for the whole batch ( cheaper than per-paper ) , applied
+		# quietly so anyone browsing isn't bounced to a build screen.
+		self.dash.rebuild_after_process()
+		errs = f" , {n_err} failed" if n_err else ""
+		print(
+			f"watch :: {label} done -- processed {n_ok} paper(s){errs} "
+			f"in {time.time() - t0:.0f}s ; dashboard index refreshed"
+		)
+
+
 TITLE_THRESHOLD = 96
 
 
@@ -470,8 +998,9 @@ class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
 
 
 class Handler( BaseHTTPRequestHandler ):
-	cache: SnapshotCache = None   # injected at startup
-	dash:  DashboardData = None   # injected at startup
+	cache:  SnapshotCache = None   # injected at startup
+	dash:   DashboardData = None   # injected at startup
+	worker: "ProcessWorker" = None # injected at startup IFF --watch ; else None
 
 	def log_message( self , *_ ):
 		return
@@ -487,13 +1016,41 @@ class Handler( BaseHTTPRequestHandler ):
 		self.end_headers()
 		self.wfile.write( raw )
 
-	def _send_html( self , code: int , html: str ):
-		raw = html.encode( "utf-8" )
+	def _send_html( self , code: int , page: str ):
+		raw = page.encode( "utf-8" )
 		self.send_response( code )
 		self.send_header( "Content-Type"   , "text/html; charset=utf-8" )
 		self.send_header( "Content-Length" , str( len( raw ) ) )
+		# These pages are read fresh from disk each request ; never let the
+		# browser serve a stale copy after a hand-edit / update.
+		self.send_header( "Cache-Control"  , "no-store" )
 		self.end_headers()
 		self.wfile.write( raw )
+
+	def _send_static( self , base , rel ):
+		"""Serve a file under `base` ( e.g. output/images/ ) by relative path ,
+		with a path-traversal guard so only files actually inside `base` are
+		reachable. Used for the figure crops / montages that ` prma md ` links
+		and the 'Figures' column points at."""
+		base_r = Path( base ).resolve()
+		target = ( base_r / unquote( rel ) ).resolve()
+		if target != base_r and base_r not in target.parents:
+			self._send_json( 403 , { "error": "forbidden" } )
+			return
+		if not ( target.exists() and target.is_file() ):
+			self._send_json( 404 , { "error": "not found" } )
+			return
+		ctype = mimetypes.guess_type( str( target ) )[ 0 ] or "application/octet-stream"
+		try:
+			data = target.read_bytes()
+		except Exception as e:
+			self._send_json( 500 , { "error": str( e ) } )
+			return
+		self.send_response( 200 )
+		self.send_header( "Content-Type"   , ctype )
+		self.send_header( "Content-Length" , str( len( data ) ) )
+		self.end_headers()
+		self.wfile.write( data )
 
 	def _send_pdf( self , key ):
 		"""Stream a library paper's local PDF , looked up by its primary key
@@ -569,6 +1126,27 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_pdf( self._arg( self._qs() , "key" , "" ) )
 			return
 
+		if path == "/api/paper":
+			# Sectioned Markdown for the 'In Library' Read accordion.
+			self._send_json( 200 , _paper_md_payload(
+				self.dash.args , self._arg( self._qs() , "key" , "" ) ) )
+			return
+
+		if path.startswith( "/images/" ):
+			self._send_static( self.dash.args.output.joinpath( "images" ) ,
+				path[ len( "/images/" ): ] )
+			return
+
+		if path == "/api/jobs":
+			# Live --watch progress for the dashboard's processing banner.
+			# When the server is running WITHOUT --watch , the worker is None
+			# and we report disabled so the front-end stays quiet.
+			if self.worker is None:
+				self._send_json( 200 , { "enabled": False } )
+			else:
+				self._send_json( 200 , self.worker.snapshot_jobs() )
+			return
+
 		if path == "/api/meta":
 			# Pick up a fresher ` prma reindex ` if one happened ; otherwise ,
 			# if we've NEVER built an index, opening the dashboard is the
@@ -584,6 +1162,9 @@ class Handler( BaseHTTPRequestHandler ):
 
 		if path == "/api/search":
 			qs = self._qs()
+			# hide_skipped defaults ON : skipped rows are filtered out unless the
+			# dashboard's "Show skipped" toggle asks for them ( hide_skipped=0 ).
+			hide = self._arg( qs , "hide_skipped" , "1" ) not in ( "0" , "false" , "no" )
 			self._send_json( 200 , self.dash.search(
 				self._arg( qs , "q" , "" ) ,
 				self._arg( qs , "pool" , "external" ) ,
@@ -591,6 +1172,7 @@ class Handler( BaseHTTPRequestHandler ):
 				self._arg_int( qs , "limit" , 100 ) ,
 				offset=self._arg_int( qs , "offset" , 0 ) ,
 				direction=self._arg( qs , "dir" , None ) ,
+				hide_skipped=hide ,
 			) )
 			return
 
@@ -602,6 +1184,20 @@ class Handler( BaseHTTPRequestHandler ):
 		self._send_json( 404 , { "error": "not found" } )
 
 	def do_POST( self ):
+		if self.path == "/api/skip":
+			# Toggle a paper's skipped ( hidden ) state ; persisted server-side so
+			# it survives reloads. Body : { "key": "<row key>" , "skipped": bool }.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				key    = data.get( "key" ) or ""
+				state  = self.dash.set_skip( key , bool( data.get( "skipped" , True ) ) )
+				self._send_json( 200 , { "ok": True , "key": key , "skipped": state } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
 		if self.path == "/api/refresh":
 			# Rebuild button : download fresh OpenAlex data , then re-index.
 			self.dash.ensure_build( refresh=True )
@@ -684,7 +1280,20 @@ def run( args ):
 	Handler.cache = cache
 	dash = DashboardData( args )
 	loaded = dash.load_from_disk()   # serve last ` prma reindex ` instantly if present
+	dash.load_skips()                # restore the user's hidden ( skipped ) rows
 	Handler.dash = dash
+
+	# Live processing : only when explicitly opted in via --watch , since the
+	# per-paper suite ( YOLO / OCR ) is CPU-heavy. The worker seeds its change
+	# signature at construction so coming online is a no-op -- it acts only on
+	# papers added AFTER the server starts.
+	if getattr( args , "watch" , False ):
+		worker = ProcessWorker(
+			args , dash , cache ,
+			summarize=getattr( args , "watch_summarize" , False ) ,
+			backlog=getattr( args , "watch_backlog" , True ) ,
+		).start()
+		Handler.worker = worker
 
 	httpd = ThreadingHTTPServer( ( args.host , args.port ) , Handler )
 	watched = "mtime-watched" if cache._watch_files else f"ttl={args.ttl}s"
@@ -697,4 +1306,10 @@ def run( args ):
 	print( f"dashboard      {base}/          ({dash_state})" )
 	print( f"errors         {base}/errors   (pipeline problems log)" )
 	print( f"status         {base}/status   (pipeline completeness ; run ` prma status `)" )
+	if getattr( args , "watch" , False ):
+		sm = " +summarize" if getattr( args , "watch_summarize" , False ) else ""
+		bl = "backlog+new" if getattr( args , "watch_backlog" , True ) else "new-only"
+		print( f"watch          ON{sm}  ({bl} ; live progress at {base}/api/jobs)" )
+	else:
+		print( f"watch          off       (pass --watch to auto-process newly added papers)" )
 	httpd.serve_forever()
