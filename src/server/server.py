@@ -770,6 +770,10 @@ class ProcessWorker:
 		self._active   = None     # job dict currently processing , or None
 		self._recent   = []       # finished jobs , newest first ( capped )
 		self._scanning = False
+		# Keys we've already retried via the ready-rescan ( see _ready_keys ) ,
+		# so a paper that lands its PDF but still can't be processed doesn't
+		# re-trigger a full reindex on every later library edit.
+		self._ready_attempted = set()
 		# Seed from the current source signature so the WATCH side is a no-op at
 		# boot : it only acts on changes AFTER the server comes up. ( The backlog
 		# sweep , below , is what processes papers already in the library. )
@@ -847,6 +851,49 @@ class ProcessWorker:
 		)
 		self._process_batch( keys , label="backlog" )
 
+	# -- papers whose PDF arrived AFTER they were added -----------------------
+
+	def _ready_keys( self ):
+		"""Papers whose PDF has ARRIVED on disk since they were added but that
+		still have undone PDF work ( no yolo / md / methods ).
+
+		This closes the common race : Zotero registers an item ~tens of seconds
+		before its attachment finishes downloading , so a freshly-added paper is
+		detected as 'new' , has its OpenAlex meta fetched ( DOI-only , no file
+		needed ) , but the PDF pipeline finds no file on disk and skips every
+		stage -- and the paper never comes back as 'new' once the file lands , so
+		yolo / ocr / images / methods / md would otherwise never run on it until
+		the next server restart ( the startup backlog sweep ).
+
+		Differences from _backlog_keys ( the startup sweep ) :
+		  - REQUIRES the PDF to exist on disk , so we don't churn a 30s reindex
+		    while a download is still pending ( pdf_path can be set to a path
+		    that doesn't exist yet ) ;
+		  - offers each key only ONCE per session ( _ready_attempted ) , so a
+		    paper that lands its PDF but still can't be processed doesn't
+		    reprocess on every later library edit."""
+		from ..db    import papers as papers_db
+		from ..utils import utils
+		md_dir      = self.args.output.joinpath( "md" )
+		methods_dir = self.args.output.joinpath( "methods" )
+		out = []
+		for key , paper in papers_db.iter_all( self.args ):
+			if key in self._ready_attempted:
+				continue
+			if paper.get( papers_db.YOLO_FAILED_KEY ):
+				continue
+			pdf = paper.get( "pdf_path" )
+			if not pdf or not Path( pdf ).exists():
+				continue                               # no file yet -> wait
+			prefix      = utils.doi_to_filename( key )
+			has_yolo    = bool( ( paper.get( "yolo" ) or {} ).get( "pages" ) )
+			has_md      = md_dir.joinpath( f"{prefix}.md" ).exists()
+			has_methods = methods_dir.joinpath( f"{prefix}.txt" ).exists()
+			if not ( has_yolo and has_md and has_methods ):
+				out.append( ( paper.get( "updated_at" ) or "" , key ) )
+		out.sort( reverse=True )
+		return [ k for _ , k in out ]
+
 	# -- one polling tick ----------------------------------------------------
 
 	def _should_scan( self ):
@@ -874,15 +921,34 @@ class ProcessWorker:
 			self._scanning = True
 		try:
 			new_keys = self._snapshot_and_diff()
+			# Also pick up papers whose PDF only just landed on disk -- the
+			# detection-before-download race ( see _ready_keys ). The 'updated'
+			# tick that registers the finished download is our signal to finally
+			# run the PDF pipeline on them.
+			ready = self._ready_keys()
 		finally:
 			with self._lock:
 				self._scanning = False
 
-		if not new_keys:
+		# De-dup , brand-new papers first ( a new paper that already has its PDF
+		# appears in both lists -- keep it as 'new' ).
+		keys = list( dict.fromkeys( list( new_keys ) + ready ) )
+		if not keys:
 			return
 
-		print( f"watch :: {len( new_keys )} new paper(s) -> processing" )
-		self._process_batch( new_keys , label="new" )
+		# Each ready-rescan pick gets exactly one attempt this session.
+		for k in ready:
+			self._ready_attempted.add( k )
+
+		n_new   = len( new_keys )
+		n_ready = len( keys ) - n_new
+		parts   = []
+		if n_new:
+			parts.append( f"{n_new} new" )
+		if n_ready:
+			parts.append( f"{n_ready} now-ready" )
+		print( f"watch :: {' + '.join( parts )} paper(s) -> processing" )
+		self._process_batch( keys , label="new" )
 
 	def _snapshot_and_diff( self ):
 		"""Snapshot the manager into the unified DB and return the primary
@@ -1145,6 +1211,20 @@ class Handler( BaseHTTPRequestHandler ):
 				self._send_json( 200 , { "enabled": False } )
 			else:
 				self._send_json( 200 , self.worker.snapshot_jobs() )
+			return
+
+		if path == "/api/version":
+			# A cheap "did the reference library change" token for the DOI-button
+			# userscript : it polls this and , when the token moves , re-queries
+			# /exists and recolors the page in place ( a paper you just saved
+			# flips green without a reload ). cache.get() refreshes only when the
+			# Zotero source actually changed , so this is a bare stat() otherwise
+			# -- independent of --watch. The token folds the last-refresh time and
+			# the title / DOI counts so it bumps on any add / remove.
+			titles , dois = self.cache.get()
+			n_t , n_d = len( titles or () ) , len( dois or () )
+			ver = f"{getattr( self.cache , '_last_refresh' , 0.0 ):.3f}:{n_t}:{n_d}"
+			self._send_json( 200 , { "version": ver , "titles": n_t , "dois": n_d } )
 			return
 
 		if path == "/api/meta":

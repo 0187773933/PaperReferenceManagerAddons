@@ -393,6 +393,44 @@ function newSearch(){
   loadMore();
 }
 
+// Like newSearch(), but for when the index refreshes UNDER the user -- a
+// --watch batch just folded new paper(s) in. Unlike newSearch() it does NOT
+// reset the paging cursor or bounce to the top : it keeps the query, the sort,
+// the scroll position AND the depth of rows already loaded, re-fetching the
+// whole visible span in one request ( limit = however far the user had paged )
+// and then restoring the scroll offset ( clamped, since the page may be a bit
+// shorter / taller now ). New rows just appear where they sort.
+async function refreshInPlace(){
+  if(!ready) return;
+  const y = window.scrollY;
+  const restore = ()=> requestAnimationFrame(()=>{
+    const maxY = Math.max(0, document.body.offsetHeight - window.innerHeight);
+    window.scrollTo(0, Math.min(y, maxY));
+  });
+  if(activeTab==="authors"){ await renderAuthors(); restore(); return; }
+  cur.loading = true;   // hold off the infinite-scroll loader while we rebuild
+  cur.q = $("#q").value.trim();
+  if(!cols().some(c=>c.key && c.key===cur.sort)){ cur.sort="lib_cites"; cur.dir="desc"; }
+  const depth = Math.max(cur.offset, PAGE);   // how many rows were on screen
+  const url = `/api/search?q=${encodeURIComponent(cur.q)}&pool=${activeTab}`+
+              `&sort=${cur.sort}&dir=${cur.dir}&limit=${depth}&offset=0`+
+              `&hide_skipped=${showSkipped?0:1}`;
+  let d;
+  try { d = await (await fetch(url)).json(); }
+  catch(e){ cur.loading=false; return; }
+  if(d.status!=="ready"){ cur.loading=false; return; }
+  cur.total = d.total;
+  renderShell();
+  const tb = $("#tb");
+  if(tb && d.results.length) tb.insertAdjacentHTML("beforeend", d.results.map(rowHtml).join(""));
+  cur.offset = d.results.length;
+  cur.done = cur.offset >= cur.total;
+  if(cur.total===0) $("#view").innerHTML = `<div class="empty">No matches.</div>`;
+  showCountStatus();
+  cur.loading = false;
+  restore();
+}
+
 window.addEventListener("scroll", ()=>{
   if(window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) loadMore();
 }, { passive:true });
@@ -548,13 +586,14 @@ async function pollJobs(){
     } else {
       hideProc();
       if(procBusy){
-        // A batch just finished -> pull fresh counts + re-run the current
-        // search so the new paper(s) show up. Only once the index is serving.
+        // A batch just finished -> pull fresh counts + fold the new paper(s)
+        // into the current view WITHOUT losing the user's query / sort / scroll
+        // ( refreshInPlace, not newSearch ). Only once the index is serving.
         procBusy = false;
         if(ready){
           try { META = await (await fetch("/api/meta")).json(); } catch(e){}
           renderCounts();
-          newSearch();
+          refreshInPlace();
         }
       }
     }

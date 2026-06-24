@@ -49,6 +49,15 @@ def global_parser():
 		help="YOLO Model Confidence" )
 	return g
 
+def base( sub , global_parser ):
+	p = sub.add_parser(
+		"main" ,
+		parents=[ global_parser ] ,
+		help="The base pipeline : refresh the snapshot , then update the OpenAlex cache ( meta + cited-by + references ) for EVERY library paper. This was the old no-subcommand default ; bare ` prma ` now launches the live server ( alias for ` prma server --watch ` ) instead."
+	)
+	p.set_defaults( _entry=tasks.main )
+	return {}
+
 def missing( sub , global_parser ):
 	p = sub.add_parser(
 		"missing" ,
@@ -427,6 +436,7 @@ def server( sub , global_parser ):
 	}
 
 REGISTRARS = (
+	base       ,
 	missing    ,
 	snapshot   ,
 	status     ,
@@ -466,5 +476,16 @@ def cli():
 
 	args = parser.parse_args()
 
-	entry = getattr( args , "_entry" , None ) or tasks.main
+	# Bare ` prma ` ( no subcommand ) is an alias for ` prma server --watch ` :
+	# it launches the exists endpoint + dashboard + the live auto-processing
+	# worker. ( The old base pipeline -- snapshot + full OpenAlex backfill --
+	# is still available as ` prma main ` . ) Every server arg the worker reads
+	# ( host / port / debounce / ttl / watch_summarize / watch_backlog ) is
+	# already on the namespace via the server registrar's top-level defaults ;
+	# we just flip watch on.
+	if getattr( args , "_entry" , None ) is None:
+		args.watch  = True
+		args._entry = tasks.server
+
+	entry = args._entry
 	entry( args )

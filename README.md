@@ -2,7 +2,8 @@
 
 ## Addons
 
-1. `prma` : updates local snapshot
+1. `prma` : alias for `prma server --watch` — launches the live server (exists endpoint + dashboard) with the background auto-processing worker on. (Run `prma server` without bare-command for the server with `--watch` off.)
+1. `prma main` : the base pipeline — refresh the snapshot, then update the OpenAlex cache (meta + cited-by + references) for **every** library paper. This was the old no-subcommand default.
 1. `prma missing` : generates missing.xlsx
 2. `prma server` : runs the local HTTP server — the 'exists' endpoint for browser userscripts (`POST /exists`) **and** the full-text-search dashboard (`GET /`) for the **external papers you don't have**: works your library cites but you're missing, and works that cite your library. (Your own papers live in Zotero — they're indexed only for identity, to know what to exclude.) The dashboard serves the index that `prma reindex` persists to disk: it loads instantly and auto-reloads when you re-run reindex. If no index exists yet, it builds one lazily on first open. Pass `--watch` for **live processing**: a background worker detects papers you add to Zotero/Mendeley, runs the full per-paper suite on each (openalex → yolo → ocr → images → methods → md), and rebuilds the index so new papers appear automatically — the dashboard shows a live progress toast (polled from `GET /api/jobs`). Add `--watch-summarize` to also run the LLM summary on each.
 3. `prma reindex` : refreshes the OpenAlex cache (snapshot + fetch new papers, download only), then (re)builds the dashboard's **own** full-text search index by streaming the OpenAlex cache off disk, and persists it. Independent of `missing.xlsx`. Incremental — adding papers only re-reads the new papers + their new references, not everything (`--full` to rebuild from scratch, `--skip-snapshot` to index the existing cache without re-fetching).
