@@ -4,11 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma dashboard</title>
+<!-- Apply the saved theme BEFORE first paint so there's no flash. Default light. -->
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
 <style>
+  /* Light theme is the default ; dark is opt-in via [data-theme="dark"] on
+     <html> ( set from localStorage before paint -- see the inline <head> script
+     -- and toggled by the header ☀/🌙 button ). Every colour is a variable so
+     the swap is just these two blocks. */
   :root {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38;
+    --chip:#eceff3; --visited:#CEA052;
+  }
+  :root[data-theme="dark"] {
     --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
     --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
-    --chip:#262c37;
+    --chip:#262c37; --visited:#CEA052;
   }
   * { box-sizing:border-box; }
   body {
@@ -93,6 +104,12 @@
   td.num { text-align:right; font-variant-numeric:tabular-nums; color:var(--fg); white-space:nowrap; }
   td.title { max-width:640px; }
   .tt { font-weight:500; }
+  /* Title is a link to the same proxy URL as the row's Proxy button, but styled
+     as plain text : no underline, normal colour -- only recolours once visited
+     so you can see at a glance which papers you've already opened. */
+  a.titlelink { color:var(--fg); text-decoration:none; }
+  a.titlelink:hover { color:var(--accent); }
+  a.titlelink:visited { color:var(--visited); }
   .meta { color:var(--muted); font-size:12px; margin-top:2px; }
   .links a { color:var(--accent); text-decoration:none; margin-right:9px; white-space:nowrap; }
   .links a:hover { text-decoration:underline; }
@@ -141,6 +158,7 @@
     <div class="grow"></div>
     <a class="navlink" href="/status" title="How far each paper has made it through the pipeline">▦ Status</a>
     <a class="navlink" href="/errors" title="Items the pipeline couldn't fully process">⚠ Errors</a>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
     <button id="toggleSkipped" title="Show / hide the papers you've skipped">🚫 Show skipped</button>
     <button id="refresh">↻ Rebuild</button>
   </div>
@@ -246,8 +264,16 @@ const COLS_BASE = [
   { key:"cited_by",  label:"OA cites", title:"Global OpenAlex citation count", def:"desc",
     cell:r=>`<td class="num">${r.cited_by!=null?r.cited_by:""}</td>` },
   { key:"title",     label:"Title", def:"asc",
-    cell:r=>`<td class="title"><div class="tt">${esc(r.title)}</div>`+
-            `<div class="meta">${esc(r.journal||"")}${r.hashtags?(" · "+esc(r.hashtags)):""}</div></td>` },
+    cell:r=>{
+      const t = esc(r.title);
+      // Link the title to the same proxy URL as the Proxy button ( only when we
+      // have a DOI ; otherwise plain text ). New tab, like the other row links.
+      const inner = r.doi
+        ? `<a class="titlelink" href="${PROXY}${esc(r.doi)}" target="_blank" rel="noopener">${t}</a>`
+        : t;
+      return `<td class="title"><div class="tt">${inner}</div>`+
+             `<div class="meta">${esc(r.journal||"")}${r.hashtags?(" · "+esc(r.hashtags)):""}</div></td>`;
+    } },
   { key:"year",      label:"Year", def:"desc",
     cell:r=>`<td class="num">${r.year||""}</td>` },
   { key:null,        label:"Links",
@@ -473,6 +499,17 @@ $("#toggleSkipped").addEventListener("click", ()=>{
   btn.classList.toggle("active", showSkipped);
   if(ready) newSearch();
 });
+// Theme : the attribute is already set pre-paint by the inline <head> script ;
+// here we just label the button and persist the choice on toggle.
+function curTheme(){ return document.documentElement.dataset.theme === "dark" ? "dark" : "light"; }
+function labelTheme(){ $("#toggleTheme").textContent = curTheme()==="dark" ? "☀ Light" : "🌙 Dark"; }
+$("#toggleTheme").addEventListener("click", ()=>{
+  const next = curTheme()==="dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("prma-theme", next); } catch(e){}
+  labelTheme();
+});
+labelTheme();
 
 pollUntilReady();
 
