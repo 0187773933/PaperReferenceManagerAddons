@@ -10,7 +10,7 @@ idempotent : papers that already have 'yolo_sorted_page_indexes' +
 figure crops are already on disk are skipped at the images stage ) so
 'prma md' is a one-stop command :
 
-  snapshot -> yolo -> ocr -> preprocess -> images -> render
+  snapshot -> yolo -> ocr -> preprocess -> images -> code -> render
 
 preprocess.run() already pulls every paper up through yolo + ocr
 ( see src/tasks/preprocess.py ) , so after it returns each paper has
@@ -69,6 +69,14 @@ def run( args ):
 	# and YOLO is reused from the preprocess pass above ( not re-run ).
 	from . import images as images_task
 	images_task.run( args )
+
+	# Harvest source-code / data links so the renderer can emit a
+	# '## Source Code' section. Idempotent ( papers already scanned carry a
+	# 'code' marker and fall through ) ; in the per-paper suite this already
+	# ran as the stage right before md , so here it's a cheap no-op -- it just
+	# makes a standalone ` prma md ` one-stop. OCR is reused from preprocess.
+	from . import code as code_task
+	code_task.run( args )
 
 	from ..pdf import md as md_mod
 

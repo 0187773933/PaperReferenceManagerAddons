@@ -370,7 +370,7 @@ def process( sub , global_parser ):
 	p = sub.add_parser(
 		"process" ,
 		parents=[ global_parser ] ,
-		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> md ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper. Pass --summarize to also run the LLM summary ( costs money )."
+		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> code -> md ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper. Pass --summarize to also run the LLM summary ( costs money )."
 	)
 	p.add_argument( "process_query" ,
 		help="DOI ( exact ) or title ( fuzzy-matched ) of the paper to process" )
@@ -380,6 +380,20 @@ def process( sub , global_parser ):
 	p.set_defaults( _entry=tasks.process )
 	return {
 		"process_summarize": False ,
+	}
+
+def code( sub , global_parser ):
+	p = sub.add_parser(
+		"code" ,
+		parents=[ global_parser ] ,
+		help="Scan every paper's OpenAlex abstract + OCR text for source-code / data links ( GitHub , GitLab , Bitbucket , OSF , Dryad , Zenodo , Figshare , Code Ocean , Hugging Face , ... ) , pin them on each record for the dashboard's 'Code' column , and roll every link found up into output/code/code.xlsx. Runs OCR inline ( idempotent ) so 'prma code' is one-stop. This is also stage 'code' of the per-paper suite , so papers added under 'prma server --watch' are scanned automatically. Pass --force to re-scan papers already scanned."
+	)
+	p.add_argument( "--force" , dest="code_force" ,
+		action="store_true" , default=False ,
+		help="Re-scan even papers already marked done ( they carry a 'code' field )" )
+	p.set_defaults( _entry=tasks.code )
+	return {
+		"code_force": False ,
 	}
 
 def reindex( sub , global_parser ):
@@ -412,7 +426,7 @@ def server( sub , global_parser ):
 	p.add_argument( "--watch" , dest="watch" , action="store_true" , default=False ,
 		help="Live processing : a background worker detects papers you add to "
 		     "your manager , runs the full per-paper suite on each "
-		     "( openalex -> yolo -> ocr -> images -> methods -> md ) , and "
+		     "( openalex -> yolo -> ocr -> images -> methods -> code -> md ) , and "
 		     "rebuilds the dashboard index so new papers appear automatically. "
 		     "Off by default ( the suite is CPU-heavy )." )
 	p.add_argument( "--watch-summarize" , dest="watch_summarize" ,
@@ -454,6 +468,7 @@ REGISTRARS = (
 	zotero     ,
 	crawl      ,
 	process    ,
+	code       ,
 	reindex    ,
 	server     ,
 )

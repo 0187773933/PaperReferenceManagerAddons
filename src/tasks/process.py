@@ -14,7 +14,7 @@ Run order mirrors the standalone commands :
   snapshot           -- so a just-added paper lands in the unified DB ( and
                         its OpenAlex meta is auto-fetched by get_common )
   openalex           -- ensure meta + references + cited-by are cached
-  yolo -> ocr -> images -> methods -> md
+  yolo -> ocr -> images -> methods -> code -> md
   summarize          -- ONLY with --summarize ( costs LLM calls )
   reindex            -- rebuild the dashboard's index off disk so a running
                         ` prma server ` ( or this process ) shows the paper
@@ -25,6 +25,7 @@ code path.
 """
 
 import importlib
+from pathlib import Path
 
 from ..db    import papers as papers_db
 from ..utils import utils
@@ -89,8 +90,98 @@ _PDF_STAGES = (
 	( "ocr"     , "ocr"     ) ,
 	( "images"  , "images"  ) ,
 	( "methods" , "methods" ) ,
-	( "md"      , "md"      ) ,
+	( "code"    , "code"    ) ,   # scan abstract + OCR text for source-code links ,
+	( "md"      , "md"      ) ,   # BEFORE md so md can render a Source Code section
 )
+
+
+# ---------------------------------------------------------------------------
+# Per-paper completion stamp ( so we don't re-sweep finished papers forever )
+# ---------------------------------------------------------------------------
+# The watch backlog used to decide "is this paper done?" purely by looking for
+# each stage's OUTPUT file on disk. But some stages legitimately produce NO
+# output for some papers -- a paper with no PDF / no detected sections never
+# gets an .md ( md skips it ) or a methods .txt , and a dead PDF never gets
+# yolo data. Those papers looked perpetually "undone" , so every server restart
+# re-swept them and announced them again.
+#
+# So once the suite has run end-to-end on a paper we STAMP it :
+#   paper[ 'processed' ] = { 'at' , 'version' , 'pdf_sig' }
+# and the backlog treats a stamped paper as done UNLESS the pipeline changed
+# ( SUITE_VERSION bump ) or the paper's PDF changed ( pdf_sig ). A paper that
+# can't make further progress is thus processed ONCE , stamped , and then left
+# alone -- and stays out of the backlog log -- across restarts.
+
+# Bump when the STAGES change ( one added / removed / materially reworked ) so
+# papers processed under the old pipeline re-run once to catch up , then re-stamp.
+SUITE_VERSION = 1
+
+
+def _pdf_sig( paper ):
+	"""Cheap signature of the paper's PDF input ( path | mtime | size ) , or ''
+	when no PDF is on disk. Changes when a PDF arrives / is replaced , which
+	invalidates a 'processed' stamp so the PDF stages re-run."""
+	p = paper.get( "pdf_path" )
+	if not p:
+		return ""
+	try:
+		st = Path( p ).stat()
+		return f"{p}|{int( st.st_mtime )}|{st.st_size}"
+	except Exception:
+		return f"{p}|missing"
+
+
+def _has_pending_work( args , key , paper ):
+	"""Does any CURRENT stage still lack its output for this paper? -- code never
+	scanned , or ( when a live , non-failed PDF is on disk ) yolo / md / methods
+	missing. NOTE this stays True forever for papers that simply CAN'T produce an
+	output ( no sections -> no md / methods ) ; needs_processing() layers the
+	'already attempted' stamp on top so those aren't retried endlessly."""
+	if paper.get( "code" ) is None:
+		return True
+	pdf = paper.get( "pdf_path" )
+	if pdf and not paper.get( papers_db.YOLO_FAILED_KEY ):
+		prefix      = utils.doi_to_filename( key )
+		has_yolo    = bool( ( paper.get( "yolo" ) or {} ).get( "pages" ) )
+		has_md      = args.output.joinpath( "md" , f"{prefix}.md" ).exists()
+		has_methods = args.output.joinpath( "methods" , f"{prefix}.txt" ).exists()
+		if not ( has_yolo and has_md and has_methods ):
+			return True
+	return False
+
+
+def needs_processing( args , key , paper ):
+	"""True when the per-paper suite should (re)run on this paper. False once it
+	is EITHER fully produced OR already attempted end-to-end at the current
+	SUITE_VERSION with the current PDF -- so a paper that can't make further
+	progress ( no PDF / no sections / a dead PDF ) is processed ONCE , stamped ,
+	and then never re-queued ( no more backlog noise ) until its inputs or the
+	pipeline change."""
+	if not _has_pending_work( args , key , paper ):
+		return False
+	proc = paper.get( "processed" ) or {}
+	if proc.get( "version" ) == SUITE_VERSION and proc.get( "pdf_sig" ) == _pdf_sig( paper ):
+		return False
+	return True
+
+
+def _stamp_processed( args , keys ):
+	"""Record that the suite ran end-to-end on each key at this SUITE_VERSION
+	with the current PDF inputs. Called by run_suite ONLY on success ( a stage
+	that raises propagates past this , so a genuinely-broken paper is retried )."""
+	for key in keys:
+		paper = papers_db.load( args , key )
+		if paper is None:
+			continue
+		paper[ "processed" ] = {
+			"at":      papers_db._utc_now_iso() ,
+			"version": SUITE_VERSION ,
+			"pdf_sig": _pdf_sig( paper ) ,
+		}
+		try:
+			papers_db.save( args , paper )
+		except Exception as e:
+			print( f"process :: could not stamp {key} processed ( {e} )" )
 
 
 def _run_openalex( args ):
@@ -154,6 +245,10 @@ def run_suite( args , keys , summarize=False , progress=None , reindex=True ):
 		# ALWAYS clear the scope before anything that must see the whole
 		# library ( the reindex below , and whatever the caller does next ).
 		args.only_keys = prev_only
+
+	# Stamp completion so a restart's backlog doesn't re-sweep papers that have
+	# nothing left to produce. Reached only when the stages above didn't raise.
+	_stamp_processed( args , keys )
 
 	if reindex:
 		prog( "reindex" )

@@ -55,7 +55,8 @@ from .       import index as dash_index
 # papers would otherwise never get populated.
 #   7 -> 8 : library entries gained montage / has_md + full-text OCR haystack
 #   8 -> 9 : library entries gained created_at ( In-Library "Added" column )
-STATE_VERSION = 9
+#   9 -> 10: library entries gained code_links ( In-Library "Code" column )
+STATE_VERSION = 10
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,16 @@ def _ocr_fulltext( paper ):
 					parts.append( v )
 					break
 	return " ".join( parts )
+
+
+def _code_links( paper ):
+	"""Compact the source-code / data links ` prma code ` pinned on a library
+	paper ( paper[ 'code' ].links ) down to the { url , source } pairs the
+	dashboard's 'Code' column renders. [] when the paper hasn't been scanned or
+	had no links."""
+	links = ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []
+	return [ { "url": l.get( "url" ) , "source": l.get( "source" ) }
+		for l in links if l.get( "url" ) ]
 
 
 def _work_entry( meta ):
@@ -297,6 +308,7 @@ def build( args , full=False , log=print , progress=None ):
 			"montage":    f"/images/{prefix}-Figures.png" if montage_fp.exists() else "" ,
 			"has_md":     md_fp.exists() ,                # -> "Read" accordion available
 			"created_at": paper.get( "created_at" ) or "" , # when first added to the library
+			"code_links": _code_links( paper ) ,          # prma code -> "Code" column
 			"hay":        ( lib_title + " " + abstract + " " + ocr_body ).lower() ,
 		}
 
@@ -478,6 +490,7 @@ def _lib_rows( lib_meta ):
 			"has_md":     bool( e.get( "has_md" ) ) ,  # prma md -> "Read" accordion
 			"pubdate":    e.get( "pubdate" ) or "" ,
 			"created_at": e.get( "created_at" ) or "" ,  # In-Library "Added" column
+			"code_links": e.get( "code_links" ) or [] ,  # In-Library "Code" column
 			"authors":    e.get( "authors" ) or [] ,
 			"hay":        e.get( "hay" ) or "" ,
 		} )

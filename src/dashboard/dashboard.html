@@ -68,6 +68,7 @@
   thead th.sortable:hover { color:var(--fg); }
   thead th.active { color:var(--accent); }
   th .arrow { font-size:10px; margin-left:3px; }
+  th .arrow .srank { font-size:8px; opacity:.65; margin-left:1px; vertical-align:super; }
   .end { color:var(--muted); text-align:center; padding:18px; font-size:12px; }
   main { padding:16px 18px 60px; }
   .status { color:var(--muted); font-size:12px; margin:4px 2px 12px; }
@@ -113,6 +114,7 @@
   .meta { color:var(--muted); font-size:12px; margin-top:2px; }
   .links a { color:var(--accent); text-decoration:none; margin-right:9px; white-space:nowrap; }
   .links a:hover { text-decoration:underline; }
+  .muted { color:var(--muted); }
   .pill {
     display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px;
     background:var(--chip); color:var(--muted); margin-left:6px;
@@ -227,6 +229,16 @@ function links(r){
   return out.join(" ");
 }
 
+// Source-code / data links harvested by ` prma code ` ( abstract + OCR text ) ,
+// each rendered as its host label ( GitHub / OSF / Dryad / … ) linking out to
+// the repo. Empty -> a dim em-dash so the column reads cleanly.
+function codeLinks(r){
+  const ls = r.code_links || [];
+  if(!ls.length) return `<span class="muted">—</span>`;
+  return ls.map(l=>`<a href="${esc(l.url)}" target="_blank" rel="noopener" `+
+    `title="${esc(l.url)}">${esc(l.source||"link")}</a>`).join(" ");
+}
+
 const fmt = n => (n||0).toLocaleString();
 // created_at is an ISO-8601 stamp ( "2026-06-23T19:26:56+00:00" ) ; show just
 // the date in the cell, keep the full timestamp in the tooltip.
@@ -284,6 +296,11 @@ const COLS_BASE = [
 const COL_ADDED = { key:"created_at", label:"Added",
   title:"When this paper was first added to your library", def:"desc",
   cell:r=>`<td class="num" title="${esc(r.created_at||'')}">${esc(fmtDate(r.created_at))}</td>` };
+// "In Library" only : source-code / data links ` prma code ` harvested from the
+// paper's abstract + OCR text. Not sortable ; sits AFTER Links.
+const COL_CODE = { key:"code", label:"Code", def:"desc",
+  title:"Source-code / data links found in the abstract + OCR text ( prma code ) · sort to float papers that ship code",
+  cell:r=>`<td class="links">${codeLinks(r)}</td>` };
 // Skip / hide control. Not sortable. Persisted server-side ( POST /api/skip ) so
 // skipped papers stay hidden across reloads ; the data is never deleted.
 const COL_SKIP = { key:null, label:"",
@@ -295,11 +312,31 @@ function cols(){
   const c = COLS_BASE.slice();                  // [..., Year, Links]
   if(activeTab==="library") c.splice(c.length-1, 0, COL_ADDED); // before Links
   c.splice(c.length-1, 0, COL_SKIP);            // Skip sits just before Links
+  if(activeTab==="library") c.push(COL_CODE);   // Code sits just after Links
   return c;
 }
 const TAB_LABEL = { external:"missing papers", references:"in bibliographies", cited_by:"newer / citing", library:"library papers" };
-// Per-tab search state ( query / sort column / direction / paging cursor ).
-let cur = { q:"", sort:"lib_cites", dir:"desc", offset:0, total:0, loading:false, done:false };
+// Search state. `sortStack` is a TIERED sort : a list of { key , dir } levels ,
+// PRIMARY FIRST , the rest tiebreakers. Clicking a NEW column makes it primary
+// and demotes the previous one to a tiebreaker ( so "sort by code , then by
+// year" keeps the code order within each year ) ; clicking the CURRENT primary
+// collapses back to a single-column sort. Sent to the server comma-joined.
+// `pristine` marks the untouched per-tab default so the FIRST click is a clean
+// single-column sort ( we don't drag the implicit default in as a tiebreaker ) ;
+// tiering then accumulates from the user's own picks.
+let cur = { q:"", sortStack:[ { key:"lib_cites", dir:"desc" } ], pristine:true, offset:0, total:0, loading:false, done:false };
+const sortParam   = ()=> cur.sortStack.map(s=>s.key).join(",");
+const dirParam    = ()=> cur.sortStack.map(s=>s.dir).join(",");
+// Drop any sort levels whose column isn't on the active tab ( e.g. leaving the
+// In-Library tab clears a "code" / "Added" sort ) ; never leave the stack empty.
+// A reset to the bare default is treated as pristine again.
+function pruneStack(){
+  const valid = new Set(cols().filter(c=>c.key).map(c=>c.key));
+  const before = cur.sortStack.length;
+  cur.sortStack = cur.sortStack.filter(s=>valid.has(s.key));
+  if(!cur.sortStack.length){ cur.sortStack = [ { key:"lib_cites", dir:"desc" } ]; cur.pristine = true; }
+  else if(cur.sortStack.length !== before){ cur.pristine = false; }
+}
 // When false ( default ) skipped papers are filtered out of every list ; the
 // header "Show skipped" toggle flips it so you can revisit / un-skip them.
 let showSkipped = false;
@@ -308,12 +345,15 @@ function rowHtml(r){
   return `<tr data-key="${esc(r.key)}"${r.skipped?' class="dim"':''}>`+cols().map(c=>c.cell(r)).join("")+`</tr>`;
 }
 function headHtml(){
+  const stack = cur.sortStack;
   return "<tr>"+cols().map(c=>{
     if(!c.key) return `<th>${c.label}</th>`;
-    const on = c.key===cur.sort;
-    const arrow = on ? (cur.dir==="desc"?"▼":"▲") : "";
-    return `<th class="sortable${on?' active':''}" data-sort="${c.key}" title="${c.title||''}">`+
-           `${c.label}<span class="arrow">${arrow}</span></th>`;
+    const idx = stack.findIndex(s=>s.key===c.key);   // -1 if not a sort level
+    const arrow = idx>=0 ? (stack[idx].dir==="desc"?"▼":"▲") : "";
+    // Tiebreaker columns ( level 2+ ) get a small rank so the tier is visible.
+    const rank = idx>0 ? `<sup class="srank">${idx+1}</sup>` : "";
+    return `<th class="sortable${idx>=0?' active':''}" data-sort="${c.key}" title="${c.title||''}">`+
+           `${c.label}<span class="arrow">${arrow}${rank}</span></th>`;
   }).join("")+"</tr>";
 }
 function renderShell(){
@@ -321,8 +361,24 @@ function renderShell(){
   $("#view").querySelectorAll("th.sortable").forEach(th=>{
     th.onclick = ()=>{
       const k = th.dataset.sort;
-      if(cur.sort===k) cur.dir = cur.dir==="desc" ? "asc" : "desc";
-      else { cur.sort = k; cur.dir = (cols().find(c=>c.key===k)||{}).def || "desc"; }
+      const def = (cols().find(c=>c.key===k)||{}).def || "desc";
+      const stack = cur.sortStack;
+      if(stack.length && stack[0].key===k){
+        // Re-click the current primary : if it has tiebreakers , the first
+        // click just drops them ( back to "this column only" ) ; once it's a
+        // lone column , clicking flips its direction the usual way.
+        cur.sortStack = (stack.length>1)
+          ? [ { key:k, dir:stack[0].dir } ]
+          : [ { key:k, dir:stack[0].dir==="desc"?"asc":"desc" } ];
+      } else if(cur.pristine){
+        // First pick off the untouched default -> clean single-column sort.
+        cur.sortStack = [ { key:k, dir:def } ];
+      } else {
+        // A different column on an already-customized sort -> new primary , old
+        // levels kept as tiebreakers ( deduped ) so prior ordering survives ties.
+        cur.sortStack = [ { key:k, dir:def }, ...stack.filter(s=>s.key!==k) ];
+      }
+      cur.pristine = false;
       newSearch();
     };
   });
@@ -339,7 +395,8 @@ async function loadMore(){
   if(!ready || cur.loading || cur.done || activeTab==="authors") return;
   cur.loading = true;
   const url = `/api/search?q=${encodeURIComponent(cur.q)}&pool=${activeTab}`+
-              `&sort=${cur.sort}&dir=${cur.dir}&limit=${PAGE}&offset=${cur.offset}`+
+              `&sort=${encodeURIComponent(sortParam())}&dir=${encodeURIComponent(dirParam())}`+
+              `&limit=${PAGE}&offset=${cur.offset}`+
               `&hide_skipped=${showSkipped?0:1}`;
   let d;
   try { d = await (await fetch(url)).json(); }
@@ -385,9 +442,9 @@ function newSearch(){
   cur.offset = 0; cur.total = 0; cur.done = false; cur.loading = false;
   window.scrollTo(0,0);
   if(activeTab==="authors"){ renderAuthors(); return; }
-  // If the active sort column doesn't exist on this tab ( e.g. leaving the
-  // library tab while sorted by "Added" ), fall back to the default sort.
-  if(!cols().some(c=>c.key && c.key===cur.sort)){ cur.sort="lib_cites"; cur.dir="desc"; }
+  // Drop any sort levels whose column isn't on this tab ( e.g. leaving the
+  // library tab while sorted by "Code" / "Added" ) -> falls back to default.
+  pruneStack();
   $("#status").textContent = "Searching…";
   renderShell();
   loadMore();
@@ -410,10 +467,11 @@ async function refreshInPlace(){
   if(activeTab==="authors"){ await renderAuthors(); restore(); return; }
   cur.loading = true;   // hold off the infinite-scroll loader while we rebuild
   cur.q = $("#q").value.trim();
-  if(!cols().some(c=>c.key && c.key===cur.sort)){ cur.sort="lib_cites"; cur.dir="desc"; }
+  pruneStack();
   const depth = Math.max(cur.offset, PAGE);   // how many rows were on screen
   const url = `/api/search?q=${encodeURIComponent(cur.q)}&pool=${activeTab}`+
-              `&sort=${cur.sort}&dir=${cur.dir}&limit=${depth}&offset=0`+
+              `&sort=${encodeURIComponent(sortParam())}&dir=${encodeURIComponent(dirParam())}`+
+              `&limit=${depth}&offset=0`+
               `&hide_skipped=${showSkipped?0:1}`;
   let d;
   try { d = await (await fetch(url)).json(); }

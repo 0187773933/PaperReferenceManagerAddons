@@ -352,15 +352,22 @@ def _md_inline( s ):
 def _md_to_html( md ):
 	"""Minimal Markdown -> HTML covering exactly what ` prma md ` emits :
 	'### ' subsection headings , **bold** captions , ![img](src) figures ,
-	[text](url) links , and blank-line-separated paragraphs."""
+	[text](url) links , '- ' bullet lists ( the Source Code section ) , and
+	blank-line-separated paragraphs."""
 	out = []
 	for block in re.split( r"\n\s*\n" , md ):
 		block = block.strip( "\n" )
 		if not block.strip():
 			continue
-		m = re.match( r"^#{3,6}\s+(.*)$" , block.strip() )
-		if m and "\n" not in block.strip():
+		stripped = block.strip()
+		m = re.match( r"^#{3,6}\s+(.*)$" , stripped )
+		lines = [ ln for ln in block.split( "\n" ) if ln.strip() ]
+		if m and "\n" not in stripped:
 			out.append( f"<h4>{_md_inline( m.group( 1 ) )}</h4>" )
+		elif lines and all( ln.lstrip().startswith( "- " ) for ln in lines ):
+			items = "".join(
+				f"<li>{_md_inline( ln.lstrip()[ 2: ] )}</li>" for ln in lines )
+			out.append( f"<ul>{items}</ul>" )
 		else:
 			out.append( f"<p>{_md_inline( block ).replace( chr( 10 ) , '<br>' )}</p>" )
 	return "\n".join( out )
@@ -591,8 +598,8 @@ class SnapshotCache:
 # ---------------------------------------------------------------------------
 # Clean , bounded progress for the live --watch worker
 # ---------------------------------------------------------------------------
-# The per-paper suite runs SIX library tasks ( yolo / ocr / images / methods /
-# md ) , each of which prints its own planning + summary lines and spins up its
+# The per-paper suite runs the library tasks ( yolo / ocr / images / methods /
+# code / md ) , each of which prints its own planning + summary lines and spins up its
 # own tqdm bar -- so processing a batch of new papers floods the console. For
 # the background worker we don't want that : we swallow ALL of that sub-task
 # chatter and render our own tidy , self-updating single status line ( one
@@ -737,11 +744,11 @@ class ProcessWorker:
 
 	  get_common( snapshot + auto OpenAlex for new DOIs )
 	    -> for each new key : process.run_suite ( yolo -> ocr -> images ->
-	       methods -> md [ -> summarize ] , scoped to that one paper )
+	       methods -> code -> md [ -> summarize ] , scoped to that one paper )
 	    -> ONE dashboard reindex for the batch
 
 	On startup it first sweeps the BACKLOG -- every library paper that still has
-	undone pipeline work ( no yolo / md / methods ) -- and processes it quietly
+	undone pipeline work ( no yolo / md / methods / code ) -- and processes it quietly
 	in the background ( disable with backlog=False ) , then watches for newly
 	added papers from there on.
 
@@ -816,26 +823,19 @@ class ProcessWorker:
 	# -- backlog : finish papers with undone pipeline work -------------------
 
 	def _backlog_keys( self ):
-		"""Library papers that still have undone pipeline work : a PDF on disk
-		but missing yolo data , the rendered md , or the methods extract. Cheap
-		identity + file-existence scan ( one stat per output ). Papers YOLO has
-		already failed on are skipped so we don't retry a doomed PDF every boot.
-		Newest-updated first , so the freshest additions clear soonest."""
+		"""Library papers the per-paper suite should (re)run on. Delegates the
+		decision to process.needs_processing , which is AUTHORITATIVE : a paper is
+		'done' once it's either fully produced OR already attempted end-to-end at
+		the current SUITE_VERSION with the current PDF ( the paper[ 'processed' ]
+		stamp ). That's what stops the backlog from re-sweeping -- and re-
+		announcing -- papers that simply can't make further progress ( no PDF / no
+		sections / a dead PDF ) on every restart. Newest-updated first , so the
+		freshest additions clear soonest."""
 		from ..db    import papers as papers_db
-		from ..utils import utils
-		md_dir      = self.args.output.joinpath( "md" )
-		methods_dir = self.args.output.joinpath( "methods" )
+		from ..tasks import process as process_task
 		need = []
 		for key , paper in papers_db.iter_all( self.args ):
-			if not paper.get( "pdf_path" ):
-				continue                               # nothing to process
-			if paper.get( papers_db.YOLO_FAILED_KEY ):
-				continue                               # don't retry a dead PDF
-			prefix      = utils.doi_to_filename( key )
-			has_yolo    = bool( ( paper.get( "yolo" ) or {} ).get( "pages" ) )
-			has_md      = md_dir.joinpath( f"{prefix}.md" ).exists()
-			has_methods = methods_dir.joinpath( f"{prefix}.txt" ).exists()
-			if not ( has_yolo and has_md and has_methods ):
+			if process_task.needs_processing( self.args , key , paper ):
 				need.append( ( paper.get( "updated_at" ) or "" , key ) )
 		need.sort( reverse=True )
 		return [ k for _ , k in need ]
@@ -855,7 +855,7 @@ class ProcessWorker:
 
 	def _ready_keys( self ):
 		"""Papers whose PDF has ARRIVED on disk since they were added but that
-		still have undone PDF work ( no yolo / md / methods ).
+		still have undone PDF work ( no yolo / md / methods / code ).
 
 		This closes the common race : Zotero registers an item ~tens of seconds
 		before its attachment finishes downloading , so a freshly-added paper is
@@ -873,23 +873,17 @@ class ProcessWorker:
 		    paper that lands its PDF but still can't be processed doesn't
 		    reprocess on every later library edit."""
 		from ..db    import papers as papers_db
-		from ..utils import utils
-		md_dir      = self.args.output.joinpath( "md" )
-		methods_dir = self.args.output.joinpath( "methods" )
+		from ..tasks import process as process_task
 		out = []
 		for key , paper in papers_db.iter_all( self.args ):
 			if key in self._ready_attempted:
 				continue
-			if paper.get( papers_db.YOLO_FAILED_KEY ):
-				continue
 			pdf = paper.get( "pdf_path" )
 			if not pdf or not Path( pdf ).exists():
 				continue                               # no file yet -> wait
-			prefix      = utils.doi_to_filename( key )
-			has_yolo    = bool( ( paper.get( "yolo" ) or {} ).get( "pages" ) )
-			has_md      = md_dir.joinpath( f"{prefix}.md" ).exists()
-			has_methods = methods_dir.joinpath( f"{prefix}.txt" ).exists()
-			if not ( has_yolo and has_md and has_methods ):
+			# needs_processing's pdf_sig flips the moment the file lands ( '' ->
+			# path|mtime|size ) , so a paper stamped while PDF-less is re-queued.
+			if process_task.needs_processing( self.args , key , paper ):
 				out.append( ( paper.get( "updated_at" ) or "" , key ) )
 		out.sort( reverse=True )
 		return [ k for _ , k in out ]
@@ -962,7 +956,7 @@ class ProcessWorker:
 
 	def _stage_seq( self ):
 		"""The stages run_suite drives ( for the progress block ) , in order."""
-		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "md" ]
+		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "code" , "md" ]
 		if self.summarize:
 			seq.append( "summarize" )
 		return seq

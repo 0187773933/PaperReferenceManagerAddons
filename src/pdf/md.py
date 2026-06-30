@@ -15,6 +15,7 @@ Document shape :
 
   **DOI:** [ 10.xxxx/yyy ]( https://doi.org/... )
 
+  ## Source Code     ( bulleted unique links from ` prma code ` ; omitted if none )
   ## Abstract
   ## Introduction
   ## Background
@@ -306,6 +307,31 @@ def _render_figures_or_tables( pages , items , lines , kind ,
 			lines.append( "" )
 
 
+def _render_source_code( links , lines ):
+	"""Emit a '## Source Code' section : a bulleted list of the UNIQUE
+	source-code / data links ` prma code ` harvested for this paper
+	( paper[ 'code' ].links -- already host-classified and deduped ). We
+	de-dupe once more here ( belt + suspenders ) and skip the section
+	entirely when there are no links , so papers without code don't get an
+	empty header."""
+	seen , bullets = set() , []
+	for l in links or []:
+		url = ( ( l or {} ).get( "url" ) or "" ).strip()
+		if not url:
+			continue
+		k = url.lower().rstrip( "/" )
+		if k in seen:
+			continue
+		seen.add( k )
+		bullets.append( f"- [{url}]({url})" )
+	if not bullets:
+		return
+	lines.append( "## Source Code" )
+	lines.append( "" )
+	lines.extend( bullets )
+	lines.append( "" )
+
+
 def _render_references( pages , items , lines ):
 	n = 0
 	for page_idx , det_idx in items:
@@ -356,6 +382,10 @@ def paper_to_markdown( paper , image_rel_dir=None , image_abs_dir=None ,
 	if doi:
 		lines.append( f"**DOI:** [{doi}](https://doi.org/{doi})" )
 		lines.append( "" )
+
+	# Source-code / data links ( prma code runs as the stage right before md ) ,
+	# rendered up top as a bulleted list of unique links so they're prominent.
+	_render_source_code( ( ( paper.get( "code" ) or {} ).get( "links" ) ) or [] , lines )
 
 	for key , display in SECTION_ORDER:
 		if key == "references" and not include_references:

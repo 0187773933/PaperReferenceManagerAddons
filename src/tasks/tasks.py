@@ -106,8 +106,18 @@ def crawl( args ):
 
 def process( args ):
 	# Find one paper by DOI / title and run the full per-paper suite on just
-	# it ( openalex -> yolo -> ocr -> images -> methods -> md [ -> summarize ] ) ,
-	# then reindex so the dashboard reflects it. Shares run_suite() with the
-	# server's live --watch worker.
+	# it ( openalex -> yolo -> ocr -> images -> methods -> code -> md
+	# [ -> summarize ] ) , then reindex so the dashboard reflects it. Shares
+	# run_suite() with the server's live --watch worker.
 	from . import process as process_task
 	process_task.run( args )
+
+def code( args ):
+	# Scan every paper's OpenAlex abstract + OCR text for source-code / data
+	# links , pin them on each record for the dashboard's "Code" column , then
+	# roll every link up into output/code/code.xlsx. Shares run() with the
+	# 'code' stage process.run_suite drives per paper.
+	_ensure_snapshot( args )
+	from . import code
+	code.run( args )
+	code.write_workbook( args )

@@ -115,20 +115,46 @@ _SORT_KEYS = {
 	# "Added" column ) ; lexicographic order == chronological. Blank ( older
 	# records that predate the field ) sorts last on the default desc.
 	"created_at": lambda r: ( r.get( "created_at" ) or "" ) ,
+	# "Code" column ( In-Library ) : how many source-code / data links prma code
+	# harvested -- so you can float the papers that actually ship code to the top.
+	"code":       lambda r: ( len( r.get( "code_links" ) or [] ) , r.get( "cited_by" ) or 0 ) ,
 }
+
+# Columns whose NATURAL ( first-click ) direction is ascending ; every other
+# column defaults to descending.
+_ASC_DEFAULT = { "title" }
+
+
+def _sort_levels( sort , direction ):
+	"""Parse the sort spec into an ordered list of ( keyfn , reverse ) levels ,
+	PRIMARY FIRST. Both `sort` and `direction` may be comma-joined to express a
+	TIERED sort ( e.g. sort='year,code' dir='desc,desc' -> sort by year , then
+	by the code-link count as a tiebreaker ). A missing / blank per-level
+	direction falls back to that column's natural default ( see _ASC_DEFAULT )."""
+	keys = [ s for s in ( sort or "" ).split( "," ) if s ] or [ "lib_cites" ]
+	dirs = ( direction or "" ).split( "," )
+	levels = []
+	for i , k in enumerate( keys ):
+		d = dirs[ i ] if ( i < len( dirs ) and dirs[ i ] ) else None
+		reverse = ( k not in _ASC_DEFAULT ) if d is None else ( d == "desc" )
+		levels.append( ( _SORT_KEYS.get( k , _SORT_KEYS[ "lib_cites" ] ) , reverse ) )
+	return levels
 
 
 def search( rows , query , sort="lib_cites" , limit=100 , offset=0 , direction=None ):
 	"""Boolean full-text search over a pool ( see _parse_query ). Sorts the
 	WHOLE matched set , then returns the `limit` slice starting at `offset`
 	( so paging / infinite-scroll stays globally sorted , not per-page ).
-	Returns ( total_hits , page )."""
+	`sort` / `direction` may be comma-joined for a TIERED ( multi-column ) sort
+	-- see _sort_levels. Returns ( total_hits , page )."""
 	clauses = _parse_query( query )
 	hits = [ r for r in rows if _matches( r[ "hay" ] , clauses ) ] if clauses else list( rows )
 
-	key = _SORT_KEYS.get( sort , _SORT_KEYS[ "lib_cites" ] )
-	reverse = ( sort != "title" ) if direction is None else ( direction == "desc" )
-	hits.sort( key=key , reverse=reverse )
+	# Stable multi-key sort : apply the LEAST-significant level first so the
+	# primary level ends up dominant and the earlier levels break its ties.
+	# Single-level ( the common case ) is just one pass.
+	for keyfn , reverse in reversed( _sort_levels( sort , direction ) ):
+		hits.sort( key=keyfn , reverse=reverse )
 
 	offset = max( 0 , offset )
 	return len( hits ) , hits[ offset : offset + max( 0 , limit ) ]
