@@ -231,12 +231,17 @@ function links(r){
 
 // Source-code / data links harvested by ` prma code ` ( abstract + OCR text ) ,
 // each rendered as its host label ( GitHub / OSF / Dryad / … ) linking out to
-// the repo. Empty -> a dim em-dash so the column reads cleanly.
+// the repo. Empty -> a dim em-dash so the column reads cleanly. Links ` prma
+// code ` repaired from a mangled OCR name carry `raw` -> we mark them with a ˟
+// and spell out the original in the tooltip so a wrong guess is easy to spot.
 function codeLinks(r){
   const ls = r.code_links || [];
   if(!ls.length) return `<span class="muted">—</span>`;
-  return ls.map(l=>`<a href="${esc(l.url)}" target="_blank" rel="noopener" `+
-    `title="${esc(l.url)}">${esc(l.source||"link")}</a>`).join(" ");
+  return ls.map(l=>{
+    const fixed = l.raw ? `${l.url}  ( OCR-repaired from ${l.raw} )` : l.url;
+    const label = esc(l.source||"link") + (l.raw ? `<sup class="muted">˟</sup>` : "");
+    return `<a href="${esc(l.url)}" target="_blank" rel="noopener" title="${esc(fixed)}">${label}</a>`;
+  }).join(" ");
 }
 
 const fmt = n => (n||0).toLocaleString();

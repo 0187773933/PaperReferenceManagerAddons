@@ -316,7 +316,8 @@ def _render_source_code( links , lines ):
 	empty header."""
 	seen , bullets = set() , []
 	for l in links or []:
-		url = ( ( l or {} ).get( "url" ) or "" ).strip()
+		# Prefer the OCR-repaired URL ` prma code ` pinned , if any.
+		url = ( ( l or {} ).get( "resolved_url" ) or ( l or {} ).get( "url" ) or "" ).strip()
 		if not url:
 			continue
 		k = url.lower().rstrip( "/" )

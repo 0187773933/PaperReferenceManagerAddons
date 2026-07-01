@@ -97,10 +97,19 @@ def _code_links( paper ):
 	"""Compact the source-code / data links ` prma code ` pinned on a library
 	paper ( paper[ 'code' ].links ) down to the { url , source } pairs the
 	dashboard's 'Code' column renders. [] when the paper hasn't been scanned or
-	had no links."""
-	links = ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []
-	return [ { "url": l.get( "url" ) , "source": l.get( "source" ) }
-		for l in links if l.get( "url" ) ]
+	had no links. When ` prma code ` repaired an OCR-mangled GitHub link we emit
+	the corrected `resolved_url` and carry the original as `raw` ( for a tooltip )."""
+	out = []
+	for l in ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []:
+		raw = l.get( "url" )
+		if not raw:
+			continue
+		fixed = l.get( "resolved_url" )
+		entry = { "url": fixed or raw , "source": l.get( "source" ) }
+		if fixed and fixed != raw:
+			entry[ "raw" ] = raw
+		out.append( entry )
+	return out
 
 
 def _work_entry( meta ):

@@ -25,6 +25,7 @@ from datetime import datetime , timezone
 from urllib.parse import urlparse
 
 import requests
+from rapidfuzz import fuzz , process
 
 from ..utils import utils
 
@@ -71,6 +72,62 @@ def _utc_now_iso():
 	return datetime.now( timezone.utc ).replace( microsecond=0 ).isoformat()
 
 
+# ---------------------------------------------------------------------------
+# OCR-repair : match a mangled repo name against an owner's real repo list
+# ---------------------------------------------------------------------------
+# OCR damages a repo name in a few predictable ways : it truncates the tail
+# ( ` Surface_projection ` -> ` Surfa ` ) , drops the space/hyphen between two
+# words ( ` TO-START ` -> ` TOSTART ` ) , or fat-fingers a character. The owner
+# ( the profile ) almost always survives intact -- so we list the owner's actual
+# repos and pick the one the broken name most plausibly meant.
+
+def _norm_name( s ):
+	"""A repo name reduced to lowercase alphanumerics -- drops the '-' / '_' / '.'
+	that OCR most often adds or loses , so ` A-SIMPLE-TO-START ` , ` a_simple_to_start `
+	and the OCR'd ` ASIMPLE-TOSTART ` all collapse to one comparable key."""
+	return re.sub( r"[^a-z0-9]+" , "" , ( s or "" ).lower() )
+
+
+def _best_repo_match( bad , names ):
+	"""Best guess for the real repo `bad` was meant to be , among an owner's
+	`names`. Returns ( real_name , score , method ) for a confident match , else
+	None. Confidence tiers , most-trustworthy first :
+	  'exact'  -- normalized names are identical ( OCR only mangled punctuation /
+	              spacing , e.g. TO-START vs TOSTART ) ;
+	  'prefix' -- the broken name is a normalized prefix of exactly one repo
+	              ( OCR truncated the tail ) -- or of several , in which case the
+	              highest fuzzy score among them wins ;
+	  'fuzzy'  -- a high WRatio ( >= 90 ) catches typo-level edits the norm
+	              missed. Below that we abstain ( better a 404 than a wrong repo )."""
+	names = [ n for n in names if n ]
+	if not names:
+		return None
+	nb = _norm_name( bad )
+	if len( nb ) < 3:
+		return None
+	normed = [ ( n , _norm_name( n ) ) for n in names ]
+	# 1. exact normalized match
+	for n , nn in normed:
+		if nn == nb:
+			return ( n , 100.0 , "exact" )
+	# 2. normalized prefix ( truncation ) -- needs a few chars to be meaningful
+	if len( nb ) >= 5:
+		prefixes = [ n for n , nn in normed if nn.startswith( nb ) ]
+		if len( prefixes ) == 1:
+			return ( prefixes[ 0 ] , 97.0 , "prefix" )
+		if len( prefixes ) > 1:
+			# Several repos extend the truncated name ( ` braindecode ` and
+			# ` braindecode.github.io ` both start with ` brainde ` ) -- the SHORTEST
+			# completion is the most conservative guess ; WRatio breaks a length tie.
+			best = min( prefixes , key=lambda n: ( len( _norm_name( n ) ) , -fuzz.WRatio( bad , n ) ) )
+			return ( best , 92.0 , "prefix" )
+	# 3. fuzzy fallback
+	cand = process.extractOne( bad , names , scorer=fuzz.WRatio )
+	if cand and cand[ 1 ] >= 90:
+		return ( cand[ 0 ] , float( cand[ 1 ] ) , "fuzzy" )
+	return None
+
+
 class GitHub:
 	def __init__( self , args ):
 		self.args = args
@@ -84,6 +141,9 @@ class GitHub:
 		self.token = ( gh.get( "api_key" ) or gh.get( "token" ) or "" ).strip()
 		self.cache_dir = args.output.joinpath( "cache" , "github" )
 		self.cache_dir.mkdir( parents=True , exist_ok=True )
+		# Per-run memo for resolve_repo : owner -> [ repo names ] ( or None ) , so
+		# several broken links under the same owner list the profile only once.
+		self._user_repos = {}
 
 	def configured( self ):
 		return bool( self.token )
@@ -153,26 +213,40 @@ class GitHub:
 	# -- fetch --------------------------------------------------------------
 
 	def _fetch_readme( self , owner , repo ):
+		"""Fetch the repo's default README ( the /readme endpoint auto-detects
+		README.md / .rst / .txt on the default branch ). Returns ( text , status )
+		where status is 'ok' ( got it ) , 'none' ( repo genuinely has no README --
+		a 404 ) , or 'error' ( transient : rate limit / network / decode ) so the
+		caller can RETRY an error next run instead of caching an empty README
+		forever ( which would leave the repo un-tagged )."""
 		data = self._get( f"{_API}/repos/{owner}/{repo}/readme" )
+		if isinstance( data , dict ) and data.get( "__status__" ) == "not_found":
+			return "" , "none"
 		if not isinstance( data , dict ) or data.get( "__status__" ):
-			return ""
+			return "" , "error"
 		content , enc = data.get( "content" ) or "" , data.get( "encoding" )
 		if enc == "base64":
 			try:
 				text = base64.b64decode( content ).decode( "utf-8" , "replace" )
 			except Exception:
-				return ""
+				return "" , "error"
 		else:
 			text = content if isinstance( content , str ) else ""
-		return text[ : _README_MAX ]
+		return text[ : _README_MAX ] , "ok"
+
+	def _needs_readme_retry( self , rec ):
+		"""A cached OK repo whose README fetch failed TRANSIENTLY ( 'error' , not a
+		definite 'none' ) is worth re-fetching so a rate-limit hiccup doesn't leave
+		it permanently un-tagged."""
+		return rec.get( "status" ) == "ok" and rec.get( "readme_status" ) == "error"
 
 	def fetch_repo( self , owner , repo , force=False ):
 		"""Fetch + cache a repo's metadata + README. Returns the cached record
 		( always a dict with a 'status' field ). Cache-hit fast-path unless
-		force=True."""
+		force=True OR the cached README fetch failed transiently ( retry it )."""
 		if not force:
 			hit = self.cached( owner , repo )
-			if hit is not None:
+			if hit is not None and not self._needs_readme_retry( hit ):
 				return hit
 
 		meta = self._get( f"{_API}/repos/{owner}/{repo}" )
@@ -186,6 +260,7 @@ class GitHub:
 		if st:
 			rec[ "status" ] = st
 			rec[ "readme" ] = ""
+			rec[ "readme_status" ] = "skip"
 		else:
 			rec[ "status" ]      = "ok"
 			rec[ "full_name" ]   = meta.get( "full_name" ) or f"{owner}/{repo}"
@@ -196,9 +271,59 @@ class GitHub:
 			rec[ "homepage" ]    = meta.get( "homepage" ) or ""
 			rec[ "pushed_at" ]   = meta.get( "pushed_at" ) or ""
 			rec[ "archived" ]    = bool( meta.get( "archived" ) )
-			rec[ "readme" ]      = self._fetch_readme( owner , repo )
+			rec[ "readme" ] , rec[ "readme_status" ] = self._fetch_readme( owner , repo )
 		try:
 			utils.write_json( self.cache_path( owner , repo ) , rec )
 		except Exception as e:
 			print( f"GitHub :: could not cache {owner}/{repo} ( {e} )" )
 		return rec
+
+	# -- OCR repair -------------------------------------------------------------
+
+	def list_user_repos( self , owner , cap_pages=3 ):
+		"""Public repo NAMES for a user / org , paginated ( 100/page ) and capped
+		so a huge account can't run away. Uses the CORE rate limit ( 5000/hr ) ,
+		not the stingy Search API. Returns the name list , or None when the owner
+		itself doesn't exist / errored ( so the caller can tell 'no such owner'
+		-- likely the OCR mangled the profile too -- from 'owner has no match' ).
+		Memoized per run."""
+		if owner in self._user_repos:
+			return self._user_repos[ owner ]
+		names  = []
+		result = names
+		for page in range( 1 , cap_pages + 1 ):
+			data = self._get( f"{_API}/users/{owner}/repos?per_page=100&sort=updated&page={page}" )
+			if isinstance( data , dict ):        # a { '__status__': ... } error
+				result = names if ( page > 1 and names ) else None
+				break
+			if not isinstance( data , list ):
+				break
+			names += [ r.get( "name" ) for r in data if r.get( "name" ) ]
+			if len( data ) < 100:
+				break
+		self._user_repos[ owner ] = result
+		return result
+
+	def resolve_repo( self , owner , repo ):
+		"""Try to repair an OCR-mangled ( owner , repo ) by matching `repo`
+		against the owner's real repo list. Returns ( real_repo , score , method )
+		for a confident match ( see _best_repo_match ) , or None when the owner is
+		gone or nothing matches well enough."""
+		names = self.list_user_repos( owner )
+		if not names:
+			return None
+		return _best_repo_match( repo , names )
+
+	def record_resolution( self , owner , repo , resolution ):
+		"""Pin a `resolve` marker on the ( not_found ) cache record for
+		( owner , repo ) so a later run skips the lookup. `resolution` is
+		{ matched: bool , [ repo , url , score , method ] , at }."""
+		rec = self.cached( owner , repo ) or {
+			"owner": owner , "repo": repo ,
+			"url": f"https://github.com/{owner}/{repo}" , "status": "not_found" ,
+		}
+		rec[ "resolve" ] = resolution
+		try:
+			utils.write_json( self.cache_path( owner , repo ) , rec )
+		except Exception as e:
+			print( f"GitHub :: could not record resolution for {owner}/{repo} ( {e} )" )

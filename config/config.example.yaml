@@ -35,3 +35,12 @@ gpts:
 # read access is plenty. Leave blank / omit to skip the enrichment.
 github:
   api_key: "ghp_..."
+
+# `prma code` reads this too ( optional ). Same idea as github , for OSF ( osf.io )
+# links : it resolves each UNIQUE OSF node found in your papers , fetches its
+# metadata + Home wiki via the OSF API , caches them under output/cache/osf/ , and
+# tags each by neuroimaging method in output/code/code.xlsx. Create a Personal
+# Access Token at https://osf.io/settings/tokens ( the read-only 'osf.full_read'
+# scope is enough ). Leave blank / omit to skip the OSF enrichment.
+osfio:
+  api_key: "..."

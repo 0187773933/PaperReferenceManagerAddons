@@ -408,12 +408,14 @@ def run( args ):
 
 
 # ---------------------------------------------------------------------------
-# GitHub enrichment : fetch repo details , tag each repo by method keyword
+# Repo / project enrichment : fetch details , tag each by method keyword
 # ---------------------------------------------------------------------------
 # When config.yaml has a github.api_key , fetch_github() pulls each UNIQUE github
-# repo's metadata + README into output/cache/github/ ; detect_methods() then
-# scans that text for the neuroimaging / electrophysiology modalities below so
-# code.xlsx can carry a sortable column per method.
+# repo's metadata + README into output/cache/github/ ; likewise , with an
+# osfio.api_key , fetch_osf() pulls each UNIQUE OSF node's metadata + Home wiki
+# into output/cache/osf/ . detect_methods() then scans that text for the
+# neuroimaging / electrophysiology modalities below so code.xlsx can carry a
+# sortable column per method ( GitHub and OSF links alike ).
 
 # label -> ( acronym matched as a whole word , extra substring phrases ). The
 # acronym uses a word boundary ( so 'pet' doesn't fire on 'dataset' ) ; the
@@ -436,12 +438,17 @@ _METHODS_COMPILED = tuple(
 )
 
 
-def _repo_haystack( rec ):
+def _record_haystack( rec ):
+	"""Free-text blob for method detection , covering both a cached GitHub repo
+	( full_name / description / topics / language / homepage / README ) and a
+	cached OSF node ( title / description / tags / category / wiki )."""
 	parts = [
-		rec.get( "full_name" ) or f"{rec.get( 'owner' , '' )}/{rec.get( 'repo' , '' )}" ,
+		rec.get( "full_name" ) or rec.get( "title" )
+			or f"{rec.get( 'owner' , '' )}/{rec.get( 'repo' , '' )}" ,
 		rec.get( "description" ) or "" ,
-		" ".join( rec.get( "topics" ) or [] ) ,
+		" ".join( rec.get( "topics" ) or rec.get( "tags" ) or [] ) ,
 		rec.get( "language" ) or "" ,
+		rec.get( "category" ) or "" ,
 		rec.get( "homepage" ) or "" ,
 		rec.get( "readme" ) or "" ,
 	]
@@ -449,12 +456,12 @@ def _repo_haystack( rec ):
 
 
 def detect_methods( rec ):
-	"""Which method labels appear in a cached github repo record ( name +
-	description + topics + language + homepage + README )? [] for a missing /
-	errored / empty record."""
+	"""Which method labels appear in a cached GitHub repo or OSF node record
+	( name / title + description + topics / tags + language + category +
+	homepage + README / wiki )? [] for a missing / errored / empty record."""
 	if not rec or rec.get( "status" ) != "ok":
 		return []
-	hay = _repo_haystack( rec )
+	hay = _record_haystack( rec )
 	if not hay:
 		return []
 	found = []
@@ -500,6 +507,121 @@ def fetch_github( args ):
 	print( f"CODE      :: GitHub fetch done ( {n_ok} ok , {n_miss} missing/error )" )
 
 
+def resolve_github( args ):
+	"""Second pass over the GitHub links fetch_github got a 404 for : most are
+	OCR damage ( a truncated / merged repo name ) rather than genuinely private
+	repos , and the owner ( profile ) almost always survived intact. For each
+	broken repo we list the owner's REAL repos ( cheap , core rate limit ) and
+	fuzzy-match the mangled name ; on a confident hit we fetch the corrected
+	repo's metadata and pin a `resolved_url` on every paper link that pointed at
+	the broken one -- so code.xlsx and the dashboard show the working link ( and
+	it gets method-tagged like any other ).
+
+	No-op without a github.api_key. Idempotent : a not_found record we've already
+	tried carries a `resolve` marker and isn't re-looked-up ; ` --force ` retries."""
+	from ..github.github import GitHub , parse_repo
+	gh = GitHub( args )
+	if not gh.configured():
+		return   # fetch_github already noted the missing key
+	force = getattr( args , "code_force" , False )
+
+	# Broken repos = the not_found records fetch_github just cached. Reading the
+	# cache dir avoids a second full papers pass just to rediscover them.
+	broken = []
+	for fp in sorted( gh.cache_dir.glob( "*.json" ) ):
+		rec = utils.read_json( fp ) if fp.exists() else None
+		if rec and rec.get( "status" ) == "not_found" and rec.get( "owner" ) and rec.get( "repo" ):
+			broken.append( rec )
+	if not broken:
+		print( "CODE      :: no unresolved GitHub links to repair" )
+		return
+
+	print( f"CODE      :: repairing {len( broken )} unresolved GitHub link(s) via owner repo listings" )
+	resolved = {}   # ( owner.lower , repo.lower ) -> corrected url
+	n_fixed = n_none = 0
+	for rec in tqdm( broken , desc="Resolve" , unit="repo" ):
+		owner , repo = rec[ "owner" ] , rec[ "repo" ]
+		res = rec.get( "resolve" )
+		if res is None or force:
+			match = gh.resolve_repo( owner , repo )
+			if match:
+				new_repo , score , method = match
+				gh.fetch_repo( owner , new_repo , force=force )   # cache real metadata
+				res = {
+					"matched": True , "repo": new_repo ,
+					"url": f"https://github.com/{owner}/{new_repo}" ,
+					"score": round( score , 1 ) , "method": method , "at": papers_db._utc_now_iso() ,
+				}
+			else:
+				res = { "matched": False , "at": papers_db._utc_now_iso() }
+			gh.record_resolution( owner , repo , res )
+		if res.get( "matched" ):
+			n_fixed += 1
+			resolved[ ( owner.lower() , repo.lower() ) ] = res[ "url" ]
+		else:
+			n_none += 1
+	print( f"CODE      :: GitHub repair done ( {n_fixed} matched , {n_none} still unresolved )" )
+
+	if not resolved:
+		return
+	# Pin the corrected URL on every paper link that parsed to a repaired repo.
+	n_links = n_papers = 0
+	for key , paper in papers_db.iter_all( args ):
+		changed = False
+		for l in ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []:
+			pr = parse_repo( ( l or {} ).get( "url" ) )
+			if not pr:
+				continue
+			new_url = resolved.get( ( pr[ 0 ].lower() , pr[ 1 ].lower() ) )
+			if new_url and l.get( "resolved_url" ) != new_url:
+				l[ "resolved_url" ] = new_url
+				changed = True
+				n_links += 1
+		if changed:
+			try:
+				papers_db.save( args , paper )
+				n_papers += 1
+			except Exception as e:
+				print( f"CODE      :: {key}: save failed ( {e} )" )
+	print( f"CODE      :: pinned resolved_url on {n_links} link(s) across {n_papers} paper(s)" )
+
+
+def fetch_osf( args ):
+	"""Fetch + cache OSF details ( metadata + Home wiki ) for every UNIQUE OSF
+	node among the library's code links , so write_workbook can tag them by
+	method. No-op ( with a note ) when config.yaml has no osfio.api_key.
+	Idempotent : cached nodes are skipped ( ` --force ` re-fetches )."""
+	from ..osf.osf import OSF , parse_node
+	osf = OSF( args )
+	if not osf.configured():
+		print(
+			"CODE      :: no osfio.api_key in config.yaml -- skipping OSF "
+			"enrichment ( OSF links stay un-tagged in code.xlsx )"
+		)
+		return
+	force = getattr( args , "code_force" , False )
+
+	nodes = {}   # guid -> True
+	for key , paper in papers_db.iter_all( args ):
+		for l in ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []:
+			g = parse_node( ( l or {} ).get( "url" ) )
+			if g:
+				nodes[ g ] = True
+	if not nodes:
+		print( "CODE      :: no OSF nodes among the code links -- nothing to fetch" )
+		return
+
+	print( f"CODE      :: fetching OSF details for {len( nodes )} node(s) -> {osf.cache_dir}" )
+	n_ok , n_miss = 0 , 0
+	for guid in tqdm( sorted( nodes ) , desc="OSF" , unit="node" ):
+		rec = osf.fetch_node( guid , force=force )
+		if rec.get( "status" ) == "ok":
+			n_ok += 1
+		else:
+			n_miss += 1
+	print( f"CODE      :: OSF fetch done ( {n_ok} ok , {n_miss} missing/error )" )
+
+
 # ---------------------------------------------------------------------------
 # CLI-only : roll every paper's stored links up into output/code/code.xlsx
 # ---------------------------------------------------------------------------
@@ -508,13 +630,16 @@ def fetch_github( args ):
 #   "By Paper"       -- one row per paper , its links collapsed ;
 #   "Unique Links"   -- one row per UNIQUE link across the library , with the
 #                       DOIs it appears in , a total paper count , and ( for
-#                       github repos ) a column per detected method.
+#                       github repos / OSF nodes ) a column per detected method.
+# The URL columns show the OCR-REPAIRED link where ` resolve_github ` fixed one ;
+# an "OCR Fix" column spells out the original mangled name + match confidence so
+# a wrong guess is easy to spot.
 
 _LINKS_HEADERS  = ( "DOI" , "Title" , "Added" , "Published" ,
-                    "Source" , "URL" , "Methods" , "Found In" , "Proxy" , "PDF" )
+                    "Source" , "URL" , "Methods" , "Found In" , "OCR Fix" , "Proxy" , "PDF" )
 _BYPAPER_HEADERS = ( "DOI" , "Title" , "Added" , "Published" ,
                      "# Links" , "Sources" , "Methods" , "Links" , "Proxy" , "PDF" )
-_UNIQUE_HEADERS = ( "URL" , "Source" , "Methods" ) + _METHOD_LABELS + ( "# Papers" , "DOIs" )
+_UNIQUE_HEADERS = ( "URL" , "Source" , "Methods" ) + _METHOD_LABELS + ( "# Papers" , "DOIs" , "OCR Fix" )
 
 
 def _pub_date( meta ):
@@ -547,16 +672,35 @@ def write_workbook( args ):
 	` fetch_github ` populated ; call after both. Whole-library : iter_all is NOT
 	scoped here ( the CLI leaves args.only_keys unset )."""
 	from ..github.github import GitHub , parse_repo
-	gh = GitHub( args )
+	from ..osf.osf       import OSF , parse_node
+	gh  = GitHub( args )
+	osf = OSF( args )
 
-	# Memo : a link's detected methods ( from its cached github repo , if any ).
+	# Memo : a link's detected methods ( from its cached github repo / OSF node ,
+	# whichever the URL points at ). Called with the EFFECTIVE ( OCR-repaired )
+	# url so a fixed link tags off the corrected repo.
 	_mcache = {}
 	def methods_for( url ):
 		if url not in _mcache:
-			pr  = parse_repo( url )
-			rec = gh.cached( *pr ) if pr else None
+			pr = parse_repo( url )
+			if pr:
+				rec = gh.cached( *pr )
+			else:
+				guid = parse_node( url )
+				rec  = osf.cached( guid ) if guid else None
 			_mcache[ url ] = detect_methods( rec ) if rec else []
 		return _mcache[ url ]
+
+	# The "OCR Fix" note for a repaired GitHub link : reads the `resolve` marker
+	# resolve_github pinned on the ( broken ) repo's cache record.
+	def fix_note( raw_url ):
+		pr = parse_repo( raw_url )
+		if not pr:
+			return ""
+		res = ( gh.cached( *pr ) or {} ).get( "resolve" ) or {}
+		if not res.get( "matched" ):
+			return ""
+		return f"{res.get( 'method' , '?' )} {res.get( 'score' , '?' )}% ← {pr[ 0 ]}/{pr[ 1 ]}"
 
 	out_dir = args.output.joinpath( "code" )
 	out_dir.mkdir( parents=True , exist_ok=True )
@@ -564,7 +708,7 @@ def write_workbook( args ):
 
 	link_rows     = []
 	by_paper_rows = []
-	unique        = {}   # dedup-key -> { url , source , dois:set() }
+	unique        = {}   # dedup-key -> { url , source , dois:set() , fix }
 	n_papers_with = 0
 
 	for key , paper in papers_db.iter_all( args ):
@@ -589,20 +733,24 @@ def write_workbook( args ):
 		sources , urls , paper_methods = [] , [] , []
 		for l in links:
 			url , src = l.get( "url" ) , l.get( "source" ) or ""
-			methods = methods_for( url )
+			eff  = l.get( "resolved_url" ) or url    # OCR-repaired link if we have one
+			note = fix_note( url ) if l.get( "resolved_url" ) else ""
+			methods = methods_for( eff )
 			link_rows.append( [
 				doi_cell , title , added , published ,
-				src , utils.Link( url , url ) , " , ".join( methods ) ,
-				l.get( "found_in" ) or "" , proxy_cell , pdf_cell ,
+				src , utils.Link( eff , eff ) , " , ".join( methods ) ,
+				l.get( "found_in" ) or "" , note , proxy_cell , pdf_cell ,
 			] )
-			urls.append( url )
+			urls.append( eff )
 			if src and src not in sources:
 				sources.append( src )
 			for m in methods:
 				if m not in paper_methods:
 					paper_methods.append( m )
-			u = unique.setdefault( _dedup_key( url ) ,
-				{ "url": url , "source": src , "dois": set() } )
+			u = unique.setdefault( _dedup_key( eff ) ,
+				{ "url": eff , "source": src , "dois": set() , "fix": "" } )
+			if note and not u[ "fix" ]:
+				u[ "fix" ] = note
 			if doi:
 				u[ "dois" ].add( doi )
 
@@ -616,7 +764,7 @@ def write_workbook( args ):
 	# Most-linked papers first ; alphabetical within a tie.
 	by_paper_rows.sort( key=lambda r: ( -r[ 4 ] , ( r[ 1 ] or "" ).lower() ) )
 
-	# Unique links : github repos with detected methods first ( so you can eyeball
+	# Unique links : repos / nodes with detected methods first ( so you can eyeball
 	# the fMRI / EEG / ... ones up top ) , then by how many papers share them.
 	unique_rows = []
 	for u in unique.values():
@@ -626,7 +774,7 @@ def write_workbook( args ):
 		unique_rows.append( [
 			utils.Link( u[ "url" ] , u[ "url" ] ) , u[ "source" ] or "" ,
 			" , ".join( _order_methods( methods ) ) , *flags ,
-			len( dois ) , "\n".join( dois ) ,
+			len( dois ) , "\n".join( dois ) , u.get( "fix" ) or "" ,
 		] )
 	# Sort : any-method first , then most-shared , then host.
 	_n_methods = len( _METHOD_LABELS )
@@ -642,10 +790,12 @@ def write_workbook( args ):
 		( "Unique Links"   , _UNIQUE_HEADERS  , unique_rows   ) ,
 	] )
 	n_tagged = sum( 1 for r in unique_rows if r[ 2 ] )
+	n_fixed  = sum( 1 for u in unique.values() if u.get( "fix" ) )
 	print(
 		f"CODE      :: workbook -> {out_path} "
 		f"( {len( link_rows )} links / {len( unique_rows )} unique "
-		f"across {n_papers_with} papers ; {n_tagged} repos method-tagged )"
+		f"across {n_papers_with} papers ; {n_tagged} repos method-tagged ; "
+		f"{n_fixed} OCR-repaired )"
 	)
 	return out_path
 
