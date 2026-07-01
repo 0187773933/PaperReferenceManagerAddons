@@ -386,14 +386,18 @@ def code( sub , global_parser ):
 	p = sub.add_parser(
 		"code" ,
 		parents=[ global_parser ] ,
-		help="Scan every paper's OpenAlex abstract + OCR text for source-code / data links ( GitHub , GitLab , Bitbucket , OSF , Dryad , Zenodo , Figshare , Code Ocean , Hugging Face , ... ) , pin them on each record for the dashboard's 'Code' column , and roll every link found up into output/code/code.xlsx. When config.yaml has a github.api_key , also fetches each unique GitHub repo's metadata + README ( cached under output/cache/github/ ) and tags repos by neuroimaging method ( fMRI / EEG / ECoG / fNIRS / MEG / PET / EMG ) so you can sort by method in the workbook ; with an osfio.api_key it does the same for each unique OSF node ( metadata + Home wiki , cached under output/cache/osf/ ). GitHub links the OCR mangled ( a truncated / merged repo name ) that 404 on fetch are repaired by listing the owner's real repos and fuzzy-matching , then shown corrected ( with an 'OCR Fix' audit column ). Runs OCR inline ( idempotent ) so 'prma code' is one-stop. This is also stage 'code' of the per-paper suite , so papers added under 'prma server --watch' are scanned automatically. Pass --force to re-scan papers ( and re-fetch GitHub / OSF details )."
+		help="Scan every paper's OpenAlex abstract + OCR text for source-code / data links ( GitHub , GitLab , Bitbucket , OSF , Dryad , Zenodo , Figshare , Code Ocean , Hugging Face , ... ) , pin them on each record for the dashboard's 'Code' column , and roll every link found up into output/code/code.xlsx. When config.yaml has a github.api_key , also fetches each unique GitHub repo's metadata + README ( cached under output/cache/github/ ) and tags repos by neuroimaging method ( fMRI / EEG / ECoG / fNIRS / MEG / PET / EMG ) so you can sort by method in the workbook ; with an osfio.api_key it does the same for each unique OSF node ( metadata + Home wiki , cached under output/cache/osf/ ). GitHub links the OCR mangled ( a truncated / merged repo name ) that 404 on fetch are repaired by listing the owner's real repos and fuzzy-matching , then shown corrected ( with an 'OCR Fix' audit column ). Runs OCR inline ( idempotent ) so 'prma code' is one-stop. This is also stage 'code' of the per-paper suite , so papers added under 'prma server --watch' are scanned automatically. Pass --force to re-scan papers and rebuild from the CACHED GitHub / OSF data ( no re-download ) ; add --force-download to also re-fetch that cached metadata from the network."
 	)
 	p.add_argument( "--force" , dest="code_force" ,
 		action="store_true" , default=False ,
-		help="Re-scan even papers already marked done ( they carry a 'code' field )" )
+		help="Re-scan even papers already marked done ( they carry a 'code' field ) and rebuild the workbook from the cached GitHub / OSF data -- WITHOUT re-downloading it ( new / uncached repos + nodes are still fetched )" )
+	p.add_argument( "--force-download" , dest="code_force_download" ,
+		action="store_true" , default=False ,
+		help="Re-download the cached GitHub repo / OSF node metadata + README/wiki and re-run OCR link resolution ( the network-heavy part ). Independent of --force ; combine them ( --force --force-download ) to re-scan papers AND re-fetch everything" )
 	p.set_defaults( _entry=tasks.code )
 	return {
 		"code_force": False ,
+		"code_force_download": False ,
 	}
 
 def reindex( sub , global_parser ):

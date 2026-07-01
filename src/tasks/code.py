@@ -39,6 +39,7 @@ from tqdm import tqdm
 
 from ..db    import papers as papers_db
 from ..utils import utils
+from ..pdf   import section_text
 
 # ezproxy host used across the project ( library_search , the missing.xlsx
 # rollup ) ; swap here if you fork for a different institution.
@@ -415,7 +416,11 @@ def run( args ):
 # osfio.api_key , fetch_osf() pulls each UNIQUE OSF node's metadata + Home wiki
 # into output/cache/osf/ . detect_methods() then scans that text for the
 # neuroimaging / electrophysiology modalities below so code.xlsx can carry a
-# sortable column per method ( GitHub and OSF links alike ).
+# sortable column per method ( GitHub and OSF links alike ). A link ALSO inherits
+# the modalities of the papers that cite it -- _paper_text_methods() runs the same
+# keyword scan over each linking paper's abstract + isolated METHODS section ( NOT
+# the full OCR , whose references would false-positive ) -- so a repo whose README
+# never names a method still gets tagged from its citing fMRI / EEG / ... studies.
 
 # label -> ( acronym matched as a whole word , extra substring phrases ). The
 # acronym uses a word boundary ( so 'pet' doesn't fire on 'dataset' ) ; the
@@ -455,13 +460,10 @@ def _record_haystack( rec ):
 	return " ".join( p for p in parts if p ).lower()
 
 
-def detect_methods( rec ):
-	"""Which method labels appear in a cached GitHub repo or OSF node record
-	( name / title + description + topics / tags + language + category +
-	homepage + README / wiki )? [] for a missing / errored / empty record."""
-	if not rec or rec.get( "status" ) != "ok":
-		return []
-	hay = _record_haystack( rec )
+def _scan_methods( hay ):
+	"""Method labels whose acronym ( whole word ) or spelled-out phrases appear in
+	`hay` ( a lowercased text blob ). The one keyword pass both the repo/node
+	records and the linking papers' own text run through."""
 	if not hay:
 		return []
 	found = []
@@ -471,11 +473,37 @@ def detect_methods( rec ):
 	return found
 
 
+def detect_methods( rec ):
+	"""Which method labels appear in a cached GitHub repo or OSF node record
+	( name / title + description + topics / tags + language + category +
+	homepage + README / wiki )? [] for a missing / errored / empty record."""
+	if not rec or rec.get( "status" ) != "ok":
+		return []
+	return _scan_methods( _record_haystack( rec ) )
+
+
+def _paper_text_methods( args , key , meta ):
+	"""Method labels found in a LINKING paper's own text : its OpenAlex abstract
+	+ the isolated METHODS SECTION ( ` prma methods ` output , falling back to the
+	'## Methods' slice of the rendered md ). Deliberately NOT the full OCR dump --
+	that includes the reference list , which false-positives every modality the
+	paper merely CITES. This lets a code link inherit the modality of the papers
+	that use it even when the repo's README never spells it out ( e.g. a generic
+	analysis repo linked only from fMRI studies gets tagged fMRI ). Empty when the
+	paper has no methods section rendered ( then only abstract + README tag it )."""
+	abstract = _reconstruct_abstract( ( meta or {} ).get( "abstract_inverted_index" ) )
+	try:
+		methods = section_text.resolve_section_text( args , key , "methods" )
+	except Exception:
+		methods = ""
+	return _scan_methods( f"{abstract} {methods}".lower() )
+
+
 def fetch_github( args ):
 	"""Fetch + cache GitHub repo details ( metadata + README ) for every UNIQUE
 	github repo among the library's code links , so write_workbook can tag them
 	by method. No-op ( with a note ) when config.yaml has no github.api_key.
-	Idempotent : cached repos are skipped ( ` --force ` re-fetches )."""
+	Idempotent : cached repos are skipped ( ` --force-download ` re-fetches )."""
 	from ..github.github import GitHub , parse_repo
 	gh = GitHub( args )
 	if not gh.configured():
@@ -484,7 +512,9 @@ def fetch_github( args ):
 			"enrichment ( the method columns in code.xlsx will be blank )"
 		)
 		return
-	force = getattr( args , "code_force" , False )
+	# Downloads are re-fetched only under --force-download ; plain --force reuses
+	# the cache ( new / uncached repos are still fetched either way ).
+	force = getattr( args , "code_force_download" , False )
 
 	repos = {}   # ( owner , repo ) -> True
 	for key , paper in papers_db.iter_all( args ):
@@ -518,12 +548,16 @@ def resolve_github( args ):
 	it gets method-tagged like any other ).
 
 	No-op without a github.api_key. Idempotent : a not_found record we've already
-	tried carries a `resolve` marker and isn't re-looked-up ; ` --force ` retries."""
+	tried carries a `resolve` marker and isn't re-looked-up ; ` --force-download `
+	retries ( plain ` --force ` still resolves NEW not_found links + re-pins )."""
 	from ..github.github import GitHub , parse_repo
 	gh = GitHub( args )
 	if not gh.configured():
 		return   # fetch_github already noted the missing key
-	force = getattr( args , "code_force" , False )
+	# --force-download re-runs the ( networked ) match for links already resolved ;
+	# plain --force keeps cached resolutions but still resolves NEW not_found ones
+	# and re-pins resolved_url on papers ( the local recalc ).
+	force = getattr( args , "code_force_download" , False )
 
 	# Broken repos = the not_found records fetch_github just cached. Reading the
 	# cache dir avoids a second full papers pass just to rediscover them.
@@ -590,7 +624,7 @@ def fetch_osf( args ):
 	"""Fetch + cache OSF details ( metadata + Home wiki ) for every UNIQUE OSF
 	node among the library's code links , so write_workbook can tag them by
 	method. No-op ( with a note ) when config.yaml has no osfio.api_key.
-	Idempotent : cached nodes are skipped ( ` --force ` re-fetches )."""
+	Idempotent : cached nodes are skipped ( ` --force-download ` re-fetches )."""
 	from ..osf.osf import OSF , parse_node
 	osf = OSF( args )
 	if not osf.configured():
@@ -599,7 +633,8 @@ def fetch_osf( args ):
 			"enrichment ( OSF links stay un-tagged in code.xlsx )"
 		)
 		return
-	force = getattr( args , "code_force" , False )
+	# Re-fetched only under --force-download ; plain --force reuses the cache.
+	force = getattr( args , "code_force_download" , False )
 
 	nodes = {}   # guid -> True
 	for key , paper in papers_db.iter_all( args ):
@@ -631,9 +666,12 @@ def fetch_osf( args ):
 #   "Unique Links"   -- one row per UNIQUE link across the library , with the
 #                       DOIs it appears in , a total paper count , and ( for
 #                       github repos / OSF nodes ) a column per detected method.
-# The URL columns show the OCR-REPAIRED link where ` resolve_github ` fixed one ;
-# an "OCR Fix" column spells out the original mangled name + match confidence so
-# a wrong guess is easy to spot.
+# A method is tagged from two sources : the repo/node README ( ✓ , strong ) and
+# the text of the papers that link it -- their OpenAlex abstract + OCR ( · ,
+# contextual ) , so a repo whose README never names a modality still inherits it
+# from the fMRI / EEG / ... papers citing it. The URL columns show the OCR-REPAIRED
+# link where ` resolve_github ` fixed one ; an "OCR Fix" column spells out the
+# original mangled name + match confidence so a wrong guess is easy to spot.
 
 _LINKS_HEADERS  = ( "DOI" , "Title" , "Added" , "Published" ,
                     "Source" , "URL" , "Methods" , "Found In" , "OCR Fix" , "Proxy" , "PDF" )
@@ -721,8 +759,15 @@ def write_workbook( args ):
 		doi       = utils.normalize_doi( paper.get( "doi" ) ) or ""
 		title     = paper.get( "title" ) or ""
 		added     = _added_date( paper )
-		published = _pub_date( _paper_oa_meta( args , doi ) )
+		meta      = _paper_oa_meta( args , doi )
+		published = _pub_date( meta )
 		pdf_path  = paper.get( "pdf_path" ) or ""
+
+		# Method keywords in THIS paper's own text ( abstract + METHODS section ,
+		# not the full OCR -- references would false-positive ) -- every link it
+		# carries inherits them , so a repo whose README never says 'fMRI' still
+		# gets tagged when the papers citing it are fMRI studies. Computed once.
+		text_methods = _paper_text_methods( args , key , meta )
 
 		# Per-paper cells reused across this paper's rows ( read-only ).
 		doi_cell   = utils.Link( doi , f"https://doi.org/{doi}" ) if doi else ""
@@ -735,7 +780,8 @@ def write_workbook( args ):
 			url , src = l.get( "url" ) , l.get( "source" ) or ""
 			eff  = l.get( "resolved_url" ) or url    # OCR-repaired link if we have one
 			note = fix_note( url ) if l.get( "resolved_url" ) else ""
-			methods = methods_for( eff )
+			# Union : what the repo/node README says + what this paper's text says.
+			methods = _order_methods( set( methods_for( eff ) ) | set( text_methods ) )
 			link_rows.append( [
 				doi_cell , title , added , published ,
 				src , utils.Link( eff , eff ) , " , ".join( methods ) ,
@@ -748,9 +794,10 @@ def write_workbook( args ):
 				if m not in paper_methods:
 					paper_methods.append( m )
 			u = unique.setdefault( _dedup_key( eff ) ,
-				{ "url": eff , "source": src , "dois": set() , "fix": "" } )
+				{ "url": eff , "source": src , "dois": set() , "fix": "" , "text_methods": set() } )
 			if note and not u[ "fix" ]:
 				u[ "fix" ] = note
+			u[ "text_methods" ].update( text_methods )
 			if doi:
 				u[ "dois" ].add( doi )
 
@@ -768,12 +815,18 @@ def write_workbook( args ):
 	# the fMRI / EEG / ... ones up top ) , then by how many papers share them.
 	unique_rows = []
 	for u in unique.values():
-		dois    = sorted( u[ "dois" ] )
-		methods = methods_for( u[ "url" ] )
-		flags   = [ ( "✓" if m in methods else "" ) for m in _METHOD_LABELS ]
+		dois = sorted( u[ "dois" ] )
+		# Two provenances : the repo/node README ( strong ) and the linking papers'
+		# own text ( contextual ). The flag columns tell them apart -- ✓ = confirmed
+		# in the README/metadata , · = inferred only from the citing papers.
+		repo_methods = set( methods_for( u[ "url" ] ) )
+		text_methods = u[ "text_methods" ]
+		all_methods  = repo_methods | text_methods
+		flags = [ ( "✓" if m in repo_methods else ( "·" if m in text_methods else "" ) )
+		          for m in _METHOD_LABELS ]
 		unique_rows.append( [
 			utils.Link( u[ "url" ] , u[ "url" ] ) , u[ "source" ] or "" ,
-			" , ".join( _order_methods( methods ) ) , *flags ,
+			" , ".join( _order_methods( all_methods ) ) , *flags ,
 			len( dois ) , "\n".join( dois ) , u.get( "fix" ) or "" ,
 		] )
 	# Sort : any-method first , then most-shared , then host.
