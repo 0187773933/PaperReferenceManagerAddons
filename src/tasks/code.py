@@ -408,19 +408,113 @@ def run( args ):
 
 
 # ---------------------------------------------------------------------------
+# GitHub enrichment : fetch repo details , tag each repo by method keyword
+# ---------------------------------------------------------------------------
+# When config.yaml has a github.api_key , fetch_github() pulls each UNIQUE github
+# repo's metadata + README into output/cache/github/ ; detect_methods() then
+# scans that text for the neuroimaging / electrophysiology modalities below so
+# code.xlsx can carry a sortable column per method.
+
+# label -> ( acronym matched as a whole word , extra substring phrases ). The
+# acronym uses a word boundary ( so 'pet' doesn't fire on 'dataset' ) ; the
+# phrases are plain substrings ( 'electroencephalogra' catches -phy / -m /
+# -phic , 'functional mri' catches the spelled-out form ).
+_METHODS = (
+	( "fMRI"  , "fmri"  , ( "functional mri" , "functional magnetic resonance" ) ) ,
+	( "EEG"   , "eeg"   , ( "electroencephalogra" , ) ) ,
+	( "ECoG"  , "ecog"  , ( "electrocorticogra" , ) ) ,
+	( "fNIRS" , "fnirs" , ( "functional near-infrared" , "functional near infrared" ,
+	                        "near-infrared spectroscopy" ) ) ,
+	( "MEG"   , "meg"   , ( "magnetoencephalogra" , ) ) ,
+	( "PET"   , "pet"   , ( "positron emission" , ) ) ,
+	( "EMG"   , "emg"   , ( "electromyography" , ) ) ,
+)
+_METHOD_LABELS = tuple( m for m , _ , _ in _METHODS )
+_METHODS_COMPILED = tuple(
+	( label , re.compile( r"\b" + re.escape( acro ) + r"\b" , re.I ) , phrases )
+	for label , acro , phrases in _METHODS
+)
+
+
+def _repo_haystack( rec ):
+	parts = [
+		rec.get( "full_name" ) or f"{rec.get( 'owner' , '' )}/{rec.get( 'repo' , '' )}" ,
+		rec.get( "description" ) or "" ,
+		" ".join( rec.get( "topics" ) or [] ) ,
+		rec.get( "language" ) or "" ,
+		rec.get( "homepage" ) or "" ,
+		rec.get( "readme" ) or "" ,
+	]
+	return " ".join( p for p in parts if p ).lower()
+
+
+def detect_methods( rec ):
+	"""Which method labels appear in a cached github repo record ( name +
+	description + topics + language + homepage + README )? [] for a missing /
+	errored / empty record."""
+	if not rec or rec.get( "status" ) != "ok":
+		return []
+	hay = _repo_haystack( rec )
+	if not hay:
+		return []
+	found = []
+	for label , acro_re , phrases in _METHODS_COMPILED:
+		if acro_re.search( hay ) or any( p in hay for p in phrases ):
+			found.append( label )
+	return found
+
+
+def fetch_github( args ):
+	"""Fetch + cache GitHub repo details ( metadata + README ) for every UNIQUE
+	github repo among the library's code links , so write_workbook can tag them
+	by method. No-op ( with a note ) when config.yaml has no github.api_key.
+	Idempotent : cached repos are skipped ( ` --force ` re-fetches )."""
+	from ..github.github import GitHub , parse_repo
+	gh = GitHub( args )
+	if not gh.configured():
+		print(
+			"CODE      :: no github.api_key in config.yaml -- skipping GitHub "
+			"enrichment ( the method columns in code.xlsx will be blank )"
+		)
+		return
+	force = getattr( args , "code_force" , False )
+
+	repos = {}   # ( owner , repo ) -> True
+	for key , paper in papers_db.iter_all( args ):
+		for l in ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []:
+			pr = parse_repo( ( l or {} ).get( "url" ) )
+			if pr:
+				repos[ pr ] = True
+	if not repos:
+		print( "CODE      :: no GitHub repos among the code links -- nothing to fetch" )
+		return
+
+	print( f"CODE      :: fetching GitHub details for {len( repos )} repo(s) -> {gh.cache_dir}" )
+	n_ok , n_miss = 0 , 0
+	for owner , repo in tqdm( sorted( repos ) , desc="GitHub" , unit="repo" ):
+		rec = gh.fetch_repo( owner , repo , force=force )
+		if rec.get( "status" ) == "ok":
+			n_ok += 1
+		else:
+			n_miss += 1
+	print( f"CODE      :: GitHub fetch done ( {n_ok} ok , {n_miss} missing/error )" )
+
+
+# ---------------------------------------------------------------------------
 # CLI-only : roll every paper's stored links up into output/code/code.xlsx
 # ---------------------------------------------------------------------------
 # Three sheets :
 #   "Links by Paper" -- one row per ( paper , link ) , full paper metadata ;
 #   "By Paper"       -- one row per paper , its links collapsed ;
 #   "Unique Links"   -- one row per UNIQUE link across the library , with the
-#                       DOIs it appears in and a total paper count.
+#                       DOIs it appears in , a total paper count , and ( for
+#                       github repos ) a column per detected method.
 
 _LINKS_HEADERS  = ( "DOI" , "Title" , "Added" , "Published" ,
-                    "Source" , "URL" , "Found In" , "Proxy" , "PDF" )
+                    "Source" , "URL" , "Methods" , "Found In" , "Proxy" , "PDF" )
 _BYPAPER_HEADERS = ( "DOI" , "Title" , "Added" , "Published" ,
-                     "# Links" , "Sources" , "Links" , "Proxy" , "PDF" )
-_UNIQUE_HEADERS = ( "URL" , "Source" , "# Papers" , "DOIs" )
+                     "# Links" , "Sources" , "Methods" , "Links" , "Proxy" , "PDF" )
+_UNIQUE_HEADERS = ( "URL" , "Source" , "Methods" ) + _METHOD_LABELS + ( "# Papers" , "DOIs" )
 
 
 def _pub_date( meta ):
@@ -449,9 +543,21 @@ def _added_date( paper ):
 
 def write_workbook( args ):
 	"""Write output/code/code.xlsx ( three sheets -- see header comment ) over
-	the whole library. Reads the 'code' marker ` run ` already pinned ; call
-	after run(). Whole-library : iter_all is NOT scoped here ( the CLI leaves
-	args.only_keys unset )."""
+	the whole library. Reads the 'code' marker ` run ` pinned + the github cache
+	` fetch_github ` populated ; call after both. Whole-library : iter_all is NOT
+	scoped here ( the CLI leaves args.only_keys unset )."""
+	from ..github.github import GitHub , parse_repo
+	gh = GitHub( args )
+
+	# Memo : a link's detected methods ( from its cached github repo , if any ).
+	_mcache = {}
+	def methods_for( url ):
+		if url not in _mcache:
+			pr  = parse_repo( url )
+			rec = gh.cached( *pr ) if pr else None
+			_mcache[ url ] = detect_methods( rec ) if rec else []
+		return _mcache[ url ]
+
 	out_dir = args.output.joinpath( "code" )
 	out_dir.mkdir( parents=True , exist_ok=True )
 	out_path = out_dir.joinpath( "code.xlsx" )
@@ -480,17 +586,21 @@ def write_workbook( args ):
 		proxy_cell = utils.Link( proxy_url , proxy_url ) if proxy_url else ""
 		pdf_cell   = utils.Link( Path( pdf_path ).name , _file_url( pdf_path ) ) if pdf_path else ""
 
-		sources , urls = [] , []
+		sources , urls , paper_methods = [] , [] , []
 		for l in links:
 			url , src = l.get( "url" ) , l.get( "source" ) or ""
+			methods = methods_for( url )
 			link_rows.append( [
 				doi_cell , title , added , published ,
-				src , utils.Link( url , url ) , l.get( "found_in" ) or "" ,
-				proxy_cell , pdf_cell ,
+				src , utils.Link( url , url ) , " , ".join( methods ) ,
+				l.get( "found_in" ) or "" , proxy_cell , pdf_cell ,
 			] )
 			urls.append( url )
 			if src and src not in sources:
 				sources.append( src )
+			for m in methods:
+				if m not in paper_methods:
+					paper_methods.append( m )
 			u = unique.setdefault( _dedup_key( url ) ,
 				{ "url": url , "source": src , "dois": set() } )
 			if doi:
@@ -498,31 +608,49 @@ def write_workbook( args ):
 
 		by_paper_rows.append( [
 			doi_cell , title , added , published ,
-			len( urls ) , " , ".join( sources ) , "\n".join( urls ) ,
+			len( urls ) , " , ".join( sources ) ,
+			" , ".join( _order_methods( paper_methods ) ) , "\n".join( urls ) ,
 			proxy_cell , pdf_cell ,
 		] )
 
 	# Most-linked papers first ; alphabetical within a tie.
 	by_paper_rows.sort( key=lambda r: ( -r[ 4 ] , ( r[ 1 ] or "" ).lower() ) )
 
-	# Unique links : most-shared first ( "found in other papers" ) , then host.
+	# Unique links : github repos with detected methods first ( so you can eyeball
+	# the fMRI / EEG / ... ones up top ) , then by how many papers share them.
 	unique_rows = []
 	for u in unique.values():
-		dois = sorted( u[ "dois" ] )
+		dois    = sorted( u[ "dois" ] )
+		methods = methods_for( u[ "url" ] )
+		flags   = [ ( "✓" if m in methods else "" ) for m in _METHOD_LABELS ]
 		unique_rows.append( [
 			utils.Link( u[ "url" ] , u[ "url" ] ) , u[ "source" ] or "" ,
+			" , ".join( _order_methods( methods ) ) , *flags ,
 			len( dois ) , "\n".join( dois ) ,
 		] )
-	unique_rows.sort( key=lambda r: ( -r[ 2 ] , ( r[ 1 ] or "" ) ) )
+	# Sort : any-method first , then most-shared , then host.
+	_n_methods = len( _METHOD_LABELS )
+	unique_rows.sort( key=lambda r: (
+		0 if r[ 2 ] else 1 ,                      # rows with a method label first
+		-r[ 3 + _n_methods ] ,                    # then by # Papers
+		( r[ 1 ] or "" ) ,                        # then host
+	) )
 
 	utils.write_xlsx( out_path , [
 		( "Links by Paper" , _LINKS_HEADERS   , link_rows     ) ,
 		( "By Paper"       , _BYPAPER_HEADERS , by_paper_rows ) ,
 		( "Unique Links"   , _UNIQUE_HEADERS  , unique_rows   ) ,
 	] )
+	n_tagged = sum( 1 for r in unique_rows if r[ 2 ] )
 	print(
 		f"CODE      :: workbook -> {out_path} "
-		f"( {len(link_rows)} links / {len(unique_rows)} unique "
-		f"across {n_papers_with} papers )"
+		f"( {len( link_rows )} links / {len( unique_rows )} unique "
+		f"across {n_papers_with} papers ; {n_tagged} repos method-tagged )"
 	)
 	return out_path
+
+
+def _order_methods( methods ):
+	"""Sort a set of matched method labels into the canonical _METHOD_LABELS
+	order ( so 'fMRI , EEG' always reads the same regardless of match order )."""
+	return [ m for m in _METHOD_LABELS if m in methods ]

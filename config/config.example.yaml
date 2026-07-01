@@ -26,3 +26,12 @@ gpts:
   gemini:
     key:   "AIza..."
     model: "gemini-2.0-flash"
+
+# `prma code` reads this ( optional ). When set , it fetches each UNIQUE GitHub
+# repo found in your papers ( metadata + README ) via the GitHub API , caches
+# them under output/cache/github/ , and tags each repo by neuroimaging method
+# ( fMRI / EEG / ECoG / fNIRS / MEG / PET / EMG ) in output/code/code.xlsx so you
+# can sort by method. A classic PAT or a fine-grained token with public-repo
+# read access is plenty. Leave blank / omit to skip the enrichment.
+github:
+  api_key: "ghp_..."

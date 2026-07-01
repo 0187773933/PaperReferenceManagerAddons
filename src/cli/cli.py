@@ -386,7 +386,7 @@ def code( sub , global_parser ):
 	p = sub.add_parser(
 		"code" ,
 		parents=[ global_parser ] ,
-		help="Scan every paper's OpenAlex abstract + OCR text for source-code / data links ( GitHub , GitLab , Bitbucket , OSF , Dryad , Zenodo , Figshare , Code Ocean , Hugging Face , ... ) , pin them on each record for the dashboard's 'Code' column , and roll every link found up into output/code/code.xlsx. Runs OCR inline ( idempotent ) so 'prma code' is one-stop. This is also stage 'code' of the per-paper suite , so papers added under 'prma server --watch' are scanned automatically. Pass --force to re-scan papers already scanned."
+		help="Scan every paper's OpenAlex abstract + OCR text for source-code / data links ( GitHub , GitLab , Bitbucket , OSF , Dryad , Zenodo , Figshare , Code Ocean , Hugging Face , ... ) , pin them on each record for the dashboard's 'Code' column , and roll every link found up into output/code/code.xlsx. When config.yaml has a github.api_key , also fetches each unique GitHub repo's metadata + README ( cached under output/cache/github/ ) and tags repos by neuroimaging method ( fMRI / EEG / ECoG / fNIRS / MEG / PET / EMG ) so you can sort by method in the workbook. Runs OCR inline ( idempotent ) so 'prma code' is one-stop. This is also stage 'code' of the per-paper suite , so papers added under 'prma server --watch' are scanned automatically. Pass --force to re-scan papers ( and re-fetch GitHub details )."
 	)
 	p.add_argument( "--force" , dest="code_force" ,
 		action="store_true" , default=False ,

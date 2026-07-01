@@ -114,10 +114,12 @@ def process( args ):
 
 def code( args ):
 	# Scan every paper's OpenAlex abstract + OCR text for source-code / data
-	# links , pin them on each record for the dashboard's "Code" column , then
-	# roll every link up into output/code/code.xlsx. Shares run() with the
-	# 'code' stage process.run_suite drives per paper.
+	# links , pin them on each record for the dashboard's "Code" column , fetch
+	# each unique GitHub repo's details ( when config.yaml has a github.api_key )
+	# so repos can be method-tagged , then roll everything up into
+	# output/code/code.xlsx. Shares run() with the 'code' stage run_suite drives.
 	_ensure_snapshot( args )
 	from . import code
 	code.run( args )
+	code.fetch_github( args )
 	code.write_workbook( args )
