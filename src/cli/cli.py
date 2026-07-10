@@ -442,6 +442,12 @@ def server( sub , global_parser ):
 		help="With --watch , skip the startup backlog sweep ( don't process "
 		     "papers already in the library that have undone tasks ; only act "
 		     "on papers added after the server starts )." )
+	p.add_argument( "--tui" , dest="tui" ,
+		action="store_true" , default=False ,
+		help="Opt-in live terminal dashboard ( htop-style full-screen window : "
+		     "task progress bars + the queue of papers being processed ). Needs "
+		     "--watch and a real terminal ; falls back to the classic line-by-line "
+		     "logs otherwise. Off by default." )
 	p.set_defaults( _entry=tasks.server )
 	return {
 		"host":            "127.0.0.1" ,
@@ -451,6 +457,7 @@ def server( sub , global_parser ):
 		"watch":           False       ,
 		"watch_summarize": False       ,
 		"watch_backlog":   True        ,
+		"tui":             False       ,
 	}
 
 REGISTRARS = (
@@ -504,6 +511,7 @@ def cli():
 	# we just flip watch on.
 	if getattr( args , "_entry" , None ) is None:
 		args.watch  = True
+		# args.tui = True
 		args._entry = tasks.server
 
 	entry = args._entry

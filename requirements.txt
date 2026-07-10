@@ -1,6 +1,7 @@
 --only-binary=pyyaml
 pyyaml
 tqdm
+rich
 requests
 curl_cffi
 openpyxl

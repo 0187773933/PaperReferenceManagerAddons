@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DOI Button
 // @namespace    asdf
-// @version      0.20
+// @version      0.22
 // @description  Adds DOI Buttons
 // @author       asdf
 // @updateURL    https://github.com/0187773933/PaperReferenceManagerAddons/raw/refs/heads/master/userscripts/doi-button.user.js
@@ -21,7 +21,7 @@
 	// add/remove sites. Matches the domain itself and any subdomain.
 	// ---------------------------------------------------------------------------
 	const DOI_ALLOWED_DOMAINS = [
-		"80.82.77.83","aaas.org","aacrmeetingabstracts.org","aaiddjournals.org",
+		"80.82.77.83","aaas.org", "jocsai.com" ,"aacrmeetingabstracts.org","aaiddjournals.org",
 		"aanda.org","aapgbulletin.datapages.com","aas.aanda.org","aasv.org",
 		"academic.mintel.com","accessible.com","aclanthology.org","acm.org",
         "scholaris.ca",
@@ -603,16 +603,46 @@ function askServer(title){
   return askServerBatch([title]);   // single title -> one-element batch
 }
 
-// Ask PRMA about many titles at once. Returns the parsed response; results[i]
-// corresponds to titles[i].
+// Client-side answer cache keyed by norm(title) -> bool "in Zotero". Without it
+// the MutationObserver re-scan, listing re-runs, and the 4s version poll all
+// re-ask PRMA for titles we already know, spamming the server with identical
+// POSTs. Cleared on a real library change (see repaintExists) so a paper you
+// just saved still recolors instead of serving a stale cached answer.
+const existsCache = new Map();   // norm(title) -> boolean
+function cacheClear(){ existsCache.clear(); }
+
+// Ask PRMA about many titles at once. Returns { results:[{exists}] } aligned to
+// `titles`. Only titles NOT already in existsCache actually hit the network;
+// everything else is answered from cache, so repeat calls for known titles cost
+// zero requests.
 function askServerBatch(titles){
   return new Promise((resolve, reject)=>{
+    const finish = () =>
+      resolve({ results: titles.map(t => ({ exists: existsCache.get(norm(t)) === true })) });
+
+    // Unique, not-yet-known titles are the only ones we actually ask about.
+    const misses = [];
+    const seen = new Set();
+    for(const t of titles){
+      const k = norm(t);
+      if(existsCache.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      misses.push(t);
+    }
+    if(!misses.length){ finish(); return; }   // fully cached -> no request
+
     http({
       method: "POST",
       url: PRMA_API,
       headers: { "Content-Type": "application/json" },
-      data: JSON.stringify({ queries: titles.map((t, i) => ({ id: String(i), title: t })) }),
-      onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e){ reject(e); } },
+      data: JSON.stringify({ queries: misses.map((t, i) => ({ id: String(i), title: t })) }),
+      onload: r => {
+        try {
+          const res = ((JSON.parse(r.responseText) || {}).results) || [];
+          misses.forEach((t, i) => existsCache.set(norm(t), !!(res[i] && res[i].exists === true)));
+          finish();
+        } catch(e){ reject(e); }
+      },
       onerror: reject
     });
   });
@@ -700,6 +730,7 @@ async function evaluateListing(){
       const exists = res[i] && res[i].exists === true;
       it.el.setAttribute("data-zotero-exists", exists ? "true" : "false");
     });
+    beginWatching();   // this page has real results -> keep it live (visible tabs only)
   } catch(e){
     console.error("[doi-button] PRMA batch error:", e);
   }
@@ -778,6 +809,19 @@ function isArticleChildPage(){
   return false;
 }
 
+// Scholarly-article signal used to avoid badging/polling random allowed pages.
+// The allow-list is intentionally broad ("edu", "google.com", …), so "allowed"
+// alone doesn't mean "article". citation_title / dc.title meta is emitted by
+// essentially every publisher article page (it's the same metadata Google
+// Scholar reads); a citation_doi / prism.doi counts too. A DOI found on the
+// page (mainDoi) is the other accepted signal and is checked by the caller.
+function hasArticleMeta(){
+  return !!(document.querySelector('meta[name="citation_title"]') ||
+            document.querySelector('meta[name="dc.title"]') ||
+            document.querySelector('meta[name="citation_doi"]') ||
+            document.querySelector('meta[name="prism.doi"]'));
+}
+
 async function run(){
 
   // if is blacklisted
@@ -809,6 +853,11 @@ async function run(){
     evaluateListing();
     return;
   }
+  // Only real article pages get a lookup/badge. Without this, the document.title
+  // fallback in detectTitle() means EVERY allowed page (a .edu homepage, a search
+  // portal, google.com) would badge itself and start the 4s version poll.
+  if(!mainDoi && !hasArticleMeta()) return;
+
   const title = detectTitle();
   if(!title) return;
   if(norm(title) === norm(lastTitle)) return;
@@ -817,6 +866,7 @@ async function run(){
     const r = await askServer(title);
     const exists = r && r.results && r.results[0] && r.results[0].exists === true;
     colorTitle(title, exists);
+    beginWatching();   // real article result -> keep it live (visible tabs only)
   } catch(e){
     console.error("[doi-button] PRMA server error:", e);
   }
@@ -842,6 +892,7 @@ new MutationObserver(schedule).observe(document.documentElement, { childList: tr
 // flow ( which re-checks the single-article badge and any new, unchecked links ).
 async function repaintExists(){
   lastTitle = null;   // drop the single-article guard so run() re-checks it
+  cacheClear();       // library changed -> cached answers are stale, refetch
   const marked = Array.from(document.querySelectorAll("a[data-zotero-exists]"));
   if(marked.length){
     try {
@@ -856,6 +907,35 @@ async function repaintExists(){
 }
 
 let prmaVersion = null;
+let watching    = false;   // did this page paint a real article/listing result?
+let pollTimer   = null;
+const POLL_MS   = 4000;
+
+// Start keeping this tab in sync with the library. Idempotent — the first real
+// paint (a colored article title or listing) calls this. We only ever poll for
+// pages that actually have a result, and syncPolling() further restricts it to
+// the visible tab, so background tabs and non-article pages never hit the server.
+function beginWatching(){
+  if(watching) return;
+  watching = true;
+  syncPolling();
+}
+
+// Reconciles the poll timer with "should we be polling right now?". Called on
+// first paint and on every visibility change, so switching away from a tab stops
+// its polling and switching back resumes it (with an immediate catch-up check).
+function syncPolling(){
+  const shouldPoll = watching && document.visibilityState === "visible";
+  if(shouldPoll && !pollTimer){
+    pollVersion();                                 // immediate check on (re)focus
+    pollTimer = setInterval(pollVersion, POLL_MS);
+  } else if(!shouldPoll && pollTimer){
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+document.addEventListener("visibilitychange", syncPolling);
+
 function pollVersion(){
   http({
     method: "GET",
@@ -870,7 +950,5 @@ function pollVersion(){
     onerror: ()=>{}   // server down / not running -> stay quiet, try again later
   });
 }
-setInterval(pollVersion, 4000);
-pollVersion();
 
 })();

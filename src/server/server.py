@@ -25,6 +25,7 @@ import shutil
 import contextlib
 import mimetypes
 import threading
+from collections import deque
 from http.server import BaseHTTPRequestHandler , HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -52,6 +53,40 @@ ERRORS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 # its data comes from GET /api/status .
 STATUS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "status.html" )
+
+
+class _RequestLog:
+	"""Thread-safe ring of recent /exists queries + running totals, read by the
+	opt-in TUI. Request threads append ( a deque append under a lock -- no I/O ,
+	no processing touched ). Harmless and effectively free when the TUI is off."""
+
+	def __init__( self , maxlen=200 ):
+		self._lock  = threading.Lock()
+		self._rows  = deque( maxlen=maxlen )   # (ts, exists, title, doi) newest-first
+		self.served = 0
+		self.hits   = 0
+
+	def add( self , cleaned , results ):
+		exists_by_id = { r.get( "id" ): r.get( "exists" ) for r in results }
+		ts = time.strftime( "%H:%M:%S" )
+		with self._lock:
+			self.served += len( results )
+			for q in cleaned:
+				ex = bool( exists_by_id.get( q.get( "id" ) ) )
+				if ex:
+					self.hits += 1
+				title = ( q.get( "title" ) or "" ).strip()
+				doi   = ( q.get( "doi" )   or "" ).strip()
+				self._rows.appendleft( ( ts , ex , title[ :200 ] , doi[ :100 ] ) )
+
+	def snapshot( self ):
+		with self._lock:
+			return { "served": self.served , "hits": self.hits ,
+			         "rows": list( self._rows ) }
+
+
+# Module-level so the request handler ( Handler.do_POST ) and the TUI share one.
+REQUEST_LOG = _RequestLog()
 
 
 class DashboardData:
@@ -767,16 +802,24 @@ class ProcessWorker:
 	# change loop , so a burst of Zotero writes coalesces into one scan.
 	_MIN_INTERVAL = 2.0
 
-	def __init__( self , args , dash , cache , summarize=False , backlog=True ):
+	def __init__( self , args , dash , cache , summarize=False , backlog=True , tui=False ):
 		self.args      = args
 		self.dash      = dash
 		self.cache     = cache
 		self.summarize = summarize
 		self.backlog   = backlog
+		# tui=True suppresses the carriage-return status line ( _LiveStatus ) so the
+		# separate read-only ServerTUI ( src/server/tui.py ) can own the screen. It
+		# ONLY gates console drawing -- the processing path is identical either way.
+		self._tui      = tui
 		self._lock     = threading.Lock()
 		self._active   = None     # job dict currently processing , or None
 		self._recent   = []       # finished jobs , newest first ( capped )
 		self._scanning = False
+		# Snapshot of the batch in flight ( total / done / current index / label /
+		# the ordered stages / the paper titles ) , read by the TUI for its queue +
+		# progress bars. Plain dict writes under _lock ; never any I/O.
+		self._batch    = None
 		# Keys we've already retried via the ready-rescan ( see _ready_keys ) ,
 		# so a paper that lands its PDF but still can't be processed doesn't
 		# re-trigger a full reindex on every later library edit.
@@ -797,6 +840,12 @@ class ProcessWorker:
 				"active":   dict( self._active ) if self._active else None ,
 				"recent":   [ dict( j ) for j in self._recent[ :20 ] ] ,
 			}
+
+	def snapshot_batch( self ):
+		"""A copy of the in-flight batch for the TUI ( None when idle ). Read-only ;
+		the TUI never mutates worker state."""
+		with self._lock:
+			return dict( self._batch ) if self._batch else None
 
 	# -- lifecycle -----------------------------------------------------------
 
@@ -973,23 +1022,35 @@ class ProcessWorker:
 		n_ok , n_err = 0 , 0
 		t0 = time.time()
 
+		# Titles up front : they feed the TUI's queue view and are reused per paper
+		# below ( so no second DB load ). Pure disk reads ; no terminal I/O.
+		titles = [ ( papers_db.load( self.args , k ) or {} ).get( "title" ) or k
+		           for k in keys ]
+		with self._lock:
+			self._batch = { "total": len( keys ) , "done": 0 , "i": 0 ,
+			                "label": label , "stages": list( stages ) ,
+			                "titles": titles }
+
 		with _silence_tasks() as real_stdout:
-			prog_ui = _LiveStatus( real_stdout , len( keys ) , stages )
+			# The plain carriage-return status line only draws when the TUI isn't
+			# running ( otherwise both would fight over the same terminal ).
+			prog_ui = None if self._tui else _LiveStatus( real_stdout , len( keys ) , stages )
 			try:
 				for i , key in enumerate( keys , 1 ):
-					title = ( papers_db.load( self.args , key ) or {} ).get( "title" ) or key
+					title = titles[ i - 1 ]
 					job = {
 						"key": key , "title": title , "stage": "starting" ,
 						"status": "processing" , "started": time.time() ,
 					}
 					with self._lock:
 						self._active = job
-					prog_ui.start_paper( i , title )
+						if self._batch: self._batch[ "i" ] = i
+					if prog_ui: prog_ui.start_paper( i , title )
 
 					def prog( stage , _job=job ):
 						with self._lock:
 							_job[ "stage" ] = stage
-						prog_ui.start_stage( stage )
+						if prog_ui: prog_ui.start_stage( stage )
 
 					try:
 						# reindex=False : one batch-level rebuild below covers all.
@@ -1009,10 +1070,13 @@ class ProcessWorker:
 						job[ "finished" ] = time.time()
 						with self._lock:
 							self._active = None
+							if self._batch: self._batch[ "done" ] = i
 							self._recent.insert( 0 , job )
 							del self._recent[ 50: ]
 			finally:
-				prog_ui.close()
+				if prog_ui: prog_ui.close()
+				with self._lock:
+					self._batch = None
 
 		# One reindex for the whole batch ( cheaper than per-paper ) , applied
 		# quietly so anyone browsing isn't bounced to a build screen.
@@ -1307,6 +1371,8 @@ class Handler( BaseHTTPRequestHandler ):
 
 			results = lookup( self.cache , cleaned )
 
+			REQUEST_LOG.add( cleaned , results )   # feed the TUI ( no-op cost otherwise )
+
 			hits = sum( 1 for r in results if r[ "exists" ] )
 			for r in results:
 				if r[ "exists" ]:
@@ -1357,15 +1423,31 @@ def run( args ):
 	dash.load_skips()                # restore the user's hidden ( skipped ) rows
 	Handler.dash = dash
 
+	# Opt-in live terminal UI ( --tui ). A separate read-only thread that renders
+	# task progress bars + the queue by polling worker state. Requires --watch
+	# ( nothing to show otherwise ) , a real TTY , and rich. Determined BEFORE the
+	# worker starts so the worker knows to suppress its plain status line ; if
+	# anything is missing we silently stay on the classic prints.
+	tui_on = False
+	if ( getattr( args , "tui" , False ) and getattr( args , "watch" , False )
+	     and sys.__stdout__ is not None and sys.__stdout__.isatty() ):
+		try:
+			from .tui import ServerTUI
+			tui_on = True
+		except Exception as e:
+			print( f"--tui unavailable ( {e!r} ) ; using plain logs" )
+
 	# Live processing : only when explicitly opted in via --watch , since the
 	# per-paper suite ( YOLO / OCR ) is CPU-heavy. The worker seeds its change
 	# signature at construction so coming online is a no-op -- it acts only on
 	# papers added AFTER the server starts.
+	worker = None
 	if getattr( args , "watch" , False ):
 		worker = ProcessWorker(
 			args , dash , cache ,
 			summarize=getattr( args , "watch_summarize" , False ) ,
 			backlog=getattr( args , "watch_backlog" , True ) ,
+			tui=tui_on ,
 		).start()
 		Handler.worker = worker
 
@@ -1376,14 +1458,27 @@ def run( args ):
 		dash_state = f"prebuilt index from {dash.built_at} ; run ` prma reindex ` to refresh"
 	else:
 		dash_state = "no index yet ; builds on first open ( or run ` prma reindex ` )"
-	print( f"exists server  {base}/exists   (manager={args.manager}, {watched})" )
-	print( f"dashboard      {base}/          ({dash_state})" )
-	print( f"errors         {base}/errors   (pipeline problems log)" )
-	print( f"status         {base}/status   (pipeline completeness ; run ` prma status `)" )
+	header = [
+		f"exists server  {base}/exists   (manager={args.manager}, {watched})" ,
+		f"dashboard      {base}/          ({dash_state})" ,
+		f"errors         {base}/errors   (pipeline problems log)" ,
+		f"status         {base}/status   (pipeline completeness ; run ` prma status `)" ,
+	]
 	if getattr( args , "watch" , False ):
 		sm = " +summarize" if getattr( args , "watch_summarize" , False ) else ""
 		bl = "backlog+new" if getattr( args , "watch_backlog" , True ) else "new-only"
-		print( f"watch          ON{sm}  ({bl} ; live progress at {base}/api/jobs)" )
+		header.append( f"watch          ON{sm}  ({bl} ; live progress at {base}/api/jobs)" )
 	else:
-		print( f"watch          off       (pass --watch to auto-process newly added papers)" )
-	httpd.serve_forever()
+		header.append( "watch          off       (pass --watch to auto-process newly added papers)" )
+
+	if tui_on:
+		tui = ServerTUI( worker , header , REQUEST_LOG )
+		tui.start()
+		try:
+			httpd.serve_forever()
+		finally:
+			tui.stop()
+	else:
+		for ln in header:
+			print( ln )
+		httpd.serve_forever()

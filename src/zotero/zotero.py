@@ -3,6 +3,7 @@ import glob
 import tempfile
 import shutil
 import sqlite3
+from contextlib import contextmanager
 from pprint import pprint
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -30,13 +31,25 @@ class Zotero():
 				return Path( hits[ 0 ] )
 		raise FileNotFoundError( "No zotero.sqlite found - check paths above" )
 
+	@contextmanager
 	def open_snapshot( self ):
+		# Copy the live zotero.sqlite into a throwaway temp dir so we can
+		# read it without holding a lock on Zotero's DB. The dir + its
+		# ~250 MB copy MUST be removed afterwards -- guaranteed here in
+		# finally so a mid-read exception can't leak it into $TMPDIR.
 		tmpdir = Path( tempfile.mkdtemp( prefix="zotero_db_" ) )
 		tmpdb = tmpdir / "zotero.sqlite"
-		shutil.copy2( self.sqlite_path , tmpdb )
-		conn = sqlite3.connect( tmpdb )
-		conn.row_factory = sqlite3.Row
-		return conn
+		conn = None
+		try:
+			shutil.copy2( self.sqlite_path , tmpdb )
+			conn = sqlite3.connect( tmpdb )
+			conn.row_factory = sqlite3.Row
+			yield conn
+		finally:
+			if conn is not None:
+				try: conn.close()
+				except Exception: pass
+			shutil.rmtree( tmpdir , ignore_errors=True )
 
 	def take_titles_and_dois( self ):
 		"""Fast path for the 'exists' server : pull ONLY title + DOI
@@ -45,8 +58,7 @@ class Zotero():
 		collection joins ; no roundtrip through output/cache/papers/ .
 		Typical run is ~50-200 ms for a 2000-paper library vs ~10-30
 		seconds for take_snapshot() + _push_to_db()."""
-		conn = self.open_snapshot()
-		try:
+		with self.open_snapshot() as conn:
 			c = conn.cursor()
 			titles , dois = set() , set()
 			for row in c.execute( """
@@ -74,12 +86,12 @@ class Zotero():
 					if d:
 						dois.add( d )
 			return titles , dois
-		finally:
-			try: conn.close()
-			except Exception: pass
 
 	def take_snapshot( self ):
-		conn = self.open_snapshot()
+		with self.open_snapshot() as conn:
+			return self._read_papers( conn )
+
+	def _read_papers( self , conn ):
 		c = conn.cursor()
 
 		# --------------------------------------------------
@@ -232,8 +244,6 @@ class Zotero():
 			if itemID not in papers:
 				continue
 			papers[itemID]["collections"].append(row["collectionName"])
-
-		conn.close()
 
 		# Sort tag/collection lists for stability
 		for item in papers.values():
