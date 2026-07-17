@@ -370,7 +370,7 @@ def process( sub , global_parser ):
 	p = sub.add_parser(
 		"process" ,
 		parents=[ global_parser ] ,
-		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> code -> md ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper. Pass --summarize to also run the LLM summary ( costs money )."
+		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> code -> md -> modalities ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper. Pass --summarize to also run the LLM summary ( costs money )."
 	)
 	p.add_argument( "process_query" ,
 		help="DOI ( exact ) or title ( fuzzy-matched ) of the paper to process" )
@@ -398,6 +398,50 @@ def code( sub , global_parser ):
 	return {
 		"code_force": False ,
 		"code_force_download": False ,
+	}
+
+def modalities( sub , global_parser ):
+	p = sub.add_parser(
+		"modalities" ,
+		parents=[ global_parser ] ,
+		help="Tag every paper with the modalities the STUDY ITSELF USED ( fMRI / EEG / ... -- the config/methods.py vocabulary ) and stamp the result on its record as paper[ 'modalities' ] , which ` prma method-images ` reads for its pills / filter chips instead of re-tagging the whole library on every report rebuild. Evidence : title + cached OpenAlex abstract + extracted Methods section ( never the full OCR -- a reference list names every modality a paper merely cites ) , falling back to the rendered md body ( marked inferred ) only when abstract AND Methods are both missing -- so run the PDF suite first for best coverage. This is also stage 'modalities' of the per-paper suite , so papers added under ` prma server --watch ` are stamped automatically. Stamps carry a fingerprint of the vocabulary : after editing config/methods.py just re-run this ( or the report ) and stale papers re-tag themselves -- no --force needed."
+	)
+	p.add_argument( "--force" , dest="modalities_force" ,
+		action="store_true" , default=False ,
+		help="Re-tag even papers whose stamp is current" )
+	p.set_defaults( _entry=tasks.modalities )
+	return {
+		"modalities_force": False ,
+	}
+
+def method_images( sub , global_parser ):
+	p = sub.add_parser(
+		"method-images" ,
+		parents=[ global_parser ] ,
+		help="Fuzzy-search every extracted figure's CAPTION for method keywords and write an HTML report of the matching figure images. Tuned to surface MODEL DESIGN figures -- the architecture / pipeline / layer-stack overview diagrams -- rather than the plots that evaluate a model. Depends on the normal per-paper PDF suite having run first ( yolo -> ocr -> images -> methods -> code -> md -> modalities , e.g. via ` prma process ` or ` prma server --watch ` ) : it reads the yolo+ocr captions and the PNGs ` prma images ` cropped , never running any stage inline -- papers the pipeline hasn't reached are skipped and counted. With no keywords on the command line it reads config/method-images.txt , which splits terms into a [strong] tier ( structural words like 'architecture' / 'block diagram' -- these match a caption on their own ) and a [weak] tier ( component / model-family words like 'transformer' / 'layer' , which only count when --min-weak of them co-occur in one caption , since naming a model isn't describing one ). Keywords passed on the command line are all strong ( ` prma method-images transformer attention CNN ` = a plain OR ). Output : output/method-images/report.html -- per-paper sections ( architecture figures first ) with DOI / PDF / .md / methods / montage links , one card per matched figure ( crop , highlighted caption , keyword tags ) , and clickable per-keyword filter chips. Overwritten on each run."
+	)
+	p.add_argument( "method_images_keywords" ,
+		nargs="*" , default=[] ,
+		help="Keywords / phrases to fuzzy-match against figure captions ( quote phrases : \"neural network\" ). All treated as strong ( any one matches ). Empty -> read config/method-images.txt" )
+	p.add_argument( "--keywords-file" , dest="method_images_file" ,
+		type=Path , default=None ,
+		help="Read keywords from this file instead of config/method-images.txt ( one per line ; optional [strong] / [weak] section headers ; terms before any header are strong ; '#' comments and blank lines ignored ). Ignored when keywords are passed on the command line" )
+	p.add_argument( "--threshold" , dest="method_images_threshold" ,
+		type=int , default=85 ,
+		help="Fuzzy-match score cutoff 0-100 ( default 85 ; lower = more permissive )" )
+	p.add_argument( "--min-weak" , dest="method_images_min_weak" ,
+		type=int , default=3 ,
+		help="How many DISTINCT [weak] terms must co-occur in one caption for it to match without a [strong] term ( default 3 ; 2 = wider net / more results plots , 4 = tighter , 1 = flat OR over every term ). Distinct means different words -- 'layer' + 'layers' on the same caption counts once" )
+	p.add_argument( "--out" , dest="method_images_out" ,
+		type=Path , default=None ,
+		help="Report path ( default : output/method-images/report.html ). Image / md / methods links are written relative to this file" )
+	p.set_defaults( _entry=tasks.method_images )
+	return {
+		"method_images_keywords":  [] ,
+		"method_images_file":      None ,
+		"method_images_threshold": 85 ,
+		"method_images_min_weak":  3 ,
+		"method_images_out":       None ,
 	}
 
 def reindex( sub , global_parser ):
@@ -430,7 +474,7 @@ def server( sub , global_parser ):
 	p.add_argument( "--watch" , dest="watch" , action="store_true" , default=False ,
 		help="Live processing : a background worker detects papers you add to "
 		     "your manager , runs the full per-paper suite on each "
-		     "( openalex -> yolo -> ocr -> images -> methods -> code -> md ) , and "
+		     "( openalex -> yolo -> ocr -> images -> methods -> code -> md -> modalities ) , and "
 		     "rebuilds the dashboard index so new papers appear automatically. "
 		     "Off by default ( the suite is CPU-heavy )." )
 	p.add_argument( "--watch-summarize" , dest="watch_summarize" ,
@@ -461,27 +505,29 @@ def server( sub , global_parser ):
 	}
 
 REGISTRARS = (
-	base       ,
-	missing    ,
-	snapshot   ,
-	status     ,
-	yolo       ,
-	images     ,
-	ocr        ,
-	preprocess ,
-	md         ,
-	text       ,
-	methods    ,
-	summarize  ,
-	rollup     ,
-	search     ,
-	mendeley   ,
-	zotero     ,
-	crawl      ,
-	process    ,
-	code       ,
-	reindex    ,
-	server     ,
+	base          ,
+	missing       ,
+	snapshot      ,
+	status        ,
+	yolo          ,
+	images        ,
+	ocr           ,
+	preprocess    ,
+	md            ,
+	text          ,
+	methods       ,
+	summarize     ,
+	rollup        ,
+	search        ,
+	mendeley      ,
+	zotero        ,
+	crawl         ,
+	process       ,
+	code          ,
+	modalities    ,
+	method_images ,
+	reindex       ,
+	server        ,
 )
 
 def cli():

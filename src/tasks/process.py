@@ -14,7 +14,7 @@ Run order mirrors the standalone commands :
   snapshot           -- so a just-added paper lands in the unified DB ( and
                         its OpenAlex meta is auto-fetched by get_common )
   openalex           -- ensure meta + references + cited-by are cached
-  yolo -> ocr -> images -> methods -> code -> md
+  yolo -> ocr -> images -> methods -> code -> md -> modalities
   summarize          -- ONLY with --summarize ( costs LLM calls )
   reindex            -- rebuild the dashboard's index off disk so a running
                         ` prma server ` ( or this process ) shows the paper
@@ -86,12 +86,13 @@ def resolve_key( args , query ):
 # exposes run( args ) and plans off papers.iter_all , so all of them honor the
 # args.only_keys scope we set below.
 _PDF_STAGES = (
-	( "yolo"    , "yolo"    ) ,
-	( "ocr"     , "ocr"     ) ,
-	( "images"  , "images"  ) ,
-	( "methods" , "methods" ) ,
-	( "code"    , "code"    ) ,   # scan abstract + OCR text for source-code links ,
-	( "md"      , "md"      ) ,   # BEFORE md so md can render a Source Code section
+	( "yolo"       , "yolo"       ) ,
+	( "ocr"        , "ocr"        ) ,
+	( "images"     , "images"     ) ,
+	( "methods"    , "methods"    ) ,
+	( "code"       , "code"       ) ,   # scan abstract + OCR text for source-code links ,
+	( "md"         , "md"         ) ,   # BEFORE md so md can render a Source Code section
+	( "modalities" , "modalities" ) ,   # AFTER md : its inferred fallback reads the rendered md body
 )
 
 
@@ -114,7 +115,8 @@ _PDF_STAGES = (
 
 # Bump when the STAGES change ( one added / removed / materially reworked ) so
 # papers processed under the old pipeline re-run once to catch up , then re-stamp.
-SUITE_VERSION = 1
+# v2 : added the ` modalities ` stage ( per-paper modality stamp ).
+SUITE_VERSION = 2
 
 
 def _pdf_sig( paper ):
@@ -133,11 +135,15 @@ def _pdf_sig( paper ):
 
 def _has_pending_work( args , key , paper ):
 	"""Does any CURRENT stage still lack its output for this paper? -- code never
-	scanned , or ( when a live , non-failed PDF is on disk ) yolo / md / methods
-	missing. NOTE this stays True forever for papers that simply CAN'T produce an
-	output ( no sections -> no md / methods ) ; needs_processing() layers the
-	'already attempted' stamp on top so those aren't retried endlessly."""
+	scanned , modalities never stamped , or ( when a live , non-failed PDF is on
+	disk ) yolo / md / methods missing. NOTE this stays True forever for papers
+	that simply CAN'T produce an output ( no sections -> no md / methods ) ;
+	needs_processing() layers the 'already attempted' stamp on top so those
+	aren't retried endlessly."""
 	if paper.get( "code" ) is None:
+		return True
+	from . import modalities as modalities_task
+	if modalities_task.read( args , paper ) is None:
 		return True
 	pdf = paper.get( "pdf_path" )
 	if pdf and not paper.get( papers_db.YOLO_FAILED_KEY ):
@@ -258,6 +264,28 @@ def run_suite( args , keys , summarize=False , progress=None , reindex=True ):
 		# refreshed the cache.
 		from ..dashboard import indexer
 		indexer.build( args )
+		refresh_reports( args , progress=prog )
+
+
+# ---------------------------------------------------------------------------
+# Library-wide artifacts the per-paper stages invalidate
+# ---------------------------------------------------------------------------
+
+def refresh_reports( args , progress=None ):
+	"""Rebuild the whole-library artifacts that new papers make stale. Kept OUT
+	of _PDF_STAGES on purpose : those are per-paper and scoped by only_keys ,
+	while this re-reads every paper ( ` prma method-images ` sweeps 15k figure
+	captions ) , so running it inside the loop would redo the whole library once
+	per paper. It belongs where the reindex is -- at the END of a run , once ,
+	after the papers have landed. The server's --watch worker calls it once per
+	BATCH for the same reason.
+
+	Never raises : a broken report must not fail the processing run."""
+	if progress:
+		try: progress( "method-images" )
+		except Exception: pass
+	from . import method_images
+	method_images.rebuild( args )
 
 
 # ---------------------------------------------------------------------------

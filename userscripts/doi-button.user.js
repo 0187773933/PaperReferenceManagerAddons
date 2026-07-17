@@ -21,7 +21,7 @@
 	// add/remove sites. Matches the domain itself and any subdomain.
 	// ---------------------------------------------------------------------------
 	const DOI_ALLOWED_DOMAINS = [
-		"80.82.77.83","aaas.org", "jocsai.com" ,"aacrmeetingabstracts.org","aaiddjournals.org",
+		"80.82.77.83","aaas.org", "jocsai.com" , "hal.science" , "aacrmeetingabstracts.org","aaiddjournals.org",
 		"aanda.org","aapgbulletin.datapages.com","aas.aanda.org","aasv.org",
 		"academic.mintel.com","accessible.com","aclanthology.org","acm.org",
         "scholaris.ca",

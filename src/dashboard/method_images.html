@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma method-images</title>
+<!--
+The page ` prma method-images ` renders into output/method-images/report.html
+( and ` prma server ` serves verbatim at /method-images -- ONE artifact , never a
+second renderer ).
+
+Unlike its neighbours here ( dashboard.html / errors.html / status.html , which
+are static shells that fetch /api/... ) this one is a TEMPLATE : the report has
+to work opened straight off disk over file:// , with no server to fetch from ,
+so src/tasks/method_images.py fills the four slots below and writes the result
+as a standalone file.
+
+Each slot below is an HTML comment named for what it holds -- meta ( the
+"Generated ... / N figures across M papers" line ) , chips ( the All /
+Overviews / Selected / modality / keyword filters ) , papers ( one
+<section class="paper"> each , or the nothing-matched note ) and min_weak
+( the --min-weak number quoted in the footer's legend ). Every one is
+required : a slot this file no longer has is a loud error rather than a
+report that renders fine and is quietly missing its papers.
+
+Filling is plain text replacement , so DON'T write a slot's comment anywhere
+but where you want its content : a copy named in prose here would be filled
+too , with its own few-MB copy of every paper ( and its closing bracket would
+end this comment early ). That's why the paragraph above spells the slots out
+in words instead of showing them. _fill refuses to render if any slot count
+isn't exactly 1 , so a mistake here fails loudly instead of shipping.
+
+Everything else -- style , layout , behaviour -- is here. Edit it here.
+-->
+<style>
+:root {
+	--bg: #f6f7f9; --card: #ffffff; --ink: #1c2330; --muted: #66707f;
+	--line: #e2e6ec; --accent: #2563eb; --accent-ink: #ffffff;
+	--mark: #fde68a; --tag: #eef2ff; --tag-ink: #3730a3;
+	--ok: #16a34a; --ok-ink: #ffffff;
+	--mod-line: #c4b5a0; --mod-ink: #7c5e2a;
+}
+@media ( prefers-color-scheme: dark ) {
+	:root {
+		--bg: #12151a; --card: #1a1f27; --ink: #e6e9ee; --muted: #98a2b3;
+		--line: #2a3140; --accent: #60a5fa; --accent-ink: #0b1220;
+		--mark: #6b5d1f; --tag: #23283b; --tag-ink: #b6c2ff;
+		--ok: #22c55e; --ok-ink: #08140c;
+		--mod-line: #5a4a33; --mod-ink: #d9b98a;
+	}
+}
+* { box-sizing: border-box; }
+body {
+	margin: 0; background: var(--bg); color: var(--ink);
+	font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+header { padding: 28px 32px 18px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0 0 4px; font-size: 24px; }
+.nav { display: flex; gap: 8px; margin: 0 0 10px; }
+.navlink {
+	border: 1px solid var(--line); border-radius: 8px; padding: 3px 10px;
+	font-size: 13px; color: var(--muted); text-decoration: none;
+}
+.navlink:hover { border-color: var(--accent); color: var(--accent); }
+.meta { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+	border: 1px solid var(--line); background: var(--card); color: var(--ink);
+	border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); }
+.chip.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip .n { opacity: 0.65; margin-left: 4px; }
+.chip.more { color: var(--muted); }
+.chip.lead-toggle { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip.lead-toggle.active { background: var(--accent); color: var(--accent-ink); }
+.chip.sel-toggle { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.chip.sel-toggle.active { background: var(--ok); color: var(--ok-ink); }
+/* Modality filters : same amber as the pills under a title , so it's obvious
+   they filter by THAT rather than by a figure keyword. */
+.chip.mod-toggle { border-color: var(--mod-line); color: var(--mod-ink); }
+.chip.mod-toggle.active { background: var(--mod-ink); color: var(--bg); border-color: var(--mod-ink); }
+.seltools {
+	display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+	padding-top: 12px; border-top: 1px dashed var(--line); font-size: 13px;
+}
+#sel-label { color: var(--ok); font-weight: 600; margin-right: 4px; }
+.btn {
+	border: 1px solid var(--ok); background: var(--ok); color: var(--ok-ink);
+	border-radius: 7px; padding: 4px 12px; font-size: 13px; cursor: pointer;
+}
+.btn.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+.btn.ghost:hover { border-color: var(--muted); }
+.warn { color: #b45309; }
+.chips.collapsed .chip.rest { display: none; }
+/* ...but never hide the filter that's currently applied. */
+.chips.collapsed .chip.rest.active { display: inline-block; }
+main { padding: 24px 32px 48px; max-width: 1500px; margin: 0 auto; }
+.paper { margin: 0 0 36px; }
+.paper > h2 { margin: 0 0 2px; font-size: 15px; }
+.paper > h2 a { color: inherit; text-decoration: none; }
+.paper > h2 a:hover { color: var(--accent); }
+/* Modalities the STUDY used. Outlined + lettered , so they never read as one
+   of the blue/grey keyword tags that explain why a FIGURE matched. */
+.mods { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 6px; }
+.mod {
+	border: 1px solid var(--mod-line); color: var(--mod-ink);
+	border-radius: 999px; padding: 1px 9px; font-size: 12px;
+	letter-spacing: 0.02em; white-space: nowrap;
+}
+/* Inferred from the full text ( no abstract / Methods section to read ) --
+   dashed + faded , because it may be a modality the paper only discusses. */
+.mod.inferred { border-style: dashed; opacity: 0.72; }
+.links { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.links a { color: var(--accent); text-decoration: none; }
+.links a:hover { text-decoration: underline; }
+/* A dense contact sheet : the point is to SCAN a library's worth of design
+   figures , so fit as many cards on screen as stay legible. The crop is the
+   thing you're scanning -- the caption underneath is there to confirm a hit ,
+   not to be read in full ( it scrolls ). */
+.grid { display: grid; grid-template-columns: repeat( auto-fill , minmax( 240px , 1fr ) ); gap: 12px; }
+.fig-card {
+	margin: 0; background: var(--card); border: 1px solid var(--line);
+	border-radius: 10px; overflow: hidden; display: flex; flex-direction: column;
+}
+.fig-card { cursor: pointer; }
+.fig-card:hover { border-color: var(--muted); }
+.fig-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fig-card.selected { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok); }
+.thumb { position: relative; background: #ffffff; }
+.fig-card img { display: block; width: 100%; height: 150px; object-fit: contain; }
+/* Selected badge : a green chip ( ::before ) with a checkmark clipped out of a
+   solid block ( ::after ) -- no icon font , no image asset , not clickable. */
+.fig-card.selected .thumb::before ,
+.fig-card.selected .thumb::after { content: ""; position: absolute; pointer-events: none; }
+.fig-card.selected .thumb::before {
+	top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 6px; background: var(--ok);
+}
+.fig-card.selected .thumb::after {
+	top: 13px; left: 13px; width: 12px; height: 12px; background: var(--ok-ink);
+	clip-path: polygon( 14% 46%, 0 60%, 40% 100%, 100% 26%, 86% 12%, 40% 72% );
+}
+/* Brief pulse when "Last pick" jumps you to a card , so you can spot it. */
+@keyframes flash {
+	0% , 100% { box-shadow: 0 0 0 2px var(--ok); }
+	50%       { box-shadow: 0 0 0 8px rgba( 34 , 197 , 94 , 0.35 ); }
+}
+.fig-card.flash { animation: flash 1s ease-in-out 2; }
+.fabs {
+	position: fixed; right: 20px; bottom: 20px; z-index: 50;
+	display: flex; flex-direction: column; gap: 8px;
+}
+.fab {
+	border: 1px solid var(--line); background: var(--card); color: var(--ink);
+	border-radius: 999px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+	box-shadow: 0 2px 10px rgba( 0 , 0 , 0 , 0.18 );
+}
+.fab:hover { border-color: var(--accent); }
+.fab.ok { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.fig-card figcaption { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+	background: var(--tag); color: var(--tag-ink); border-radius: 6px;
+	padding: 1px 8px; font-size: 12px; white-space: nowrap;
+}
+/* Strong = structural term ; on its own it's why this figure is here. */
+.tag.strong { background: var(--accent); color: var(--accent-ink); }
+.tag .n { opacity: 0.6; margin-left: 3px; }
+.chip[data-tier="weak"] { border-style: dashed; }
+.cap { margin: 0; font-size: 12px; color: var(--ink); max-height: 6em; overflow: auto; }
+.cap:empty::before { content: "( no caption text )"; color: var(--muted); font-style: italic; }
+mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 2px; }
+.fig-meta { margin: 0; font-size: 12px; color: var(--muted); }
+.hidden { display: none !important; }
+footer { padding: 0 32px 40px; color: var(--muted); font-size: 12px; max-width: 1500px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<header>
+<!-- Only meaningful when ` prma server ` is serving this ; hidden on a file://
+     copy , where those routes don't exist ( the script below unhides it ). -->
+<nav class="nav hidden" id="nav"><a class="navlink" href="/">&larr; Dashboard</a><a class="navlink" href="/status">&#9638; Status</a><a class="navlink" href="/errors">&#9888; Errors</a></nav>
+<h1>Model Design Figures</h1>
+<!--{ meta }-->
+<div class="chips">
+<!--{ chips }-->
+</div>
+<!-- Only shown once something is picked ( see paintSelection ). -->
+<div class="seltools hidden" id="seltools">
+<span id="sel-label">0 selected</span>
+<button class="btn" id="export-json">Export JSON</button>
+<button class="btn" id="export-csv">Export CSV</button>
+<button class="btn ghost" id="sel-clear">Clear</button>
+<span class="warn hidden" id="sel-warn">selection can't be saved in this browser -- it will reset on refresh</span>
+</div>
+</header>
+<main>
+<!--{ papers }-->
+</main>
+<div class="fabs">
+<button class="fab ok hidden" id="fab-last" title="Jump to the figure you picked most recently">Last pick</button>
+<button class="fab hidden" id="fab-top" title="Back to top">&uarr; Top</button>
+</div>
+<footer>prma method-images &nbsp;·&nbsp; chips stack : picking several in one row widens it ( fMRI + EEG = either ) , while chips from different rows narrow each other ( fMRI + architecture = architecture figures from fMRI studies ). 'All' clears them. Click anywhere on a figure to add it to your selection ( kept in this browser across refreshes and across re-runs of the command , then Export JSON / CSV ). Solid tags are structural terms ( matched on their own ) ; dashed chips / plain tags are component terms ( <!--{ min_weak }-->+ needed per caption ). Pills under a title are the modalities the study used ( from its title , abstract and Methods section ) ; a dashed pill was inferred from the full text because neither an abstract nor a Methods section was available , and may be a modality the paper only discusses. No pills means none was found -- normal for reviews and behavioural work.</footer>
+<script>
+/* One artifact , two homes : opened off disk ( file:// ) the relative links and
+   the file:// PDF hrefs work as written ; served by ` prma server ` at
+   /method-images they resolve to its /images/ , /md/ and /methods/ routes --
+   except file:// , which a browser won't follow from an http page. So rewrite
+   just those to the server's own /pdf?key=... , keyed off the paper section. */
+if ( location.protocol !== "file:" ) {
+	document.querySelectorAll( ".paper" ).forEach( p => {
+		const a = p.querySelector( "a.pdf-link" );
+		if ( a && p.dataset.key ) a.href = "/pdf?key=" + encodeURIComponent( p.dataset.key );
+	} );
+	document.getElementById( "nav" ).classList.remove( "hidden" );
+}
+
+const chips  = Array.from( document.querySelectorAll( ".chip[data-kw]" ) );
+const allBtn = document.getElementById( "chip-all" );
+const moreBtn = document.getElementById( "chip-more" );
+const chipBar = document.querySelector( ".chips" );
+
+/* Filters are multi-select , with the usual facet semantics :
+     OR  within a group -- fMRI + EEG  = studies using either
+     AND across groups  -- ( fMRI + EEG ) AND ( architecture ) AND Overviews
+   An empty group means "no constraint from this group". */
+const activeKws = new Set();
+if ( moreBtn ) {
+	chipBar.classList.add( "collapsed" );
+	const hidden = chipBar.querySelectorAll( ".chip.rest" ).length;
+	moreBtn.addEventListener( "click" , () => {
+		const collapsed = chipBar.classList.toggle( "collapsed" );
+		moreBtn.textContent = collapsed ? `+${hidden} more` : "show fewer";
+	} );
+}
+const leadBtn  = document.getElementById( "chip-lead" );
+const modChips = Array.from( document.querySelectorAll( ".chip[data-modf]" ) );
+const activeMods = new Set();
+let leadOnly   = false;
+/* A card inherits its paper's modalities. Stamped once here rather than
+   emitted per-card , which would repeat every label 2300+ times in the HTML. */
+document.querySelectorAll( ".fig-card" ).forEach( c => {
+	c.dataset.pmods = c.closest( ".paper" ).dataset.mods || "";
+} );
+
+/* ---- the curated selection ------------------------------------------------
+   Ids are "<paper-key>#figure-<N>" , so picks survive re-running the command :
+   a regenerated report re-adopts whatever is still in storage. We keep ids for
+   figures NOT in this report ( a keyword change can hide one ) rather than
+   pruning them , so narrowing the search never silently drops your curation. */
+const SEL_KEY = "prma.method-images.selected";
+const selTools = document.getElementById( "seltools" );
+const selBtn   = document.getElementById( "chip-selected" );
+const topFab   = document.getElementById( "fab-top" );
+const lastFab  = document.getElementById( "fab-last" );
+let selOnly    = false;
+let store      = null;
+try { store = window.localStorage; store.getItem( SEL_KEY ); }
+catch ( e ) { store = null; document.getElementById( "sel-warn" ).classList.remove( "hidden" ); }
+
+function loadSel() {
+	if ( !store ) return new Set();
+	try { return new Set( JSON.parse( store.getItem( SEL_KEY ) || "[]" ) ); }
+	catch ( e ) { return new Set(); }
+}
+function saveSel() {
+	if ( !store ) return;
+	try { store.setItem( SEL_KEY , JSON.stringify( Array.from( selected ) ) ); }
+	catch ( e ) { /* quota / private mode : keep going in memory */ }
+}
+let selected = loadSel();
+
+function cards() { return Array.from( document.querySelectorAll( ".fig-card" ) ); }
+function selectedHere() { return cards().filter( c => selected.has( c.dataset.id ) ); }
+
+function paintSelection() {
+	cards().forEach( c => {
+		const on = selected.has( c.dataset.id );
+		c.classList.toggle( "selected" , on );
+		c.setAttribute( "aria-pressed" , on ? "true" : "false" );
+	} );
+	const n = selectedHere().length;
+	document.getElementById( "sel-count" ).textContent = n;
+	document.getElementById( "sel-label" ).textContent = n + " selected";
+	selTools.classList.toggle( "hidden" , n === 0 );
+	lastFab.classList.toggle( "hidden" , n === 0 );
+	if ( n === 0 && selOnly ) { selOnly = false; }
+}
+
+function apply() {
+	cards().forEach( c => {
+		// OR inside each group : the card needs ANY one of the picked chips.
+		const byKw = activeKws.size &&
+			!( c.dataset.kws || "" ).split( "|" ).some( k => activeKws.has( k ) );
+		/* Modality is a PAPER property ; a card inherits its paper's ( stamped
+		   once at init , so this stays a string compare per card ). */
+		const byMod = activeMods.size &&
+			!( c.dataset.pmods || "" ).split( "|" ).some( m => activeMods.has( m ) );
+		// AND across groups.
+		c.classList.toggle( "hidden" ,
+			!!byKw
+			|| !!byMod
+			|| ( leadOnly && c.dataset.lead !== "1" )
+			|| ( selOnly && !selected.has( c.dataset.id ) ) );
+	} );
+	leadBtn.classList.toggle( "active" , leadOnly );
+	selBtn.classList.toggle( "active" , selOnly );
+	modChips.forEach( ch => ch.classList.toggle( "active" , activeMods.has( ch.dataset.modf ) ) );
+	document.querySelectorAll( ".paper" ).forEach( p => {
+		p.classList.toggle( "hidden" , !p.querySelector( ".fig-card:not(.hidden)" ) );
+	} );
+	chips.forEach( ch => ch.classList.toggle( "active" , activeKws.has( ch.dataset.kw ) ) );
+	allBtn.classList.toggle( "active" ,
+		!activeKws.size && !activeMods.size && !leadOnly && !selOnly );
+}
+
+function toggleIn( set , value ) {
+	if ( set.has( value ) ) set.delete( value ); else set.add( value );
+	apply();
+}
+
+function toggleCard( card ) {
+	/* Set insertion order IS the pick order , and we persist Array.from( set ) ,
+	   so re-adding moves an id to the end and "Last pick" stays truthful. */
+	if ( selected.has( card.dataset.id ) ) selected.delete( card.dataset.id );
+	else selected.add( card.dataset.id );
+	saveSel();
+	paintSelection();
+	if ( selOnly ) apply();
+}
+document.addEventListener( "click" , ev => {
+	const card = ev.target.closest( ".fig-card" );
+	if ( !card ) return;
+	/* Don't toggle when the click was really the end of a text drag in the
+	   caption -- a plain click collapses the selection , so this is empty. */
+	if ( String( window.getSelection() ).trim() ) return;
+	toggleCard( card );
+} );
+document.addEventListener( "keydown" , ev => {
+	if ( ev.key !== "Enter" && ev.key !== " " ) return;
+	const card = ev.target.closest( ".fig-card" );
+	if ( !card ) return;
+	ev.preventDefault();
+	toggleCard( card );
+} );
+
+chips.forEach(    ch => ch.addEventListener( "click" , () => toggleIn( activeKws  , ch.dataset.kw   ) ) );
+modChips.forEach( ch => ch.addEventListener( "click" , () => toggleIn( activeMods , ch.dataset.modf ) ) );
+leadBtn.addEventListener( "click" , () => { leadOnly = !leadOnly; apply(); } );
+selBtn.addEventListener( "click"  , () => { selOnly  = !selOnly;  apply(); } );
+// 'All' is the one-click way back out of any combination of filters.
+allBtn.addEventListener( "click"  , () => {
+	activeKws.clear(); activeMods.clear(); leadOnly = false; selOnly = false; apply();
+} );
+document.getElementById( "sel-clear" ).addEventListener( "click" , () => {
+	if ( !confirm( "Clear all " + selectedHere().length + " selected figures?" ) ) return;
+	selectedHere().forEach( c => selected.delete( c.dataset.id ) );
+	saveSel();
+	paintSelection();
+	apply();
+} );
+
+/* ---- export --------------------------------------------------------------- */
+function records() {
+	return selectedHere().map( c => {
+		const p = c.closest( ".paper" );
+		return {
+			id:       c.dataset.id ,
+			key:      p.dataset.key || null ,
+			doi:      p.dataset.doi || null ,
+			title:    p.dataset.title || null ,
+			/* Modalities the STUDY used ; `methods` below stays the path to its
+			   methods .txt , which is a different thing entirely. When
+			   modalities_inferred is true they came from the full text because
+			   no abstract / Methods section existed -- treat as a weaker hint. */
+			modalities: ( p.dataset.mods || "" ).split( "|" ).filter( Boolean ) ,
+			modalities_inferred: p.dataset.modsInferred === "1" ,
+			figure:   Number( c.dataset.seq ) ,
+			page:     Number( c.dataset.page ) ,
+			caption:  c.querySelector( ".cap" ).textContent.trim() ,
+			keywords: ( c.dataset.kws || "" ).split( "|" ).filter( Boolean ) ,
+			lead:     c.dataset.lead === "1" ,
+			image:    c.dataset.abs || null ,
+			pdf:      p.dataset.pdf || null ,
+			md:       p.dataset.md || null ,
+			methods:  p.dataset.methods || null ,
+		};
+	} );
+}
+function download( text , name , mime ) {
+	const url = URL.createObjectURL( new Blob( [ text ] , { type: mime } ) );
+	const a = document.createElement( "a" );
+	a.href = url; a.download = name;
+	document.body.appendChild( a ); a.click(); a.remove();
+	URL.revokeObjectURL( url );
+}
+document.getElementById( "export-json" ).addEventListener( "click" , () => {
+	const figures = records();
+	download( JSON.stringify( {
+		source:    "prma method-images" ,
+		generated: new Date().toISOString() ,
+		count:     figures.length ,
+		figures ,
+	} , null , 2 ) , "method-images-selected.json" , "application/json" );
+} );
+
+/* ---- scroll controls ------------------------------------------------------ */
+const motionOK = !window.matchMedia( "(prefers-reduced-motion: reduce)" ).matches;
+
+function scrollToY( y ) {
+	y = Math.max( 0 , Math.round( y ) );
+	const from = Math.round( window.scrollY );
+	if ( from === y ) return;
+	window.scrollTo( { top: y , behavior: motionOK ? "smooth" : "auto" } );
+	/* Some embedded / automation renderers drop a smooth scroll on the floor
+	   instead of falling back to an instant one , which would leave these
+	   buttons dead. If nothing has moved shortly after , jump. A real smooth
+	   scroll is well underway by then , so this never fights it. */
+	setTimeout( () => {
+		if ( Math.round( window.scrollY ) === from ) window.scrollTo( { top: y , behavior: "auto" } );
+	} , 250 );
+}
+
+topFab.addEventListener( "click" , () => scrollToY( 0 ) );
+window.addEventListener( "scroll" , () => {
+	topFab.classList.toggle( "hidden" , window.scrollY < 400 );
+} , { passive: true } );
+
+lastFab.addEventListener( "click" , () => {
+	/* Walk pick order backwards for the most recent id still IN this report --
+	   a keyword change can hide the newest pick without dropping it. */
+	let card = null;
+	for ( const id of Array.from( selected ).reverse() ) {
+		card = document.querySelector( '.fig-card[data-id="' + CSS.escape( id ) + '"]' );
+		if ( card ) break;
+	}
+	if ( !card ) return;
+	/* If a filter is hiding it , drop the filters rather than scroll to nothing.
+	   ( selOnly can never hide a selected card , so leave that one alone. ) */
+	if ( card.classList.contains( "hidden" ) ) {
+		activeKws.clear(); activeMods.clear(); leadOnly = false;
+		apply();
+	}
+	const r = card.getBoundingClientRect();
+	scrollToY( window.scrollY + r.top - ( window.innerHeight - r.height ) / 2 );
+	card.classList.remove( "flash" );
+	void card.offsetWidth;              // restart the animation on a re-click
+	card.classList.add( "flash" );
+	setTimeout( () => card.classList.remove( "flash" ) , 2400 );
+} );
+document.getElementById( "export-csv" ).addEventListener( "click" , () => {
+	const cols = [ "id","doi","title","modalities","modalities_inferred","figure","page","image","pdf","md","methods","keywords","lead","caption" ];
+	const esc = v => {
+		const s = Array.isArray( v ) ? v.join( "; " ) : ( v === null ? "" : String( v ) );
+		return /[",\n]/.test( s ) ? '"' + s.replace( /"/g , '""' ) + '"' : s;
+	};
+	const rows = records().map( r => cols.map( c => esc( r[ c ] ) ).join( "," ) );
+	download( [ cols.join( "," ) ].concat( rows ).join( "\n" ) , "method-images-selected.csv" , "text/csv" );
+} );
+
+paintSelection();
+</script>
+</body>
+</html>

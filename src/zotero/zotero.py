@@ -1,6 +1,5 @@
 import os
 import glob
-import tempfile
 import shutil
 import sqlite3
 from contextlib import contextmanager
@@ -31,25 +30,113 @@ class Zotero():
 				return Path( hits[ 0 ] )
 		raise FileNotFoundError( "No zotero.sqlite found - check paths above" )
 
+	# One fixed , reused location for the working copy of the DB --
+	# output/cache/zotero/zotero.sqlite . Every run overwrites it in
+	# place , so a crash can never strand an orphan the way the old
+	# per-run tempdir did ; worst case one stale ~250 MB file sits here
+	# and the next run reuses it.
+	def snapshot_cache_path( self ):
+		out = getattr( self.args , "output" , None ) or Path.cwd().joinpath( "output" )
+		cache_dir = Path( out ).joinpath( "cache" , "zotero" )
+		cache_dir.mkdir( parents=True , exist_ok=True )
+		return cache_dir.joinpath( "zotero.sqlite" )
+
 	@contextmanager
 	def open_snapshot( self ):
-		# Copy the live zotero.sqlite into a throwaway temp dir so we can
-		# read it without holding a lock on Zotero's DB. The dir + its
-		# ~250 MB copy MUST be removed afterwards -- guaranteed here in
-		# finally so a mid-read exception can't leak it into $TMPDIR.
-		tmpdir = Path( tempfile.mkdtemp( prefix="zotero_db_" ) )
-		tmpdb = tmpdir / "zotero.sqlite"
+		# Read from a copy , never the live DB , so we don't lock Zotero out.
+		#
+		# The copy goes to a FIXED path ( see snapshot_cache_path ) rather
+		# than a fresh tempdir : nothing to leak , since each run truncates
+		# the previous one. That shared path means concurrent callers ( the
+		# exists server ) could otherwise read a half-written copy , so the
+		# flock serializes copy+read.
+		cache_db = self.snapshot_cache_path()
 		conn = None
+		with self._snapshot_lock( cache_db ):
+			try:
+				self._copy_live_db( cache_db )
+				# Opened read-write on purpose : if _copy_live_db caught a
+				# transaction in flight , the -journal it copied alongside is
+				# hot , and SQLite rolls the copy back to the last commit here.
+				conn = sqlite3.connect( cache_db )
+				conn.row_factory = sqlite3.Row
+				yield conn
+			finally:
+				if conn is not None:
+					try: conn.close()
+					except Exception: pass
+
+	# SQLite stores a change counter in the file header ( bytes 24..28 ) that
+	# bumps on every commit , plus a version-valid-for number ( 92..96 ).
+	# Sampling those either side of a copy is an O(1) way to ask "did Zotero
+	# commit while we were reading?" -- compare against PRAGMA quick_check ,
+	# which costs ~0.8s on a 250 MB library and would dominate the ~0.14s
+	# fast path the exists server depends on.
+	def _db_state_token( self , path ):
 		try:
-			shutil.copy2( self.sqlite_path , tmpdb )
-			conn = sqlite3.connect( tmpdb )
-			conn.row_factory = sqlite3.Row
-			yield conn
-		finally:
-			if conn is not None:
-				try: conn.close()
-				except Exception: pass
-			shutil.rmtree( tmpdir , ignore_errors=True )
+			with open( path , "rb" ) as f:
+				header = f.read( 100 )
+			if len( header ) < 100:
+				return None
+			return ( header[ 24:28 ] , header[ 92:96 ] , os.stat( path ).st_size )
+		except OSError:
+			return None
+
+	def _copy_live_db( self , cache_db , attempts=3 ):
+		"""Byte-copy the live zotero.sqlite into the cache.
+
+		A raw copy is the ONLY option here : Zotero holds an EXCLUSIVE lock
+		on its DB while running , so sqlite3's backup API -- and even a plain
+		read-only connection -- fail outright with 'database is locked'.
+
+		A raw copy isn't atomic , though , so guard the two ways it can lie :
+		  - Zotero uses a rollback journal ( journal_mode=delete ) , so a copy
+		    taken mid-transaction holds uncommitted pages. Copying the
+		    -journal alongside lets SQLite roll our copy back to the last
+		    commit when it's opened.
+		  - if Zotero commits DURING the copy , the copy can be torn AND the
+		    journal we grabbed goes stale ( applying a stale journal would
+		    itself corrupt the copy ). The change counter catches exactly
+		    that , so we retry.
+		"""
+		live_journal = Path( str( self.sqlite_path ) + "-journal" )
+		for attempt in range( attempts ):
+			# Clear inherited sidecars first : a -wal / -journal left by an
+			# earlier run would otherwise be replayed into this fresh copy.
+			for sidecar in ( "-wal" , "-shm" , "-journal" ):
+				Path( str( cache_db ) + sidecar ).unlink( missing_ok=True )
+			before = self._db_state_token( self.sqlite_path )
+			shutil.copy2( self.sqlite_path , cache_db )
+			if live_journal.exists():
+				try:
+					shutil.copy2( live_journal , str( cache_db ) + "-journal" )
+				except FileNotFoundError:
+					pass   # committed + deleted mid-copy ; the token check sees it
+			after = self._db_state_token( self.sqlite_path )
+			if before is not None and before == after:
+				return
+		print(
+			f"Zotero :: zotero.sqlite changed during all {attempts} copy attempts ; "
+			f"proceeding with a possibly mid-write copy"
+		)
+
+	@contextmanager
+	def _snapshot_lock( self , cache_db ):
+		"""Serialize access to the shared cache file across processes.
+		flock is POSIX-only ; on platforms without it ( Windows ) we run
+		unlocked , which matches the old per-run-tempdir behavior."""
+		try:
+			import fcntl
+		except ImportError:
+			yield
+			return
+		lock_path = Path( str( cache_db ) + ".lock" )
+		with open( lock_path , "w" ) as lock_file:
+			fcntl.flock( lock_file , fcntl.LOCK_EX )
+			try:
+				yield
+			finally:
+				fcntl.flock( lock_file , fcntl.LOCK_UN )
 
 	def take_titles_and_dois( self ):
 		"""Fast path for the 'exists' server : pull ONLY title + DOI

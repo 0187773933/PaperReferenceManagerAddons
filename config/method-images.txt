@@ -1,0 +1,132 @@
+# prma method-images : default search terms.
+#
+# Goal of this set : find the MODEL DESIGN figures -- the "here is our
+# architecture" overview diagrams ( the pipeline , the layers , the stacks ,
+# the blocks they chose ) -- NOT the figures that merely evaluate a model
+# ( ROC curves , accuracy bars , confusion matrices ).
+#
+# Two tiers , because a caption naming a model is not the same as a caption
+# describing one :
+#
+#   [strong]  structural vocabulary. A caption saying "architecture" or
+#             "block diagram" is a design figure on its own -> matches alone.
+#
+#   [weak]    component / model-family vocabulary. "transformer" or "layer"
+#             appears in BOTH "architecture of our transformer" and "accuracy
+#             of our transformer" , so these only match when --min-weak
+#             ( default 3 ) DISTINCT weak terms land in the same caption --
+#             a caption stacking "encoder" + "block" + "LSTM" is describing a
+#             design ; one saying "LSTM" alone is probably reporting a score.
+#             Distinct means different words : 'layer' twice is still one.
+#
+# Terms listed before any [section] header are treated as [strong] , so a
+# plain flat list still works. Keywords passed on the command line are all
+# strong ( ` prma method-images transformer attention CNN ` = a simple OR ) .
+# One keyword or phrase per line ; '#' starts a comment ; blanks ignored.
+#
+# Tuned against this library's 13.4k figure captions. Widen with --min-weak 2
+# ( more figures , more results plots ) ; tighten with --min-weak 4.
+
+[strong]
+# --- "this figure IS the architecture" -----------------------------------
+architecture
+overall architecture
+model architecture
+network architecture
+proposed architecture
+block diagram
+schematic
+schematic diagram
+framework
+proposed framework
+overview of the model
+overview of the proposed
+illustration of the proposed
+
+# --- pipeline / dataflow overviews ---------------------------------------
+pipeline
+processing pipeline
+analysis pipeline
+workflow
+end-to-end
+
+# --- structural building blocks ( design-only language ) -----------------
+encoder-decoder
+autoencoder
+backbone
+convolutional layer
+hidden layer
+fully connected
+residual block
+residual connection
+multi-head
+
+[weak]
+# --- model families : name-drops , need corroboration --------------------
+transformer
+vision transformer
+swin
+ViT
+CNN
+convolutional
+RNN
+LSTM
+GRU
+MLP
+graph neural network
+GNN
+U-Net
+ResNet
+VGG
+GAN
+generator
+discriminator
+diffusion model
+BERT
+GPT
+deep learning
+neural network
+machine learning
+
+# --- layers / stacks / blocks --------------------------------------------
+# ( singular only : the fuzzy match already covers 'layer' -> "layers" , and
+#   listing both just crowds the filter chips )
+layer
+block
+module
+stack
+consists of
+hybrid
+
+# --- internals -----------------------------------------------------------
+attention
+self-attention
+attention mechanism
+embedding
+encoder
+decoder
+latent space
+bottleneck
+token
+feature map
+skip connection
+dropout
+pooling
+kernel
+stride
+softmax
+batch normalization
+layer normalization
+activation function
+
+# --- structure-ish phrasing that is too mixed to trust alone -------------
+# ( 'flowchart' is mostly PRISMA / patient-recruitment charts in this
+#   library ; 'proposed model' / 'model structure' are as often results )
+model structure
+network structure
+proposed model
+flowchart
+training scheme
+fine-tuning
+transfer learning
+feature extraction

@@ -106,11 +106,25 @@ def crawl( args ):
 
 def process( args ):
 	# Find one paper by DOI / title and run the full per-paper suite on just
-	# it ( openalex -> yolo -> ocr -> images -> methods -> code -> md
+	# it ( openalex -> yolo -> ocr -> images -> methods -> code -> md -> modalities
 	# [ -> summarize ] ) , then reindex so the dashboard reflects it. Shares
 	# run_suite() with the server's live --watch worker.
 	from . import process as process_task
 	process_task.run( args )
+
+def method_images( args ):
+	# No snapshot : like rollup , this is a pure post-processing pass over
+	# outputs the PDF suite ( yolo -> ocr -> images -> methods -> code -> md -> modalities )
+	# already wrote. Papers the suite hasn't reached are skipped + counted.
+	from . import method_images
+	method_images.run( args )
+
+def modalities( args ):
+	# No snapshot : like method-images , a pure pass over what the suite
+	# already produced ( OpenAlex cache , methods .txt , md ) -- it just
+	# stamps paper[ 'modalities' ] on each record.
+	from . import modalities
+	modalities.run( args )
 
 def code( args ):
 	# Scan every paper's OpenAlex abstract + OCR text for source-code / data

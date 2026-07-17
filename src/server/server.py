@@ -779,7 +779,7 @@ class ProcessWorker:
 
 	  get_common( snapshot + auto OpenAlex for new DOIs )
 	    -> for each new key : process.run_suite ( yolo -> ocr -> images ->
-	       methods -> code -> md [ -> summarize ] , scoped to that one paper )
+	       methods -> code -> md -> modalities [ -> summarize ] , scoped to that one paper )
 	    -> ONE dashboard reindex for the batch
 
 	On startup it first sweeps the BACKLOG -- every library paper that still has
@@ -1005,7 +1005,7 @@ class ProcessWorker:
 
 	def _stage_seq( self ):
 		"""The stages run_suite drives ( for the progress block ) , in order."""
-		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "code" , "md" ]
+		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "code" , "md" , "modalities" ]
 		if self.summarize:
 			seq.append( "summarize" )
 		return seq
@@ -1079,8 +1079,11 @@ class ProcessWorker:
 					self._batch = None
 
 		# One reindex for the whole batch ( cheaper than per-paper ) , applied
-		# quietly so anyone browsing isn't bounced to a build screen.
+		# quietly so anyone browsing isn't bounced to a build screen. Same for
+		# the library-wide reports ( /method-images ) -- both are whole-library
+		# passes , so they run once here rather than inside run_suite.
 		self.dash.rebuild_after_process()
+		process_task.refresh_reports( self.args )
 		errs = f" , {n_err} failed" if n_err else ""
 		print(
 			f"watch :: {label} done -- processed {n_ok} paper(s){errs} "
@@ -1176,6 +1179,37 @@ class Handler( BaseHTTPRequestHandler ):
 		self.end_headers()
 		self.wfile.write( data )
 
+	def _send_method_images( self ):
+		"""Serve the report ` prma method-images ` writes -- the SAME file on disk ,
+		not a second renderer , so the CLI and the server can never drift. The
+		--watch worker rebuilds it after each batch of new papers ( see
+		process.refresh_reports ) , so it stays current on its own.
+
+		Built lazily on first open when it isn't there yet ( the pattern the
+		dashboard uses for its index ) : the server is threaded , so the ~15s
+		sweep doesn't block other requests. When there's nothing to build from
+		we explain why rather than 404 -- the usual cause is an empty keyword
+		list or a library the PDF suite hasn't reached."""
+		from ..tasks import method_images as mi
+		args = self.dash.args
+		path = mi.report_path( args )
+		if not path.exists():
+			print( "server    :: no method-images report yet ; building it now ( first open )" )
+			mi.rebuild( args )
+		try:
+			page = path.read_text( encoding="utf-8" )
+		except Exception as e:
+			page = (
+				"<h1>No method-images report yet</h1>"
+				f"<p>Nothing has been written to <code>{path}</code> ( {e} ).</p>"
+				"<p>It needs the PDF suite to have run ( <code>prma process</code> , or "
+				"this server with <code>--watch</code> ) , plus search terms on the "
+				"command line or in <code>config/method-images.txt</code>. Run "
+				"<code>prma method-images</code> to see what it says.</p>"
+				'<p><a href="/">&larr; Dashboard</a></p>'
+			)
+		self._send_html( 200 , page )
+
 	def _send_pdf( self , key ):
 		"""Stream a library paper's local PDF , looked up by its primary key
 		via the unified DB. Only ever serves a path that's actually recorded
@@ -1239,6 +1273,10 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_html( 200 , _load_status_html() )
 			return
 
+		if path in ( "/method-images" , "/method-images.html" ):
+			self._send_method_images()
+			return
+
 		if path == "/api/status":
 			# ?regen=1 recomputes fresh from the on-disk DB ( what opening the
 			# page does ) ; otherwise serve the last persisted tally.
@@ -1259,6 +1297,19 @@ class Handler( BaseHTTPRequestHandler ):
 		if path.startswith( "/images/" ):
 			self._send_static( self.dash.args.output.joinpath( "images" ) ,
 				path[ len( "/images/" ): ] )
+			return
+
+		# The /method-images report links its papers' rendered text with the same
+		# relative paths it uses off disk ( ../md/… , ../methods/… ) , which land
+		# here once it's served from /method-images .
+		if path.startswith( "/md/" ):
+			self._send_static( self.dash.args.output.joinpath( "md" ) ,
+				path[ len( "/md/" ): ] )
+			return
+
+		if path.startswith( "/methods/" ):
+			self._send_static( self.dash.args.output.joinpath( "methods" ) ,
+				path[ len( "/methods/" ): ] )
 			return
 
 		if path == "/api/jobs":

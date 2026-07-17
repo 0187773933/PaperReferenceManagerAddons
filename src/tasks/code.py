@@ -39,6 +39,7 @@ from tqdm import tqdm
 
 from ..db    import papers as papers_db
 from ..utils import utils
+from ..utils import methods as methods_vocab
 from ..pdf   import section_text
 
 # ezproxy host used across the project ( library_search , the missing.xlsx
@@ -422,25 +423,11 @@ def run( args ):
 # the full OCR , whose references would false-positive ) -- so a repo whose README
 # never names a method still gets tagged from its citing fMRI / EEG / ... studies.
 
-# label -> ( acronym matched as a whole word , extra substring phrases ). The
-# acronym uses a word boundary ( so 'pet' doesn't fire on 'dataset' ) ; the
-# phrases are plain substrings ( 'electroencephalogra' catches -phy / -m /
-# -phic , 'functional mri' catches the spelled-out form ).
-_METHODS = (
-	( "fMRI"  , "fmri"  , ( "functional mri" , "functional magnetic resonance" ) ) ,
-	( "EEG"   , "eeg"   , ( "electroencephalogra" , ) ) ,
-	( "ECoG"  , "ecog"  , ( "electrocorticogra" , ) ) ,
-	( "fNIRS" , "fnirs" , ( "functional near-infrared" , "functional near infrared" ,
-	                        "near-infrared spectroscopy" ) ) ,
-	( "MEG"   , "meg"   , ( "magnetoencephalogra" , ) ) ,
-	( "PET"   , "pet"   , ( "positron emission" , ) ) ,
-	( "EMG"   , "emg"   , ( "electromyography" , ) ) ,
-)
-_METHOD_LABELS = tuple( m for m , _ , _ in _METHODS )
-_METHODS_COMPILED = tuple(
-	( label , re.compile( r"\b" + re.escape( acro ) + r"\b" , re.I ) , phrases )
-	for label , acro , phrases in _METHODS
-)
+# The vocabulary itself lives in < --config >/methods.py -- see
+# src/utils/methods.py for the format ( and the built-in fallback ). It's
+# loaded per-run rather than baked in here so ` prma method-images ` renders
+# the same labels this workbook columns by , and adding a modality is a config
+# edit. Everything below therefore takes `args` : that's what knows --config .
 
 
 def _record_haystack( rec ):
@@ -460,26 +447,22 @@ def _record_haystack( rec ):
 	return " ".join( p for p in parts if p ).lower()
 
 
-def _scan_methods( hay ):
+def _scan_methods( args , hay ):
 	"""Method labels whose acronym ( whole word ) or spelled-out phrases appear in
-	`hay` ( a lowercased text blob ). The one keyword pass both the repo/node
-	records and the linking papers' own text run through."""
-	if not hay:
-		return []
-	found = []
-	for label , acro_re , phrases in _METHODS_COMPILED:
-		if acro_re.search( hay ) or any( p in hay for p in phrases ):
-			found.append( label )
-	return found
+	`hay`. The one keyword pass both the repo/node records and the linking papers'
+	own text run through -- and the same one ` prma method-images ` uses , via the
+	shared vocabulary in < --config >/methods.py . Case is handled there ; `hay`
+	needn't be pre-lowercased."""
+	return methods_vocab.scan( args , hay )
 
 
-def detect_methods( rec ):
+def detect_methods( args , rec ):
 	"""Which method labels appear in a cached GitHub repo or OSF node record
 	( name / title + description + topics / tags + language + category +
 	homepage + README / wiki )? [] for a missing / errored / empty record."""
 	if not rec or rec.get( "status" ) != "ok":
 		return []
-	return _scan_methods( _record_haystack( rec ) )
+	return _scan_methods( args , _record_haystack( rec ) )
 
 
 def _paper_text_methods( args , key , meta ):
@@ -496,7 +479,61 @@ def _paper_text_methods( args , key , meta ):
 		methods = section_text.resolve_section_text( args , key , "methods" )
 	except Exception:
 		methods = ""
-	return _scan_methods( f"{abstract} {methods}".lower() )
+	return _scan_methods( args , f"{abstract} {methods}" )
+
+
+def paper_methods( args , key , paper ):
+	"""Which modalities did THIS paper USE ? -- the same keyword pass the workbook's
+	method columns run , over the paper's title + OpenAlex abstract + isolated
+	METHODS section. As in _paper_text_methods , deliberately NOT the full OCR :
+	its reference list names every modality the paper merely CITES. So a label
+	here means the study itself used it , and reviews / theory papers correctly
+	come back empty rather than claiming every modality they survey.
+
+	Public because ` prma method-images ` shows these under each paper title --
+	keep _METHODS the single vocabulary for both , so adding a modality there
+	lights it up in the workbook AND the report."""
+	doi   = utils.normalize_doi( paper.get( "doi" ) or key ) or ""
+	meta  = _paper_oa_meta( args , doi )
+	found = set( _paper_text_methods( args , key , meta ) )
+	# The title is authoritative about the study and costs nothing to scan
+	# ( "... using fMRI" ) ; it tags papers whose abstract never cached.
+	found |= set( _scan_methods( args , paper.get( "title" ) or "" ) )
+	return _order_methods( args , found )
+
+
+def paper_methods_inferred( args , key , paper ):
+	"""Last-resort modalities for a paper we are BLIND about -- OpenAlex never
+	cached an abstract AND no Methods section was extracted , so paper_methods()
+	had nothing but the title to read. Falls back to the rendered md body , which
+	` prma md ` writes WITHOUT the reference list , making it the full text minus
+	the citations that would false-positive every modality.
+
+	Returns [] when we DO have an abstract or a Methods section : if that text
+	named no modality , that is an answer , not a gap , and the md body would
+	only add what the paper's intro / discussion CITES. ( Measured on this
+	library : inferring for such papers tagged a BCI ethics paper with all five
+	modalities and a behavioural aphasia study with fMRI + PET. ) Evidence here
+	is weaker than paper_methods() -- callers should mark it as inferred."""
+	doi      = utils.normalize_doi( paper.get( "doi" ) or key ) or ""
+	abstract = _reconstruct_abstract( _paper_oa_meta( args , doi ).get( "abstract_inverted_index" ) )
+	try:
+		methods = section_text.resolve_section_text( args , key , "methods" )
+	except Exception:
+		methods = ""
+	if abstract or methods:
+		return []
+	fname = utils.doi_to_filename( key )
+	if not fname:
+		return []
+	md_path = args.output.joinpath( "md" , f"{fname}.md" )
+	if not md_path.exists():
+		return []
+	try:
+		md = md_path.read_text( encoding="utf-8" , errors="ignore" )
+	except Exception:
+		return []
+	return _order_methods( args , set( _scan_methods( args , md ) ) )
 
 
 def fetch_github( args ):
@@ -677,7 +714,11 @@ _LINKS_HEADERS  = ( "DOI" , "Title" , "Added" , "Published" ,
                     "Source" , "URL" , "Methods" , "Found In" , "OCR Fix" , "Proxy" , "PDF" )
 _BYPAPER_HEADERS = ( "DOI" , "Title" , "Added" , "Published" ,
                      "# Links" , "Sources" , "Methods" , "Links" , "Proxy" , "PDF" )
-_UNIQUE_HEADERS = ( "URL" , "Source" , "Methods" ) + _METHOD_LABELS + ( "# Papers" , "DOIs" , "OCR Fix" )
+# One column per modality , so the set ( and its order ) comes from
+# < --config >/methods.py at run time rather than from a constant here.
+def _unique_headers( args ):
+	return ( "URL" , "Source" , "Methods" ) + tuple( methods_vocab.labels( args ) ) \
+	       + ( "# Papers" , "DOIs" , "OCR Fix" )
 
 
 def _pub_date( meta ):
@@ -713,6 +754,9 @@ def write_workbook( args ):
 	from ..osf.osf       import OSF , parse_node
 	gh  = GitHub( args )
 	osf = OSF( args )
+	# One read of < --config >/methods.py for the whole workbook : the flag
+	# columns and the sort offset below both key off this order.
+	method_labels = methods_vocab.labels( args )
 
 	# Memo : a link's detected methods ( from its cached github repo / OSF node ,
 	# whichever the URL points at ). Called with the EFFECTIVE ( OCR-repaired )
@@ -726,7 +770,7 @@ def write_workbook( args ):
 			else:
 				guid = parse_node( url )
 				rec  = osf.cached( guid ) if guid else None
-			_mcache[ url ] = detect_methods( rec ) if rec else []
+			_mcache[ url ] = detect_methods( args , rec ) if rec else []
 		return _mcache[ url ]
 
 	# The "OCR Fix" note for a repaired GitHub link : reads the `resolve` marker
@@ -781,7 +825,7 @@ def write_workbook( args ):
 			eff  = l.get( "resolved_url" ) or url    # OCR-repaired link if we have one
 			note = fix_note( url ) if l.get( "resolved_url" ) else ""
 			# Union : what the repo/node README says + what this paper's text says.
-			methods = _order_methods( set( methods_for( eff ) ) | set( text_methods ) )
+			methods = _order_methods( args , set( methods_for( eff ) ) | set( text_methods ) )
 			link_rows.append( [
 				doi_cell , title , added , published ,
 				src , utils.Link( eff , eff ) , " , ".join( methods ) ,
@@ -804,7 +848,7 @@ def write_workbook( args ):
 		by_paper_rows.append( [
 			doi_cell , title , added , published ,
 			len( urls ) , " , ".join( sources ) ,
-			" , ".join( _order_methods( paper_methods ) ) , "\n".join( urls ) ,
+			" , ".join( _order_methods( args , paper_methods ) ) , "\n".join( urls ) ,
 			proxy_cell , pdf_cell ,
 		] )
 
@@ -823,14 +867,14 @@ def write_workbook( args ):
 		text_methods = u[ "text_methods" ]
 		all_methods  = repo_methods | text_methods
 		flags = [ ( "✓" if m in repo_methods else ( "·" if m in text_methods else "" ) )
-		          for m in _METHOD_LABELS ]
+		          for m in method_labels ]
 		unique_rows.append( [
 			utils.Link( u[ "url" ] , u[ "url" ] ) , u[ "source" ] or "" ,
-			" , ".join( _order_methods( all_methods ) ) , *flags ,
+			" , ".join( _order_methods( args , all_methods ) ) , *flags ,
 			len( dois ) , "\n".join( dois ) , u.get( "fix" ) or "" ,
 		] )
 	# Sort : any-method first , then most-shared , then host.
-	_n_methods = len( _METHOD_LABELS )
+	_n_methods = len( method_labels )
 	unique_rows.sort( key=lambda r: (
 		0 if r[ 2 ] else 1 ,                      # rows with a method label first
 		-r[ 3 + _n_methods ] ,                    # then by # Papers
@@ -838,9 +882,9 @@ def write_workbook( args ):
 	) )
 
 	utils.write_xlsx( out_path , [
-		( "Links by Paper" , _LINKS_HEADERS   , link_rows     ) ,
-		( "By Paper"       , _BYPAPER_HEADERS , by_paper_rows ) ,
-		( "Unique Links"   , _UNIQUE_HEADERS  , unique_rows   ) ,
+		( "Links by Paper" , _LINKS_HEADERS        , link_rows     ) ,
+		( "By Paper"       , _BYPAPER_HEADERS      , by_paper_rows ) ,
+		( "Unique Links"   , _unique_headers( args ) , unique_rows ) ,
 	] )
 	n_tagged = sum( 1 for r in unique_rows if r[ 2 ] )
 	n_fixed  = sum( 1 for u in unique.values() if u.get( "fix" ) )
@@ -853,7 +897,7 @@ def write_workbook( args ):
 	return out_path
 
 
-def _order_methods( methods ):
-	"""Sort a set of matched method labels into the canonical _METHOD_LABELS
-	order ( so 'fMRI , EEG' always reads the same regardless of match order )."""
-	return [ m for m in _METHOD_LABELS if m in methods ]
+def _order_methods( args , methods ):
+	"""Sort a set of matched method labels into the order < --config >/methods.py
+	lists them ( so 'fMRI , EEG' always reads the same regardless of match order )."""
+	return methods_vocab.order( args , methods )
