@@ -76,6 +76,10 @@ h1 { margin: 0 0 4px; font-size: 24px; }
 .chip.lead-toggle.active { background: var(--accent); color: var(--accent-ink); }
 .chip.sel-toggle { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 .chip.sel-toggle.active { background: var(--ok); color: var(--ok-ink); }
+/* Skip is triage , not a keyword filter : a muted pill so it reads as "set
+   aside" , distinct from the green Selected sitting next to it. */
+.chip.skip-toggle { border-color: var(--muted); color: var(--muted); font-weight: 600; }
+.chip.skip-toggle.active { background: var(--muted); color: var(--bg); border-color: var(--muted); }
 /* Modality filters : same amber as the pills under a title , so it's obvious
    they filter by THAT rather than by a figure keyword. */
 .chip.mod-toggle { border-color: var(--mod-line); color: var(--mod-ink); }
@@ -96,7 +100,22 @@ h1 { margin: 0 0 4px; font-size: 24px; }
 /* ...but never hide the filter that's currently applied. */
 .chips.collapsed .chip.rest.active { display: inline-block; }
 main { padding: 24px 32px 48px; max-width: 1500px; margin: 0 auto; }
-.paper { margin: 0 0 36px; }
+/* scroll-margin so the arrow-key cursor lands a paper's title a little below the
+   top of the viewport rather than jammed against it. */
+.paper { margin: 0 0 36px; scroll-margin-top: 80px; }
+/* The arrow-key cursor : an accent bar down the left of the current paper. The
+   negative margin + matching padding keep its content aligned with the rest. */
+.paper.current {
+	border-left: 3px solid var(--accent); margin-left: -15px; padding-left: 12px;
+}
+/* A skipped paper is hidden from the default view ( see apply() ) ; when the
+   'Skipped' pill reveals it , it reads as set-aside -- dimmed , with a note --
+   except the one the cursor is on , which stays full-strength. */
+.paper.skipped { opacity: 0.5; }
+.paper.skipped.current { opacity: 1; }
+.paper.skipped > h2::after {
+	content: " · skipped"; color: var(--muted); font-weight: normal; font-size: 12px;
+}
 .paper > h2 { margin: 0 0 2px; font-size: 15px; }
 .paper > h2 a { color: inherit; text-decoration: none; }
 .paper > h2 a:hover { color: var(--accent); }
@@ -191,8 +210,10 @@ footer { padding: 0 32px 40px; color: var(--muted); font-size: 12px; max-width: 
 <button class="btn" id="export-json">Export JSON</button>
 <button class="btn" id="export-csv">Export CSV</button>
 <button class="btn ghost" id="sel-clear">Clear</button>
-<span class="warn hidden" id="sel-warn">selection can't be saved in this browser -- it will reset on refresh</span>
 </div>
+<!-- Persistence trouble ( server unreachable , or localStorage blocked off disk )
+     surfaces here so a lost pick is never silent. Filled + toggled by the script. -->
+<div class="warn hidden" id="persist-warn"></div>
 </header>
 <main>
 <!--{ papers }-->
@@ -201,14 +222,15 @@ footer { padding: 0 32px 40px; color: var(--muted); font-size: 12px; max-width: 
 <button class="fab ok hidden" id="fab-last" title="Jump to the figure you picked most recently">Last pick</button>
 <button class="fab hidden" id="fab-top" title="Back to top">&uarr; Top</button>
 </div>
-<footer>prma method-images &nbsp;·&nbsp; chips stack : picking several in one row widens it ( fMRI + EEG = either ) , while chips from different rows narrow each other ( fMRI + architecture = architecture figures from fMRI studies ). 'All' clears them. Click anywhere on a figure to add it to your selection ( kept in this browser across refreshes and across re-runs of the command , then Export JSON / CSV ). Solid tags are structural terms ( matched on their own ) ; dashed chips / plain tags are component terms ( <!--{ min_weak }-->+ needed per caption ). Pills under a title are the modalities the study used ( from its title , abstract and Methods section ) ; a dashed pill was inferred from the full text because neither an abstract nor a Methods section was available , and may be a modality the paper only discusses. No pills means none was found -- normal for reviews and behavioural work.</footer>
+<footer>prma method-images &nbsp;·&nbsp; chips stack : picking several in one row widens it ( fMRI + EEG = either ) , while chips from different rows narrow each other ( fMRI + architecture = architecture figures from fMRI studies ). 'All' clears them. Click anywhere on a figure to add it to your selection ( saved on the server when served , or in this browser off disk -- either way it survives refreshes and re-runs , then Export JSON / CSV ). Keyboard triage : &larr; / &rarr; move between papers , Space skips the current one ( skipped papers hide from the list and come back under the 'Skipped' pill ). Solid tags are structural terms ( matched on their own ) ; dashed chips / plain tags are component terms ( <!--{ min_weak }-->+ needed per caption ). Pills under a title are the modalities the study used ( from its title , abstract and Methods section ) ; a dashed pill was inferred from the full text because neither an abstract nor a Methods section was available , and may be a modality the paper only discusses. No pills means none was found -- normal for reviews and behavioural work.</footer>
 <script>
 /* One artifact , two homes : opened off disk ( file:// ) the relative links and
    the file:// PDF hrefs work as written ; served by ` prma server ` at
    /method-images they resolve to its /images/ , /md/ and /methods/ routes --
    except file:// , which a browser won't follow from an http page. So rewrite
    just those to the server's own /pdf?key=... , keyed off the paper section. */
-if ( location.protocol !== "file:" ) {
+const SERVED = location.protocol !== "file:";
+if ( SERVED ) {
 	document.querySelectorAll( ".paper" ).forEach( p => {
 		const a = p.querySelector( "a.pdf-link" );
 		if ( a && p.dataset.key ) a.href = "/pdf?key=" + encodeURIComponent( p.dataset.key );
@@ -244,35 +266,93 @@ document.querySelectorAll( ".fig-card" ).forEach( c => {
 	c.dataset.pmods = c.closest( ".paper" ).dataset.mods || "";
 } );
 
-/* ---- the curated selection ------------------------------------------------
-   Ids are "<paper-key>#figure-<N>" , so picks survive re-running the command :
-   a regenerated report re-adopts whatever is still in storage. We keep ids for
-   figures NOT in this report ( a keyword change can hide one ) rather than
-   pruning them , so narrowing the search never silently drops your curation. */
-const SEL_KEY = "prma.method-images.selected";
+/* ---- curation : selected figures + skipped papers -------------------------
+   Two collections , both keyed by ids STABLE across re-runs of the command , so
+   a regenerated report re-adopts them :
+     selected : figure ids "<paper-key>#figure-<N>" -- insertion order IS pick
+                order ( "Last pick" walks it ) .
+     skipped  : paper keys -- papers triaged away ( ←/→ + Space , below ) , hidden
+                from the default view and shown alone under the 'Skipped' pill.
+   Ids for figures / papers NOT in this report are kept , not pruned , so
+   narrowing the keywords never drops your curation.
+
+   Persistence : served by ` prma server ` these live SERVER-SIDE
+   ( /api/method-images/state ) so they follow you across browsers and survive a
+   rebuild ; opened off disk ( file:// , no server ) they fall back to this
+   browser's localStorage , as before. */
+const SEL_KEY  = "prma.method-images.selected";
+const SKIP_KEY = "prma.method-images.skipped";
 const selTools = document.getElementById( "seltools" );
 const selBtn   = document.getElementById( "chip-selected" );
+const skipBtn  = document.getElementById( "chip-skipped" );
 const topFab   = document.getElementById( "fab-top" );
 const lastFab  = document.getElementById( "fab-last" );
+const warnBox  = document.getElementById( "persist-warn" );
 let selOnly    = false;
-let store      = null;
-try { store = window.localStorage; store.getItem( SEL_KEY ); }
-catch ( e ) { store = null; document.getElementById( "sel-warn" ).classList.remove( "hidden" ); }
+let skipOnly   = false;
+let selected   = new Set();   // figure ids ; iteration order = pick order
+let skipped    = new Set();   // paper keys
 
-function loadSel() {
-	if ( !store ) return new Set();
-	try { return new Set( JSON.parse( store.getItem( SEL_KEY ) || "[]" ) ); }
-	catch ( e ) { return new Set(); }
+function showWarn( msg ) { warnBox.textContent = msg; warnBox.classList.remove( "hidden" ); }
+function hideWarn()      { warnBox.classList.add( "hidden" ); }
+
+/* Off-disk persistence : localStorage , when this browser allows it. */
+let store = null;
+if ( !SERVED ) {
+	try { store = window.localStorage; store.getItem( SEL_KEY ); }
+	catch ( e ) { store = null; }
 }
-function saveSel() {
+function saveLocal() {
 	if ( !store ) return;
-	try { store.setItem( SEL_KEY , JSON.stringify( Array.from( selected ) ) ); }
-	catch ( e ) { /* quota / private mode : keep going in memory */ }
+	try {
+		store.setItem( SEL_KEY  , JSON.stringify( Array.from( selected ) ) );
+		store.setItem( SKIP_KEY , JSON.stringify( Array.from( skipped  ) ) );
+	} catch ( e ) { /* quota / private mode : keep going in memory */ }
 }
-let selected = loadSel();
 
-function cards() { return Array.from( document.querySelectorAll( ".fig-card" ) ); }
+/* Served persistence : one tiny POST per change. We update the local set and
+   repaint FIRST ( optimistic ) , then POST ; the server applies the same rule
+   ( re-picking a figure moves its id to the end ) , so the two stay in step
+   without adopting each response ( which would race under fast input ). A failed
+   write raises a visible , non-blocking warning rather than losing it silently. */
+async function postState( payload ) {
+	try {
+		const r = await fetch( "/api/method-images/state" , {
+			method: "POST" ,
+			headers: { "Content-Type": "application/json" } ,
+			body: JSON.stringify( payload ) ,
+		} );
+		if ( !r.ok ) throw new Error( "HTTP " + r.status );
+		hideWarn();
+	} catch ( e ) {
+		showWarn( "couldn't reach the server -- your latest change may not be saved" );
+	}
+}
+function persistSelected( id , on )  { if ( SERVED ) postState( { kind: "selected" , id , on } ); else saveLocal(); }
+function persistSkipped( key , on )  { if ( SERVED ) postState( { kind: "skipped" , id: key , on } ); else saveLocal(); }
+
+async function loadState() {
+	if ( SERVED ) {
+		try {
+			const r = await fetch( "/api/method-images/state" , { cache: "no-store" } );
+			const j = await r.json();
+			selected = new Set( j.selected || [] );
+			skipped  = new Set( j.skipped  || [] );
+		} catch ( e ) {
+			showWarn( "couldn't load your saved selection from the server" );
+		}
+	} else if ( store ) {
+		try { selected = new Set( JSON.parse( store.getItem( SEL_KEY  ) || "[]" ) ); } catch ( e ) {}
+		try { skipped  = new Set( JSON.parse( store.getItem( SKIP_KEY ) || "[]" ) ); } catch ( e ) {}
+	} else {
+		showWarn( "selections can't be saved in this browser -- they'll reset on refresh" );
+	}
+}
+
+function cards()      { return Array.from( document.querySelectorAll( ".fig-card" ) ); }
+function papersAll()  { return Array.from( document.querySelectorAll( ".paper" ) ); }
 function selectedHere() { return cards().filter( c => selected.has( c.dataset.id ) ); }
+function skippedHere()  { return papersAll().filter( p => skipped.has( p.dataset.key ) ); }
 
 function paintSelection() {
 	cards().forEach( c => {
@@ -286,6 +366,10 @@ function paintSelection() {
 	selTools.classList.toggle( "hidden" , n === 0 );
 	lastFab.classList.toggle( "hidden" , n === 0 );
 	if ( n === 0 && selOnly ) { selOnly = false; }
+}
+function updateSkipCount() {
+	// Only papers actually present in THIS report ( same spirit as sel-count ).
+	document.getElementById( "skip-count" ).textContent = skippedHere().length;
 }
 
 function apply() {
@@ -306,13 +390,21 @@ function apply() {
 	} );
 	leadBtn.classList.toggle( "active" , leadOnly );
 	selBtn.classList.toggle( "active" , selOnly );
+	skipBtn.classList.toggle( "active" , skipOnly );
 	modChips.forEach( ch => ch.classList.toggle( "active" , activeMods.has( ch.dataset.modf ) ) );
-	document.querySelectorAll( ".paper" ).forEach( p => {
-		p.classList.toggle( "hidden" , !p.querySelector( ".fig-card:not(.hidden)" ) );
+	papersAll().forEach( p => {
+		const skip = skipped.has( p.dataset.key );
+		p.classList.toggle( "skipped" , skip );
+		/* Skipped papers drop out of the default view ; the 'Skipped' pill flips
+		   that to show ONLY them. Either way a paper whose every figure is filtered
+		   out ( no visible card ) is hidden too. */
+		const bySkip  = skipOnly ? !skip : skip;
+		const hasCard = !!p.querySelector( ".fig-card:not(.hidden)" );
+		p.classList.toggle( "hidden" , bySkip || !hasCard );
 	} );
 	chips.forEach( ch => ch.classList.toggle( "active" , activeKws.has( ch.dataset.kw ) ) );
 	allBtn.classList.toggle( "active" ,
-		!activeKws.size && !activeMods.size && !leadOnly && !selOnly );
+		!activeKws.size && !activeMods.size && !leadOnly && !selOnly && !skipOnly );
 }
 
 function toggleIn( set , value ) {
@@ -321,14 +413,72 @@ function toggleIn( set , value ) {
 }
 
 function toggleCard( card ) {
-	/* Set insertion order IS the pick order , and we persist Array.from( set ) ,
-	   so re-adding moves an id to the end and "Last pick" stays truthful. */
-	if ( selected.has( card.dataset.id ) ) selected.delete( card.dataset.id );
-	else selected.add( card.dataset.id );
-	saveSel();
+	/* Insertion order IS the pick order , and re-adding moves an id to the end ,
+	   so "Last pick" stays truthful. */
+	const id = card.dataset.id;
+	const on = !selected.has( id );
+	selected.delete( id );
+	if ( on ) selected.add( id );
+	persistSelected( id , on );
 	paintSelection();
 	if ( selOnly ) apply();
 }
+
+/* ---- paper cursor : ←/→ walk papers , Space skips --------------------------
+   The cursor moves over the papers currently VISIBLE ( so skipped / filtered-out
+   ones are stepped past ) , scrolling each near the top and marking it 'current'.
+   It's our own concept , NOT DOM focus , so it never fights Tab or a focused
+   figure card. */
+let curIdx = -1;
+function visiblePapers() { return papersAll().filter( p => !p.classList.contains( "hidden" ) ); }
+function nearestPaper() {
+	// Index ( among visible papers ) of the one nearest the cursor's landing line ,
+	// so a first ←/→ or Space acts on what you're already looking at.
+	const vis = visiblePapers();
+	let best = -1 , bestD = Infinity;
+	vis.forEach( ( p , i ) => {
+		const d = Math.abs( p.getBoundingClientRect().top - 80 );
+		if ( d < bestD ) { bestD = d; best = i; }
+	} );
+	return best;
+}
+function setCurrent( idx ) {
+	document.querySelectorAll( ".paper.current" ).forEach( p => p.classList.remove( "current" ) );
+	const vis = visiblePapers();
+	if ( !vis.length ) { curIdx = -1; return null; }
+	idx = Math.max( 0 , Math.min( idx , vis.length - 1 ) );
+	curIdx = idx;
+	const p = vis[ idx ];
+	p.classList.add( "current" );
+	const r = p.getBoundingClientRect();
+	scrollToY( window.scrollY + r.top - 80 );
+	return p;
+}
+function moveCurrent( delta ) {
+	const vis = visiblePapers();
+	if ( !vis.length ) return;
+	const curEl = document.querySelector( ".paper.current" );
+	if ( !curEl ) { setCurrent( nearestPaper() ); return; }  // first press just reveals the cursor where you are
+	setCurrent( vis.indexOf( curEl ) + delta );
+}
+function toggleSkip( paper ) {
+	const key = paper.dataset.key;
+	if ( !key ) return;
+	const wasCurrent = paper.classList.contains( "current" );
+	const idx = visiblePapers().indexOf( paper );   // its slot BEFORE the skip hides it
+	const on  = !skipped.has( key );
+	if ( on ) skipped.add( key ); else skipped.delete( key );
+	persistSkipped( key , on );
+	updateSkipCount();
+	apply();
+	/* Keep a sensible cursor : if the skip hid the paper , land on whatever slid
+	   into its slot ( the next one to triage ) ; otherwise keep it here. */
+	if ( wasCurrent ) {
+		if ( paper.classList.contains( "hidden" ) ) setCurrent( idx );
+		else { paper.classList.add( "current" ); curIdx = visiblePapers().indexOf( paper ); }
+	}
+}
+
 document.addEventListener( "click" , ev => {
 	const card = ev.target.closest( ".fig-card" );
 	if ( !card ) return;
@@ -338,25 +488,41 @@ document.addEventListener( "click" , ev => {
 	toggleCard( card );
 } );
 document.addEventListener( "keydown" , ev => {
-	if ( ev.key !== "Enter" && ev.key !== " " ) return;
-	const card = ev.target.closest( ".fig-card" );
-	if ( !card ) return;
-	ev.preventDefault();
-	toggleCard( card );
+	if ( ev.metaKey || ev.ctrlKey || ev.altKey ) return;
+	const t   = ev.target;
+	const tag = ( t.tagName || "" ).toLowerCase();
+	if ( tag === "input" || tag === "textarea" || t.isContentEditable ) return;
+	if ( ev.key === "ArrowRight" ) { ev.preventDefault(); moveCurrent( +1 ); return; }
+	if ( ev.key === "ArrowLeft"  ) { ev.preventDefault(); moveCurrent( -1 ); return; }
+	if ( ev.key === "Enter" || ev.key === " " ) {
+		// A focused figure card keeps its own keyboard toggle ( Enter / Space ).
+		const card = t.closest ? t.closest( ".fig-card" ) : null;
+		if ( card ) { ev.preventDefault(); toggleCard( card ); return; }
+		// Space anywhere else skips the current paper ( first press adopts the
+		// paper you're looking at as the cursor , then skips it ).
+		if ( ev.key === " " ) {
+			ev.preventDefault();
+			const p = document.querySelector( ".paper.current" ) || setCurrent( nearestPaper() );
+			if ( p ) toggleSkip( p );
+		}
+	}
 } );
 
 chips.forEach(    ch => ch.addEventListener( "click" , () => toggleIn( activeKws  , ch.dataset.kw   ) ) );
 modChips.forEach( ch => ch.addEventListener( "click" , () => toggleIn( activeMods , ch.dataset.modf ) ) );
 leadBtn.addEventListener( "click" , () => { leadOnly = !leadOnly; apply(); } );
 selBtn.addEventListener( "click"  , () => { selOnly  = !selOnly;  apply(); } );
+skipBtn.addEventListener( "click" , () => { skipOnly = !skipOnly; apply(); } );
 // 'All' is the one-click way back out of any combination of filters.
 allBtn.addEventListener( "click"  , () => {
-	activeKws.clear(); activeMods.clear(); leadOnly = false; selOnly = false; apply();
+	activeKws.clear(); activeMods.clear(); leadOnly = false; selOnly = false; skipOnly = false; apply();
 } );
 document.getElementById( "sel-clear" ).addEventListener( "click" , () => {
-	if ( !confirm( "Clear all " + selectedHere().length + " selected figures?" ) ) return;
-	selectedHere().forEach( c => selected.delete( c.dataset.id ) );
-	saveSel();
+	const here = selectedHere();
+	if ( !here.length ) return;
+	if ( !confirm( "Clear all " + here.length + " selected figures?" ) ) return;
+	/* Only the figures shown HERE -- picks a keyword change is hiding stay put. */
+	here.forEach( c => { selected.delete( c.dataset.id ); persistSelected( c.dataset.id , false ); } );
 	paintSelection();
 	apply();
 } );
@@ -459,7 +625,14 @@ document.getElementById( "export-csv" ).addEventListener( "click" , () => {
 	download( [ cols.join( "," ) ].concat( rows ).join( "\n" ) , "method-images-selected.csv" , "text/csv" );
 } );
 
-paintSelection();
+/* Load the saved curation ( server when served , else localStorage ) BEFORE the
+   first paint , then apply() so skipped papers start hidden. */
+( async function init() {
+	await loadState();
+	paintSelection();
+	updateSkipCount();
+	apply();
+} )();
 </script>
 </body>
 </html>

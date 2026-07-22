@@ -81,23 +81,34 @@ a row ( fMRI + EEG = studies using either ) , AND across rows ( that , narrowed
 to figures matching the picked keywords , narrowed to Overviews , ... ). 'All'
 clears every filter at once.
 
-Curation lives in the page : click anywhere on a figure to add it to a
-selection ( green outline ) , filter to it with the 'Selected' pill , and
-Export JSON / CSV for downstream use ( each record carries the doi , title ,
-figure + page number , caption , matched keywords , and absolute paths to the
-PNG / PDF / .md / methods .txt ). Floating controls jump you back to the top
-or to your most recent pick , so a long curation session is resumable.
+Curation lives in the page. Click anywhere on a figure to add it to a selection
+( green outline ) and filter to it with the 'Selected' pill ; Export JSON / CSV
+for downstream use ( each record carries the doi , title , figure + page number ,
+caption , matched keywords , and absolute paths to the PNG / PDF / .md /
+methods .txt ). For a fast pass , the LEFT / RIGHT arrow keys move a cursor
+between papers and SPACE skips the current one -- skipped papers drop out of the
+list and reappear only under the 'Skipped' pill ( to review / restore ). Floating
+controls jump you back to the top or to your most recent pick.
 
-The selection is held in the browser's localStorage under
-'prma.method-images.selected' , keyed by '<paper-key>#figure-<N>' -- so it
-survives refreshes AND re-runs of this command , and this task never needs to
-write it back to disk. Regenerating with different keywords can't lose picks :
-ids for figures absent from the current report stay in storage untouched.
+Both collections are keyed by ids that are STABLE across re-runs of this command
+-- selected figures by '<paper-key>#figure-<N>' , skipped papers by their key --
+so a regenerated report re-adopts them and narrowing the keywords never drops a
+pick ( ids for figures / papers absent from the current report are kept , not
+pruned ).
+
+Persistence : when the report is SERVED by ` prma server ` it reads / writes the
+selection through /api/method-images/state ( stored in
+output/cache/method-images-state.json ; see src/db/method_images_state.py ) , so
+it follows you across browsers and survives a rebuild. Opened straight off disk
+over file:// -- no server to talk to -- the page falls back to this browser's
+localStorage , as it always did. Either way this task never writes the selection
+itself ; it only renders the report.
 """
 
 import html
 import os
 import re
+import threading
 from datetime import datetime , timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -518,6 +529,14 @@ def _render_report( out_path , strong , weak , matched , stats ):
 		'title="Show only the figures you picked">'
 		'Selected<span class="n" id="sel-count">0</span></button>'
 	)
+	# Skip is per-PAPER triage : skipped papers drop out of the default view ; this
+	# pill flips that to show ONLY them ( to review / restore ). Count starts at 0
+	# and the page fills it from the stored skip list ( like Selected ).
+	C.append(
+		'<button class="chip skip-toggle" id="chip-skipped" '
+		'title="Show only the papers you skipped ( otherwise hidden from the list )">'
+		'Skipped<span class="n" id="skip-count">0</span></button>'
+	)
 	# Modality filters , straight after Selected. A fixed , small set from
 	# < --config >/methods.py , so they're never collapsed behind '+N more'.
 	# Counts are FIGURES ( like every other chip ) , not papers.
@@ -653,15 +672,50 @@ def report_path( args ):
 	return args.output.joinpath( "method-images" , "report.html" )
 
 
+def report_is_stale( args ):
+	"""True when the report needs rebuilding because one of its DEFINITION inputs
+	changed : it's missing , or the page template ( src/dashboard/method_images.html )
+	or the keyword list is newer than the built report. ( A change in the DATA --
+	newly processed papers -- is handled separately , by the --watch worker's
+	post-process refresh_reports. ) This is what lets ` prma server ` notice you
+	edited the page and rebuild on the next start , rather than serving a stale
+	artifact forever on an already-processed library.
+
+	Best-effort : any stat error resolves to 'not stale' , so a filesystem hiccup
+	never forces a rebuild loop."""
+	try:
+		rep = report_path( args )
+		if not rep.exists():
+			return True
+		rep_m = rep.stat().st_mtime
+		kf = getattr( args , "method_images_file" , None )
+		kf = Path( kf ) if kf else args.config.joinpath( "method-images.txt" )
+		for src in ( TEMPLATE_PATH , kf ):
+			try:
+				if src and src.exists() and src.stat().st_mtime > rep_m:
+					return True
+			except Exception:
+				pass
+		return False
+	except Exception:
+		return False
+
+
+# Serializes in-process rebuilds so a startup staleness rebuild and the --watch
+# worker's post-batch refresh can't write report.html on top of each other.
+_REBUILD_LOCK = threading.Lock()
+
+
 def rebuild( args ):
-	"""Regenerate the report because the library changed. Called after the
-	per-paper suite lands new papers ( process.run_suite , and the server's
-	--watch worker once per BATCH -- it's a whole-library pass , so per-paper
-	would be pure waste ). Never raises : a failed report must not take a
-	processing run or the server down with it."""
+	"""Regenerate the report because an input changed -- new papers ( process.run_suite ,
+	and the server's --watch worker once per BATCH ) or an edited page / keyword
+	list ( the server's startup staleness check ). It's a whole-library pass , so
+	callers batch it rather than run it per-paper. Never raises : a failed report
+	must not take a processing run or the server down with it."""
 	prev , args.only_keys = getattr( args , "only_keys" , None ) , None
 	try:
-		run( args )
+		with _REBUILD_LOCK:
+			run( args )
 	except Exception as e:
 		print( f"METHOD-IMAGES :: report rebuild failed ( {e} ) ; leaving the last one in place" )
 	finally:

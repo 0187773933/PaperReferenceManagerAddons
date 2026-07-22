@@ -338,6 +338,76 @@ class DashboardData:
 				"results": list( rows ) }
 
 
+class MethodImagesState:
+	"""In-memory holder for the /method-images report's curation -- the FIGURES
+	the user picked ( selected ) and the PAPERS they skipped -- persisted via
+	src/db/method_images_state.py so it follows the user across browsers and
+	survives a report rebuild ( the page used to keep this in localStorage , which
+	broke on a browser switch ).
+
+	Mirrors DashboardData's skip handling : loaded once at startup , mutated one
+	id at a time from the page ( so two browsers editing at once don't clobber
+	each other's whole set ) , and persisted on every change. Guarded by a lock ;
+	each write is a tiny JSON dump.
+
+	`selected` is an ordered LIST -- insertion order is the pick order the page's
+	"Last pick" relies on , and re-picking a figure moves its id to the END , same
+	as the page's own toggle. `skipped` is a set ; order is irrelevant."""
+
+	def __init__( self , args ):
+		self.args     = args
+		self._lock    = threading.Lock()
+		self.selected = []       # ordered : insertion order IS pick order
+		self.skipped  = set()
+
+	def load( self ):
+		"""Populate from disk ( call at startup ). Never raises."""
+		from ..db import method_images_state as mistate
+		try:
+			sel , skip = mistate.load( self.args )
+			with self._lock:
+				self.selected = list( sel )
+				self.skipped  = set( skip )
+		except Exception as e:
+			print( f"method-images :: could not load curation state ( {e} )" )
+
+	def snapshot( self ):
+		with self._lock:
+			return { "selected": list( self.selected ) ,
+			         "skipped":  sorted( self.skipped ) }
+
+	def _persist_locked( self ):
+		from ..db import method_images_state as mistate
+		try:
+			mistate.save( self.args , self.selected , self.skipped )
+		except Exception as e:
+			print( f"method-images :: could not persist curation state ( {e} )" )
+
+	def set_selected( self , fid , on ):
+		"""Add ( on=True ) or remove a figure id. Re-adding moves it to the END so
+		the page's "Last pick" stays truthful."""
+		fid = ( fid or "" ).strip()
+		if not fid:
+			return
+		with self._lock:
+			self.selected = [ s for s in self.selected if s != fid ]
+			if on:
+				self.selected.append( fid )
+			self._persist_locked()
+
+	def set_skipped( self , key , on ):
+		"""Skip ( on=True ) or un-skip a paper key."""
+		key = ( key or "" ).strip()
+		if not key:
+			return
+		with self._lock:
+			s = set( self.skipped )
+			if on: s.add( key )
+			else:  s.discard( key )
+			self.skipped = s
+			self._persist_locked()
+
+
 def _load_dashboard_html():
 	"""Read the dashboard SPA fresh on each request so hand-edits to
 	dashboard.html show up on a browser reload without restarting the
@@ -1128,6 +1198,7 @@ class Handler( BaseHTTPRequestHandler ):
 	cache:  SnapshotCache = None   # injected at startup
 	dash:   DashboardData = None   # injected at startup
 	worker: "ProcessWorker" = None # injected at startup IFF --watch ; else None
+	mistate: "MethodImagesState" = None  # injected at startup ( /method-images curation )
 
 	def log_message( self , *_ ):
 		return
@@ -1294,6 +1365,14 @@ class Handler( BaseHTTPRequestHandler ):
 				self.dash.args , self._arg( self._qs() , "key" , "" ) ) )
 			return
 
+		if path == "/api/method-images/state":
+			# The /method-images report's curation ( selected figures + skipped
+			# papers ) , persisted server-side so it follows the user across
+			# browsers. The page fetches this on load.
+			self._send_json( 200 , self.mistate.snapshot() if self.mistate
+				else { "selected": [] , "skipped": [] } )
+			return
+
 		if path.startswith( "/images/" ):
 			self._send_static( self.dash.args.output.joinpath( "images" ) ,
 				path[ len( "/images/" ): ] )
@@ -1373,6 +1452,33 @@ class Handler( BaseHTTPRequestHandler ):
 		self._send_json( 404 , { "error": "not found" } )
 
 	def do_POST( self ):
+		if self.path == "/api/method-images/state":
+			# Toggle one figure's selected state or one paper's skipped state on the
+			# /method-images report , persisted server-side. Body :
+			#   { "kind": "selected"|"skipped" , "id": "<id>" , "on": bool }
+			# One id per request ( like /api/skip ) so concurrent browsers don't
+			# clobber each other's whole set. Returns the full state back so the
+			# page can reconcile ( e.g. pick order ) if it wants to.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				kind   = data.get( "kind" )
+				if kind not in ( "selected" , "skipped" ):
+					self._send_json( 400 , { "ok": False ,
+						"error": "kind must be 'selected' or 'skipped'" } )
+					return
+				ident = data.get( "id" ) or ""
+				on    = bool( data.get( "on" , True ) )
+				if kind == "selected":
+					self.mistate.set_selected( ident , on )
+				else:
+					self.mistate.set_skipped( ident , on )
+				self._send_json( 200 , { "ok": True , **self.mistate.snapshot() } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
 		if self.path == "/api/skip":
 			# Toggle a paper's skipped ( hidden ) state ; persisted server-side so
 			# it survives reloads. Body : { "key": "<row key>" , "skipped": bool }.
@@ -1473,6 +1579,30 @@ def run( args ):
 	loaded = dash.load_from_disk()   # serve last ` prma reindex ` instantly if present
 	dash.load_skips()                # restore the user's hidden ( skipped ) rows
 	Handler.dash = dash
+
+	# /method-images curation ( selected figures + skipped papers ) : restore the
+	# user's picks so the report serves them to whatever browser opens it.
+	mistate = MethodImagesState( args )
+	mistate.load()
+	Handler.mistate = mistate
+
+	# The /method-images report is a pre-built artifact served verbatim. If the
+	# PAGE template or the keyword list changed since it was last built ( e.g. you
+	# edited the page and restarted the server ) , rebuild it now -- in the
+	# background , so startup isn't blocked on the whole-library sweep. Without
+	# this , an already-processed library never rebuilds the report ( the --watch
+	# data path only fires when NEW papers land ) , so edits to the page would
+	# never show. mtime-gated , so there's no cost when nothing changed.
+	try:
+		from ..tasks import method_images as _mi
+		if _mi.report_is_stale( args ):
+			def _rebuild_report():
+				print( "method-images :: report inputs changed ( page / keywords ) ; rebuilding in background" )
+				_mi.rebuild( args )
+				print( "method-images :: report rebuilt" )
+			threading.Thread( target=_rebuild_report , daemon=True ).start()
+	except Exception as e:
+		print( f"method-images :: staleness check skipped ( {e} )" )
 
 	# Opt-in live terminal UI ( --tui ). A separate read-only thread that renders
 	# task progress bars + the queue by polling worker state. Requires --watch
