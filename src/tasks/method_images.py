@@ -577,7 +577,13 @@ def _render_report( out_path , strong , weak , matched , stats ):
 				attrs.append( f'data-{k}="{html.escape( str( p[ k ].resolve() ) , quote=True )}"' )
 		L.append( f'<section class="paper" {" ".join( attrs )}>' )
 		if p[ "doi" ]:
-			L.append( f'<h2><a href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">{title}</a></h2>' )
+			# Canonical resolver as a no-JS fallback. Routing DOIs through a library
+			# proxy is a LINK decision , not data , so it lives in the page ( the PROXY
+			# constant in method_images.html , shared with the sibling dashboards ) : the
+			# class marks the anchor , the JS rewrites this href from the section's
+			# data-doi. Keeping it there -- not in this string -- means changing the proxy
+			# is an HTML edit , which report_is_stale watches.
+			L.append( f'<h2><a class="doi-link" href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">{title}</a></h2>' )
 		else:
 			L.append( f"<h2>{title}</h2>" )
 		# What the study itself measured with. Omitted entirely when nothing was
@@ -599,7 +605,8 @@ def _render_report( out_path , strong , weak , matched , stats ):
 			L.append( f'<p class="mods">{pills}</p>' )
 		links = []
 		if p[ "doi" ]:
-			links.append( f'<a href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">DOI</a>' )
+			# Same DOI , same proxy upgrade in the page ( see the title link above ).
+			links.append( f'<a class="doi-link" href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">DOI</a>' )
 		if p[ "pdf" ]:
 			# file:// works when this report is opened straight off disk , but a
 			# browser refuses to follow it from an http page -- so when we're
@@ -674,12 +681,17 @@ def report_path( args ):
 
 def report_is_stale( args ):
 	"""True when the report needs rebuilding because one of its DEFINITION inputs
-	changed : it's missing , or the page template ( src/dashboard/method_images.html )
-	or the keyword list is newer than the built report. ( A change in the DATA --
-	newly processed papers -- is handled separately , by the --watch worker's
-	post-process refresh_reports. ) This is what lets ` prma server ` notice you
-	edited the page and rebuild on the next start , rather than serving a stale
-	artifact forever on an already-processed library.
+	changed : it's missing , or the page template ( src/dashboard/method_images.html ) ,
+	the keyword list , or THIS module ( the renderer ) is newer than the built report.
+	( A change in the DATA -- newly processed papers -- is handled separately , by the
+	--watch worker's post-process refresh_reports. ) This is what lets ` prma server `
+	notice you edited the page OR this module and rebuild on the next start , rather
+	than serving a stale artifact forever on an already-processed library.
+
+	The module ( __file__ ) is watched because the report is written FROM it : an edit
+	to the fragments _render_report builds -- the DOI links , the chips , the paper
+	sections -- must invalidate the artifact just as a template edit does , or a code
+	change silently doesn't show until new papers happen to land.
 
 	Best-effort : any stat error resolves to 'not stale' , so a filesystem hiccup
 	never forces a rebuild loop."""
@@ -690,7 +702,7 @@ def report_is_stale( args ):
 		rep_m = rep.stat().st_mtime
 		kf = getattr( args , "method_images_file" , None )
 		kf = Path( kf ) if kf else args.config.joinpath( "method-images.txt" )
-		for src in ( TEMPLATE_PATH , kf ):
+		for src in ( TEMPLATE_PATH , kf , Path( __file__ ) ):
 			try:
 				if src and src.exists() and src.stat().st_mtime > rep_m:
 					return True

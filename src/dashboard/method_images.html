@@ -238,6 +238,25 @@ if ( SERVED ) {
 	document.getElementById( "nav" ).classList.remove( "hidden" );
 }
 
+/* Route DOI links through your library's proxy so they resolve to full text from
+   on OR off campus. Same PROXY constant ( same value ) the sibling dashboard pages
+   use -- dashboard.html / status.html / errors.html -- so a fork for another
+   library greps one name across all four. This is the ONE place to set it ( the
+   OpenURL / EZproxy host your library gives you ; leave it "" to go straight to
+   doi.org ). Every DOI anchor ( class="doi-link" ) ships with a plain
+   https://doi.org/ href from method_images.py as a no-JS fallback ; this rewrites
+   those in place from each paper's data-doi , served or opened off disk alike.
+   Because it lives in the page , changing the proxy is an HTML edit -- which the
+   server's staleness check watches , so a restart rebuilds the report ( an edit to
+   method_images.py did not , which is why the earlier proxy change never showed ). */
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+if ( PROXY ) {
+	document.querySelectorAll( "a.doi-link" ).forEach( a => {
+		const doi = a.closest( ".paper" ).dataset.doi;
+		if ( doi ) a.href = PROXY + encodeURIComponent( doi ).replace( /%2F/gi , "/" );
+	} );
+}
+
 const chips  = Array.from( document.querySelectorAll( ".chip[data-kw]" ) );
 const allBtn = document.getElementById( "chip-all" );
 const moreBtn = document.getElementById( "chip-more" );
@@ -353,6 +372,17 @@ function cards()      { return Array.from( document.querySelectorAll( ".fig-card
 function papersAll()  { return Array.from( document.querySelectorAll( ".paper" ) ); }
 function selectedHere() { return cards().filter( c => selected.has( c.dataset.id ) ); }
 function skippedHere()  { return papersAll().filter( p => skipped.has( p.dataset.key ) ); }
+/* The card of your most recent pick that is still rendered in THIS report. Pick
+   order IS insertion order , so walk it backwards ; a keyword filter can hide the
+   newest pick ( .hidden ) without dropping it , but it's still in the DOM , so a
+   plain querySelector finds it. Shared by "Last pick" and the ←/→ cursor. */
+function lastPickCard() {
+	for ( const id of Array.from( selected ).reverse() ) {
+		const c = document.querySelector( '.fig-card[data-id="' + CSS.escape( id ) + '"]' );
+		if ( c ) return c;
+	}
+	return null;
+}
 
 function paintSelection() {
 	cards().forEach( c => {
@@ -422,6 +452,12 @@ function toggleCard( card ) {
 	persistSelected( id , on );
 	paintSelection();
 	if ( selOnly ) apply();
+	/* This pick is now the "last pick" , so move the ←/→ cursor onto its paper --
+	   silently , since you're already looking at it. That's what makes a following
+	   arrow key step to the NEXT / PREVIOUS paper from what you just picked , rather
+	   than from wherever the cursor happened to be ( or the top of the viewport ).
+	   Only when SELECTING : de-selecting isn't a new pick , so it leaves the cursor. */
+	if ( on ) markCurrentPaper( card.closest( ".paper" ) );
 }
 
 /* ---- paper cursor : ←/→ walk papers , Space skips --------------------------
@@ -454,11 +490,32 @@ function setCurrent( idx ) {
 	scrollToY( window.scrollY + r.top - 80 );
 	return p;
 }
+/* Move the ←/→ cursor onto a paper WITHOUT scrolling to it -- used when a pick
+   should adopt its paper silently ( you're already looking at it ) , so the next
+   ←/→ steps from here. setCurrent , by contrast , scrolls ( that's the arrow-key
+   move itself ). No-op for a paper that's filtered out of the current view. */
+function markCurrentPaper( paper ) {
+	if ( !paper || paper.classList.contains( "hidden" ) ) return;
+	document.querySelectorAll( ".paper.current" ).forEach( p => p.classList.remove( "current" ) );
+	paper.classList.add( "current" );
+	curIdx = visiblePapers().indexOf( paper );
+}
 function moveCurrent( delta ) {
 	const vis = visiblePapers();
 	if ( !vis.length ) return;
 	const curEl = document.querySelector( ".paper.current" );
-	if ( !curEl ) { setCurrent( nearestPaper() ); return; }  // first press just reveals the cursor where you are
+	if ( !curEl ) {
+		/* No cursor yet -- this first press just reveals it , doesn't move. Seed it
+		   on the paper of your LAST PICK ( so ←/→ picks up from what you picked , even
+		   across a reload ) , falling back to the paper you're looking at. Within a
+		   session a pick already sets the cursor ( see toggleCard ) , so this covers
+		   the cold start where the selection was restored but nothing's been clicked. */
+		const pick = lastPickCard();
+		const pp   = pick ? pick.closest( ".paper" ) : null;
+		const i    = pp && !pp.classList.contains( "hidden" ) ? vis.indexOf( pp ) : -1;
+		setCurrent( i >= 0 ? i : nearestPaper() );
+		return;
+	}
 	setCurrent( vis.indexOf( curEl ) + delta );
 }
 function toggleSkip( paper ) {
@@ -594,13 +651,9 @@ window.addEventListener( "scroll" , () => {
 } , { passive: true } );
 
 lastFab.addEventListener( "click" , () => {
-	/* Walk pick order backwards for the most recent id still IN this report --
-	   a keyword change can hide the newest pick without dropping it. */
-	let card = null;
-	for ( const id of Array.from( selected ).reverse() ) {
-		card = document.querySelector( '.fig-card[data-id="' + CSS.escape( id ) + '"]' );
-		if ( card ) break;
-	}
+	// The most recent pick still IN this report ( a keyword change can hide the
+	// newest pick without dropping it ) -- same one the ←/→ cursor seeds from.
+	const card = lastPickCard();
 	if ( !card ) return;
 	/* If a filter is hiding it , drop the filters rather than scroll to nothing.
 	   ( selOnly can never hide a selected card , so leave that one alone. ) */
