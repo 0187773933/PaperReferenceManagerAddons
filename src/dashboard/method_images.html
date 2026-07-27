@@ -3,25 +3,40 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>prma method-images</title>
+<title>prma figures</title>
 <!--
-The page ` prma method-images ` renders into output/method-images/report.html
-( and ` prma server ` serves verbatim at /method-images -- ONE artifact , never a
-second renderer ).
+The page behind BOTH figure reports :
+
+  ` prma method-images ` -> output/method-images/report.html , served at
+                            /method-images -- the keyword-matched model-design
+                            figures ( src/tasks/method_images.py )
+  ` prma all-images `    -> output/all-images/report.html , served at
+                            /images -- EVERY cropped figure , no filter
+                            ( src/tasks/all_images.py )
+
+One page , two reports , never a second renderer : what differs between them is
+which figures they carry and which chips sit above them , which is data. The
+mode slot below lands on <body> as data-mode ( "method-images" or "images" ) and
+everything per-report keys off it -- the heading , the footer legend , the nav ,
+which sort options exist , /api/<mode>/state , the localStorage namespace and the
+export filenames. Per-mode TEXT is marked up here with class="only-mi" /
+class="only-ai" and hidden by the CSS below , so it stays in this file rather
+than moving into a Python f-string.
 
 Unlike its neighbours here ( dashboard.html / errors.html / status.html , which
 are static shells that fetch /api/... ) this one is a TEMPLATE : the report has
 to work opened straight off disk over file:// , with no server to fetch from ,
-so src/tasks/method_images.py fills the four slots below and writes the result
-as a standalone file.
+so the task modules fill the five slots below and write the result as a
+standalone file.
 
-Each slot below is an HTML comment named for what it holds -- meta ( the
-"Generated ... / N figures across M papers" line ) , chips ( the All /
-Overviews / Selected / modality / keyword filters ) , papers ( one
-<section class="paper"> each , or the nothing-matched note ) and min_weak
-( the --min-weak number quoted in the footer's legend ). Every one is
-required : a slot this file no longer has is a loud error rather than a
-report that renders fine and is quietly missing its papers.
+Each slot below is an HTML comment named for what it holds -- mode ( the
+data-mode value ) , meta ( the "Generated ... / N figures across M papers"
+line ) , chips ( the All / Overviews / Selected / modality / keyword filters ) ,
+papers ( one <section class="paper"> each , or the nothing-matched note ) and
+min_weak ( the --min-weak number quoted in the footer's legend ; filled empty
+by all-images , where that sentence is hidden ). Every one is required : a slot
+this file no longer has is a loud error rather than a report that renders fine
+and is quietly missing its papers.
 
 Filling is plain text replacement , so DON'T write a slot's comment anywhere
 but where you want its content : a copy named in prose here would be filled
@@ -39,6 +54,10 @@ Everything else -- style , layout , behaviour -- is here. Edit it here.
 	--mark: #fde68a; --tag: #eef2ff; --tag-ink: #3730a3;
 	--ok: #16a34a; --ok-ink: #ffffff;
 	--mod-line: #c4b5a0; --mod-ink: #7c5e2a;
+	/* Cross-report marker : on /images , a figure already picked over on
+	   /method-images. Its own hue so it never reads as this page's selection
+	   ( green ) or as a modality ( amber ). */
+	--xref: #7c3aed; --xref-ink: #ffffff;
 }
 @media ( prefers-color-scheme: dark ) {
 	:root {
@@ -47,9 +66,15 @@ Everything else -- style , layout , behaviour -- is here. Edit it here.
 		--mark: #6b5d1f; --tag: #23283b; --tag-ink: #b6c2ff;
 		--ok: #22c55e; --ok-ink: #08140c;
 		--mod-line: #5a4a33; --mod-ink: #d9b98a;
+		--xref: #a78bfa; --xref-ink: #140b28;
 	}
 }
 * { box-sizing: border-box; }
+/* Per-mode text ( see the head comment ) : the page carries BOTH reports' wording
+   and hides whichever one this document isn't. Presentation stays in this file
+   instead of being interpolated from Python. */
+body[ data-mode="images" ]        .only-mi { display: none !important; }
+body[ data-mode="method-images" ] .only-ai { display: none !important; }
 body {
 	margin: 0; background: var(--bg); color: var(--ink);
 	font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -63,6 +88,15 @@ h1 { margin: 0 0 4px; font-size: 24px; }
 }
 .navlink:hover { border-color: var(--accent); color: var(--accent); }
 .meta { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+/* Sort control : reorders the paper sections client-side ( Recently added by
+   default , Publication date , or the server's Best-match ranking ). Styled to
+   sit with the chips -- pill-shaped select + a direction toggle. */
+.sortbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.sortbar select , .sort-dir {
+	border: 1px solid var(--line); background: var(--card); color: var(--ink);
+	border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer;
+}
+.sortbar select:hover , .sort-dir:hover { border-color: var(--accent); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
 	border: 1px solid var(--line); background: var(--card); color: var(--ink);
@@ -84,6 +118,10 @@ h1 { margin: 0 0 4px; font-size: 24px; }
    they filter by THAT rather than by a figure keyword. */
 .chip.mod-toggle { border-color: var(--mod-line); color: var(--mod-ink); }
 .chip.mod-toggle.active { background: var(--mod-ink); color: var(--bg); border-color: var(--mod-ink); }
+/* /images only : figures already picked on /method-images. Read-only over here ,
+   so it's a different hue from the green Selected pill it sits beside. */
+.chip.xref-toggle { border-color: var(--xref); color: var(--xref); font-weight: 600; }
+.chip.xref-toggle.active { background: var(--xref); color: var(--xref-ink); border-color: var(--xref); }
 .seltools {
 	display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px;
 	padding-top: 12px; border-top: 1px dashed var(--line); font-size: 13px;
@@ -133,6 +171,9 @@ main { padding: 24px 32px 48px; max-width: 1500px; margin: 0 auto; }
 .links { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
 .links a { color: var(--accent); text-decoration: none; }
 .links a:hover { text-decoration: underline; }
+/* Publication date moniker in the links row -- plain muted text ( not a link ) , so
+   it reads as a label sitting after the DOI / Proxy links rather than a dead link. */
+.links .pubdate { color: var(--muted); }
 /* A dense contact sheet : the point is to SCAN a library's worth of design
    figures , so fit as many cards on screen as stay legible. The crop is the
    thing you're scanning -- the caption underneath is there to confirm a hit ,
@@ -141,10 +182,22 @@ main { padding: 24px 32px 48px; max-width: 1500px; margin: 0 auto; }
 .fig-card {
 	margin: 0; background: var(--card); border: 1px solid var(--line);
 	border-radius: 10px; overflow: hidden; display: flex; flex-direction: column;
+	position: relative;              /* anchors the cross-report corner flag below */
 }
 .fig-card { cursor: pointer; }
 .fig-card:hover { border-color: var(--muted); }
 .fig-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Already picked on /method-images ( /images only ) : a corner flag in the
+   top-RIGHT , so it can't be confused with -- or hidden by -- this page's own
+   green check at the top-left , and both can show on the same card. Listed
+   BEFORE .selected so a card that's picked here still reads green. */
+.fig-card.xref { border-color: var(--xref); }
+.fig-card.xref::after {
+	content: ""; position: absolute; top: 0; right: 0; z-index: 1;
+	border-style: solid; border-width: 0 22px 22px 0;
+	border-color: transparent var(--xref) transparent transparent;
+	pointer-events: none;
+}
 .fig-card.selected { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok); }
 .thumb { position: relative; background: #ffffff; }
 .fig-card img { display: block; width: 100%; height: 150px; object-fit: contain; }
@@ -167,7 +220,7 @@ main { padding: 24px 32px 48px; max-width: 1500px; margin: 0 auto; }
 .fig-card.flash { animation: flash 1s ease-in-out 2; }
 .fabs {
 	position: fixed; right: 20px; bottom: 20px; z-index: 50;
-	display: flex; flex-direction: column; gap: 8px;
+	display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
 }
 .fab {
 	border: 1px solid var(--line); background: var(--card); color: var(--ink);
@@ -176,6 +229,25 @@ main { padding: 24px 32px 48px; max-width: 1500px; margin: 0 auto; }
 }
 .fab:hover { border-color: var(--accent); }
 .fab.ok { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+/* Position indicator ( bottom-right ) : a thin progress bar + "current / total" ,
+   where current is editable -- type a paper number and Enter to jump there. */
+.navfab {
+	border: 1px solid var(--line); background: var(--card); color: var(--ink);
+	border-radius: 12px; padding: 8px 10px; box-shadow: 0 2px 10px rgba( 0 , 0 , 0 , 0.18 );
+	display: flex; flex-direction: column; gap: 6px; min-width: 128px;
+}
+.navbar { height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.navbar-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.12s ease; }
+.navrow { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 13px; }
+.navrow input {
+	width: 3.6em; text-align: right; padding: 2px 6px; font-size: 13px;
+	border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink);
+	-moz-appearance: textfield;
+}
+.navrow input::-webkit-outer-spin-button ,
+.navrow input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.navrow input:focus { border-color: var(--accent); outline: none; }
+.navsep , #nav-total { color: var(--muted); }
 .fig-card figcaption { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
@@ -194,13 +266,27 @@ mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 2
 footer { padding: 0 32px 40px; color: var(--muted); font-size: 12px; max-width: 1500px; margin: 0 auto; }
 </style>
 </head>
-<body>
+<body data-mode="<!--{ mode }-->">
 <header>
 <!-- Only meaningful when ` prma server ` is serving this ; hidden on a file://
-     copy , where those routes don't exist ( the script below unhides it ). -->
-<nav class="nav hidden" id="nav"><a class="navlink" href="/">&larr; Dashboard</a><a class="navlink" href="/status">&#9638; Status</a><a class="navlink" href="/errors">&#9888; Errors</a></nav>
-<h1>Model Design Figures</h1>
+     copy , where those routes don't exist ( the script below unhides it ). The
+     two figure reports link to each other , each showing only the OTHER one. -->
+<nav class="nav hidden" id="nav"><a class="navlink" href="/">&larr; Dashboard</a><a class="navlink only-mi" href="/images" title="Every figure the pipeline cropped -- no keyword filter">&#9635; All Figures</a><a class="navlink only-ai" href="/method-images" title="Figures whose captions describe a model's design">&#9642; Model Design</a><a class="navlink" href="/status">&#9638; Status</a><a class="navlink" href="/errors">&#9888; Errors</a></nav>
+<h1 class="only-mi">Model Design Figures</h1>
+<h1 class="only-ai">All Figures</h1>
 <!--{ meta }-->
+<div class="sortbar">
+<span>Sort</span>
+<!-- The third option is per-report , and the odd one out is REMOVED ( not just
+     hidden ) at init : a display:none <option> is honoured inconsistently. -->
+<select id="sort-key" aria-label="Sort papers by">
+<option value="added">Recently added</option>
+<option value="published">Publication date</option>
+<option value="rank" class="only-mi">Best match</option>
+<option value="nfigs" class="only-ai">Most figures</option>
+</select>
+<button class="sort-dir" id="sort-dir" title="Reverse the sort order">Newest first</button>
+</div>
 <div class="chips">
 <!--{ chips }-->
 </div>
@@ -219,10 +305,19 @@ footer { padding: 0 32px 40px; color: var(--muted); font-size: 12px; max-width: 
 <!--{ papers }-->
 </main>
 <div class="fabs">
+<!-- Revealed by the version poll when ` prma server ` has rebuilt the report with
+     newly processed papers ; click to refresh ( view state is preserved ). -->
+<button class="fab ok hidden" id="fab-refresh" title="New papers were added to the library -- refresh to show them">&#8635; New papers</button>
 <button class="fab ok hidden" id="fab-last" title="Jump to the figure you picked most recently">Last pick</button>
 <button class="fab hidden" id="fab-top" title="Back to top">&uarr; Top</button>
+<!-- Position in the list : progress bar + "current / total" , the current box
+     editable to jump ( type a paper number , Enter ). ↑/↓ and ←/→ step it. -->
+<div class="navfab" id="fab-nav" title="Which paper you're on -- type a number and press Enter to jump ( ↑/↓ or ←/→ to step )">
+<div class="navbar"><div class="navbar-fill" id="nav-fill"></div></div>
+<div class="navrow"><input type="number" id="nav-idx" min="1" value="1" aria-label="Current paper number ( type to jump )"><span class="navsep">/</span><span id="nav-total">0</span></div>
 </div>
-<footer>prma method-images &nbsp;·&nbsp; chips stack : picking several in one row widens it ( fMRI + EEG = either ) , while chips from different rows narrow each other ( fMRI + architecture = architecture figures from fMRI studies ). 'All' clears them. Click anywhere on a figure to add it to your selection ( saved on the server when served , or in this browser off disk -- either way it survives refreshes and re-runs , then Export JSON / CSV ). Keyboard triage : &larr; / &rarr; move between papers , Space skips the current one ( skipped papers hide from the list and come back under the 'Skipped' pill ). Solid tags are structural terms ( matched on their own ) ; dashed chips / plain tags are component terms ( <!--{ min_weak }-->+ needed per caption ). Pills under a title are the modalities the study used ( from its title , abstract and Methods section ) ; a dashed pill was inferred from the full text because neither an abstract nor a Methods section was available , and may be a modality the paper only discusses. No pills means none was found -- normal for reviews and behavioural work.</footer>
+</div>
+<footer><span class="only-mi">prma method-images</span><span class="only-ai">prma all-images</span> &nbsp;·&nbsp; <span class="only-ai">Every figure the pipeline cropped , unfiltered -- this page keeps its OWN selection and skip list , separate from /method-images. A purple corner flag ( and the 'In Model Design' pill ) marks a figure you already picked over there ; that's read-only here , so clicking still adds to this page's selection. </span>chips stack : picking several in one row widens it ( fMRI + EEG = either ) , while chips from different rows narrow each other ( fMRI + architecture = architecture figures from fMRI studies ). 'All' clears them. Click anywhere on a figure to add it to your selection ( saved on the server when served , or in this browser off disk -- either way it survives refreshes and re-runs , then Export JSON / CSV ). Keyboard triage : &larr; / &rarr; ( or &uarr; / &darr; ) move between papers , Space skips the current one ( skipped papers hide from the list and come back under the 'Skipped' pill ). The bottom-right counter shows which paper you're on out of how many -- type a number there and press Enter to jump straight to it. <span class="only-mi">Solid tags are structural terms ( matched on their own ) ; dashed chips / plain tags are component terms ( <!--{ min_weak }-->+ needed per caption ). </span>Pills under a title are the modalities the study used ( from its title , abstract and Methods section ) ; a dashed pill was inferred from the full text because neither an abstract nor a Methods section was available , and may be a modality the paper only discusses. No pills means none was found -- normal for reviews and behavioural work. Figures are built in batches as you scroll : only the papers near the viewport hold real images , the rest hold their place until you reach them ( which is what keeps a 15 , 000-figure report scrollable ). One consequence -- the browser's own find-in-page only sees the papers currently on screen ; everything this page offers ( the chips and their counts , sort , &larr; / &rarr; , the jump box , Export ) still covers the whole report.</footer>
 <script>
 /* One artifact , two homes : opened off disk ( file:// ) the relative links and
    the file:// PDF hrefs work as written ; served by ` prma server ` at
@@ -237,6 +332,25 @@ if ( SERVED ) {
 	} );
 	document.getElementById( "nav" ).classList.remove( "hidden" );
 }
+
+/* ---- which report is this? ------------------------------------------------
+   Filled by whichever task rendered the document ( see the head comment ) :
+     "method-images"  the keyword-matched model-design figures
+     "images"         every cropped figure , unfiltered
+   Everything per-report hangs off this one value , so the two never diverge by
+   accident : the API routes , the localStorage namespace ( note the
+   method-images keys keep their historical names , since MODE IS the old
+   literal ) , the export filenames , and which report we cross-reference.
+
+   XREF is the OTHER collection we READ but never write : /images marks the
+   figures already picked on /method-images so a full pass can skip what's
+   already curated. Both reports id a figure identically ( "<key>#figure-<N>" ) ,
+   which is the whole reason this works. */
+const MODE = document.body.dataset.mode || "method-images";
+const XREF = MODE === "images" ? "method-images" : "";
+const NS   = k => "prma." + MODE + "." + k;
+const api  = ( collection , route ) => "/api/" + collection + "/" + route;
+document.title = "prma " + ( MODE === "images" ? "all-images" : "method-images" );
 
 /* Route DOI links through your library's proxy so they resolve to full text from
    on OR off campus. Same PROXY constant ( same value ) the sibling dashboard pages
@@ -275,15 +389,12 @@ if ( moreBtn ) {
 		moreBtn.textContent = collapsed ? `+${hidden} more` : "show fewer";
 	} );
 }
+/* Only /method-images has an 'Overviews only' chip -- it's a claim about a
+   caption's structural vocabulary , and /images matched nothing to get here. */
 const leadBtn  = document.getElementById( "chip-lead" );
 const modChips = Array.from( document.querySelectorAll( ".chip[data-modf]" ) );
 const activeMods = new Set();
 let leadOnly   = false;
-/* A card inherits its paper's modalities. Stamped once here rather than
-   emitted per-card , which would repeat every label 2300+ times in the HTML. */
-document.querySelectorAll( ".fig-card" ).forEach( c => {
-	c.dataset.pmods = c.closest( ".paper" ).dataset.mods || "";
-} );
 
 /* ---- curation : selected figures + skipped papers -------------------------
    Two collections , both keyed by ids STABLE across re-runs of the command , so
@@ -296,21 +407,27 @@ document.querySelectorAll( ".fig-card" ).forEach( c => {
    narrowing the keywords never drops your curation.
 
    Persistence : served by ` prma server ` these live SERVER-SIDE
-   ( /api/method-images/state ) so they follow you across browsers and survive a
+   ( /api/<mode>/state ) so they follow you across browsers and survive a
    rebuild ; opened off disk ( file:// , no server ) they fall back to this
-   browser's localStorage , as before. */
-const SEL_KEY  = "prma.method-images.selected";
-const SKIP_KEY = "prma.method-images.skipped";
+   browser's localStorage , as before.
+
+   Each report owns its OWN collection , server-side and in localStorage alike --
+   a pass over every figure on /images never disturbs the model-design picks. */
+const SEL_KEY  = NS( "selected" );
+const SKIP_KEY = NS( "skipped" );
 const selTools = document.getElementById( "seltools" );
 const selBtn   = document.getElementById( "chip-selected" );
 const skipBtn  = document.getElementById( "chip-skipped" );
+const xrefBtn  = document.getElementById( "chip-xref" );   // /images only
 const topFab   = document.getElementById( "fab-top" );
 const lastFab  = document.getElementById( "fab-last" );
 const warnBox  = document.getElementById( "persist-warn" );
 let selOnly    = false;
 let skipOnly   = false;
+let xrefOnly   = false;
 let selected   = new Set();   // figure ids ; iteration order = pick order
 let skipped    = new Set();   // paper keys
+let xrefSel    = new Set();   // figure ids picked on the OTHER report ( read-only )
 
 function showWarn( msg ) { warnBox.textContent = msg; warnBox.classList.remove( "hidden" ); }
 function hideWarn()      { warnBox.classList.add( "hidden" ); }
@@ -336,7 +453,7 @@ function saveLocal() {
    write raises a visible , non-blocking warning rather than losing it silently. */
 async function postState( payload ) {
 	try {
-		const r = await fetch( "/api/method-images/state" , {
+		const r = await fetch( api( MODE , "state" ) , {
 			method: "POST" ,
 			headers: { "Content-Type": "application/json" } ,
 			body: JSON.stringify( payload ) ,
@@ -353,7 +470,7 @@ function persistSkipped( key , on )  { if ( SERVED ) postState( { kind: "skipped
 async function loadState() {
 	if ( SERVED ) {
 		try {
-			const r = await fetch( "/api/method-images/state" , { cache: "no-store" } );
+			const r = await fetch( api( MODE , "state" ) , { cache: "no-store" } );
 			const j = await r.json();
 			selected = new Set( j.selected || [] );
 			skipped  = new Set( j.skipped  || [] );
@@ -368,29 +485,119 @@ async function loadState() {
 	}
 }
 
-function cards()      { return Array.from( document.querySelectorAll( ".fig-card" ) ); }
-function papersAll()  { return Array.from( document.querySelectorAll( ".paper" ) ); }
-function selectedHere() { return cards().filter( c => selected.has( c.dataset.id ) ); }
+/* The OTHER report's picks , read once. Never written back : this is a hint
+   about work already done , not a shared selection. A failure here is silent --
+   the cross-reference is a convenience , and a missing badge must not look like
+   a lost selection ( which is what showWarn means ). */
+async function loadXref() {
+	if ( !XREF ) return;
+	if ( SERVED ) {
+		try {
+			const r = await fetch( api( XREF , "state" ) , { cache: "no-store" } );
+			const j = await r.json();
+			xrefSel = new Set( j.selected || [] );
+		} catch ( e ) { xrefSel = new Set(); }
+	} else if ( store ) {
+		try { xrefSel = new Set( JSON.parse( store.getItem( "prma." + XREF + ".selected" ) || "[]" ) ); }
+		catch ( e ) { xrefSel = new Set(); }
+	}
+}
+
+/* ---- the figure model -----------------------------------------------------
+   The cards are NOT in the document when it loads. Each paper ships its grid as
+   deferred markup ( <script type="text/html" class="figs"> , see
+   method_images.py ) plus one index row per figure , and the page mounts a
+   paper's cards only while it's near the viewport ( "batched rendering" , below ).
+   ` prma all-images ` is 15k+ figures over 2000+ papers ; as real nodes that's
+   ~150k elements and 15k images , which is what made this page crawl.
+
+   So the RECORDS below -- not the DOM -- are what everything whole-report reads :
+   the filters , the chip counts , "Last pick" , the export. A record's card
+   element only exists while its paper is mounted , which is what cardOf() is for.
+   Records are built in the renderer's order , which is also the order the
+   deferred markup is in , so a paper's Nth record IS its Nth card. */
+const PAPERS  = Array.from( document.querySelectorAll( ".paper" ) );
+const FIGS    = [];            // every figure , in render order
+const FIG_BY  = new Map();     // figure id -> record
+const P_FIGS  = new Map();     // .paper section -> its records , in card order
+( function buildModel() {
+	const el = document.getElementById( "figindex" );
+	let index = {};
+	try { index = JSON.parse( ( el && el.textContent ) || "{}" ); } catch ( e ) {}
+	PAPERS.forEach( p => {
+		const key  = p.dataset.key || "";
+		const recs = ( index[ key ] || [] ).map( ( r , i ) => {
+			/* Same id the cards carry ( "<paper-key>#figure-<seq>" ) , rebuilt here
+			   rather than repeated in the index -- it's what the stored selection ,
+			   the export and the cross-report badge all key on. */
+			const rec = { id: key + "#figure-" + r[ 0 ] , i ,
+				kws: r[ 1 ] ? r[ 1 ].split( "|" ) : [] ,
+				lead: r[ 2 ] === 1 , paper: p , vis: true , xref: false };
+			FIGS.push( rec );
+			FIG_BY.set( rec.id , rec );
+			return rec;
+		} );
+		P_FIGS.set( p , recs );
+	} );
+} )();
+
+/* Cached : the sections themselves never come or go , only their cards do.
+   Deliberately the same array applySort() sorts IN PLACE -- that keeps it in
+   document order , which the ←/→ cursor and the position readout both walk. */
+function papersAll()    { return PAPERS; }
+function figsOf( p )    { return P_FIGS.get( p ) || []; }
+function selectedHere() { return FIGS.filter( f => selected.has( f.id ) ); }
 function skippedHere()  { return papersAll().filter( p => skipped.has( p.dataset.key ) ); }
-/* The card of your most recent pick that is still rendered in THIS report. Pick
-   order IS insertion order , so walk it backwards ; a keyword filter can hide the
-   newest pick ( .hidden ) without dropping it , but it's still in the DOM , so a
-   plain querySelector finds it. Shared by "Last pick" and the ←/→ cursor. */
-function lastPickCard() {
+/* The live card for a record , or null while its paper is unmounted. */
+function cardOf( rec ) {
+	return MOUNTED.has( rec.paper )
+		? rec.paper.querySelectorAll( ".fig-card" )[ rec.i ] || null
+		: null;
+}
+/* The most recent pick still IN this report. Pick order IS insertion order , so
+   walk it backwards ; a keyword filter can hide the newest pick without dropping
+   it , and an unmounted one is still a record. Shared by "Last pick" and the
+   ←/→ cursor. */
+function lastPickRec() {
 	for ( const id of Array.from( selected ).reverse() ) {
-		const c = document.querySelector( '.fig-card[data-id="' + CSS.escape( id ) + '"]' );
-		if ( c ) return c;
+		const rec = FIG_BY.get( id );
+		if ( rec ) return rec;
 	}
 	return null;
 }
 
-function paintSelection() {
-	cards().forEach( c => {
-		const on = selected.has( c.dataset.id );
+/* Push the records' state onto ONE mounted paper's live cards -- visibility ,
+   selection , the cross-report flag. The records already hold the truth ; this is
+   the only place the DOM hears about it , and it runs on mount and on every
+   repaint of a paper that's currently up. */
+function syncPaper( p ) {
+	const recs = figsOf( p ) , cards = p.querySelectorAll( ".fig-card" );
+	if ( cards.length !== recs.length ) {
+		/* Unmounted ( no cards yet ) is the normal case. Cards that DON'T line up
+		   with the index is a renderer bug -- the two are written from the same loop
+		   and paired by position -- and it would show as a paper whose selection and
+		   filters quietly do nothing , so say so rather than swallow it. */
+		if ( MOUNTED.has( p ) ) console.error( "figure index doesn't match the cards for" ,
+			p.dataset.key , cards.length , "cards vs" , recs.length , "index rows" );
+		return;
+	}
+	recs.forEach( ( f , i ) => {
+		const c = cards[ i ] , on = selected.has( f.id );
+		c.classList.toggle( "hidden" , !f.vis );
 		c.classList.toggle( "selected" , on );
 		c.setAttribute( "aria-pressed" , on ? "true" : "false" );
+		if ( f.xref && !c.dataset.xrefed ) {
+			c.classList.add( "xref" );
+			c.title = c.title + " · already picked on /method-images";
+			c.dataset.xrefed = "1";     // cards are rebuilt on each mount , so this
+		}                               // resets with them and never doubles up
 	} );
+}
+function repaintMounted() { MOUNTED.forEach( syncPaper ); }
+
+function paintSelection() {
 	const n = selectedHere().length;
+	repaintMounted();
 	document.getElementById( "sel-count" ).textContent = n;
 	document.getElementById( "sel-label" ).textContent = n + " selected";
 	selTools.classList.toggle( "hidden" , n === 0 );
@@ -401,41 +608,219 @@ function updateSkipCount() {
 	// Only papers actually present in THIS report ( same spirit as sel-count ).
 	document.getElementById( "skip-count" ).textContent = skippedHere().length;
 }
+/* Flag the figures the OTHER report already has picked. Runs once , after the
+   cross-reference loads : nothing on this page can change that set , so the flag
+   lands on the record and every later mount picks it up from there. */
+function paintXref() {
+	if ( !XREF || !xrefBtn ) return;
+	let n = 0;
+	FIGS.forEach( f => { if ( xrefSel.has( f.id ) ) { f.xref = true; n += 1; } } );
+	document.getElementById( "xref-count" ).textContent = n;
+	// Nothing to filter to -> a dead pill. Hide it rather than leave a 0 , and
+	// make sure a restored view can't leave us filtered to an empty set.
+	xrefBtn.classList.toggle( "hidden" , n === 0 );
+	if ( n === 0 ) xrefOnly = false;
+	repaintMounted();
+}
 
 function apply() {
-	cards().forEach( c => {
-		// OR inside each group : the card needs ANY one of the picked chips.
-		const byKw = activeKws.size &&
-			!( c.dataset.kws || "" ).split( "|" ).some( k => activeKws.has( k ) );
-		/* Modality is a PAPER property ; a card inherits its paper's ( stamped
-		   once at init , so this stays a string compare per card ). */
-		const byMod = activeMods.size &&
-			!( c.dataset.pmods || "" ).split( "|" ).some( m => activeMods.has( m ) );
-		// AND across groups.
-		c.classList.toggle( "hidden" ,
-			!!byKw
-			|| !!byMod
-			|| ( leadOnly && c.dataset.lead !== "1" )
-			|| ( selOnly && !selected.has( c.dataset.id ) ) );
-	} );
-	leadBtn.classList.toggle( "active" , leadOnly );
-	selBtn.classList.toggle( "active" , selOnly );
-	skipBtn.classList.toggle( "active" , skipOnly );
-	modChips.forEach( ch => ch.classList.toggle( "active" , activeMods.has( ch.dataset.modf ) ) );
 	papersAll().forEach( p => {
+		/* Modality is a PAPER property , so resolve it once here rather than once
+		   per card ( it used to be stamped onto every card at load ). */
+		const modOK = !activeMods.size ||
+			( p.dataset.mods || "" ).split( "|" ).some( m => activeMods.has( m ) );
+		let nvis = 0;
+		figsOf( p ).forEach( f => {
+			// OR inside each group ( any one picked chip ) , AND across groups.
+			f.vis = modOK
+				&& ( !activeKws.size || f.kws.some( k => activeKws.has( k ) ) )
+				&& ( !leadOnly || f.lead )
+				&& ( !selOnly  || selected.has( f.id ) )
+				&& ( !xrefOnly || f.xref );
+			if ( f.vis ) nvis += 1;
+		} );
+		p.dataset.nvis = nvis;
 		const skip = skipped.has( p.dataset.key );
 		p.classList.toggle( "skipped" , skip );
 		/* Skipped papers drop out of the default view ; the 'Skipped' pill flips
 		   that to show ONLY them. Either way a paper whose every figure is filtered
-		   out ( no visible card ) is hidden too. */
-		const bySkip  = skipOnly ? !skip : skip;
-		const hasCard = !!p.querySelector( ".fig-card:not(.hidden)" );
-		p.classList.toggle( "hidden" , bySkip || !hasCard );
+		   out is hidden too. */
+		const bySkip = skipOnly ? !skip : skip;
+		p.classList.toggle( "hidden" , bySkip || nvis === 0 );
+		// Mounted -> the real cards follow ; unmounted -> its placeholder has to
+		// resize , since the filter just changed how many cards it stands for.
+		if ( MOUNTED.has( p ) ) syncPaper( p );
+		else                    sizeGrid( p );
 	} );
+	// 'Overviews only' exists on /method-images only ; the cross-report pill on
+	// /images only. Both are absent from the other report's chip bar.
+	if ( leadBtn ) leadBtn.classList.toggle( "active" , leadOnly );
+	if ( xrefBtn ) xrefBtn.classList.toggle( "active" , xrefOnly );
+	selBtn.classList.toggle( "active" , selOnly );
+	skipBtn.classList.toggle( "active" , skipOnly );
+	modChips.forEach( ch => ch.classList.toggle( "active" , activeMods.has( ch.dataset.modf ) ) );
 	chips.forEach( ch => ch.classList.toggle( "active" , activeKws.has( ch.dataset.kw ) ) );
 	allBtn.classList.toggle( "active" ,
-		!activeKws.size && !activeMods.size && !leadOnly && !selOnly && !skipOnly );
+		!activeKws.size && !activeMods.size && !leadOnly && !selOnly && !skipOnly && !xrefOnly );
+	updateNav();   // the visible-paper count / position changed with the filters
 }
+
+/* ---- batched rendering : a window of mounted papers ------------------------
+   A paper's cards are built from its deferred markup when it comes within
+   MOUNT_MARGIN of the viewport and thrown away again once it's that far past , so
+   however long the report is , only a few papers' worth of DOM and images is ever
+   alive. Nothing about scrolling changes : an unmounted grid holds exactly the
+   space its cards took ( measured on the way out , estimated from the column
+   count before that ) , so the scrollbar stays honest and the page never lurches.
+
+   The trade is that browser find-in-page only sees the papers currently mounted.
+   Everything the page itself offers -- chips , counts , sort , ←/→ , the jump box ,
+   export -- reads the records , so all of it still covers the whole report. */
+const MOUNT_MARGIN = "1200px";
+const MOUNTED = new Set();
+const PINNED  = new Set();     // mounted on demand ; not for the observer to reap
+const GRID_GAP = 12 , GRID_MIN = 240;   // must match the .grid rule in the CSS above
+let   GRID_COLS = 5;           // measured , not guessed ( see measureGrid )
+let   ROW_H     = 280;         // one card + the gap ; measured off a real card
+
+function gridOf( p ) { return p.querySelector( ".grid" ); }
+
+/* Hold open the space this paper's cards take. Exact when we've measured it and
+   the filters haven't changed the count since ; a column-count estimate before
+   that. Writes only -- the width and row height are measured once , up front , so
+   this never reads layout ( it runs across every paper in apply() ) . */
+function sizeGrid( p ) {
+	const g = gridOf( p );
+	if ( !g ) return;
+	const n = Number( p.dataset.nvis != null ? p.dataset.nvis : g.dataset.n || 0 );
+	// R rows of ( card + gap ) , less the gap the last row doesn't have.
+	const est = n ? Math.ceil( n / GRID_COLS ) * ROW_H - GRID_GAP : 0;
+	g.style.minHeight = ( g.dataset.h && Number( g.dataset.hn ) === n
+		? Number( g.dataset.h ) : est ) + "px";
+}
+
+/* Column count + card height , measured ONCE from a real card in a real grid ( a
+   guess here shows up as a scrollbar that drifts as you go ). Called at init and
+   on resize , before any placeholder is sized. */
+function measureGrid() {
+	// A paper that's actually laid out -- a filtered-out one is display:none and
+	// would measure zero.
+	const p = papersAll().find( x => figsOf( x ).length && !x.classList.contains( "hidden" ) )
+		|| papersAll().find( x => figsOf( x ).length );
+	if ( !p ) return;
+	const g = gridOf( p ) , tpl = p.querySelector( "script.figs" );
+	const w = g.clientWidth || document.documentElement.clientWidth - 64;
+	GRID_COLS = Math.max( 1 , Math.floor( ( w + GRID_GAP ) / ( GRID_MIN + GRID_GAP ) ) );
+	if ( MOUNTED.has( p ) || !tpl ) return;
+	// One card , built off-document ( so no image request ) and dropped in just
+	// long enough to read its height back. The placeholder has to come off first ,
+	// or on a resize we'd measure the min-height we set last time , not the card.
+	const probe = document.createElement( "div" );
+	probe.innerHTML = tpl.textContent;
+	while ( probe.children.length > 1 ) probe.lastElementChild.remove();
+	if ( !probe.firstElementChild ) return;
+	const held = g.style.minHeight;
+	g.style.minHeight = "";
+	g.appendChild( probe.firstElementChild );
+	const h = g.offsetHeight;
+	g.innerHTML = "";
+	g.style.minHeight = held;
+	if ( h > 40 ) ROW_H = h + GRID_GAP;
+}
+
+function mountPaper( p ) {
+	if ( MOUNTED.has( p ) ) return;
+	const tpl = p.querySelector( "script.figs" ) , g = gridOf( p );
+	if ( !tpl || !g ) return;
+	g.innerHTML = tpl.textContent;
+	MOUNTED.add( p );
+	syncPaper( p );
+	g.style.minHeight = "";        // the real cards hold the space now
+}
+/* `h` is the grid height read by the caller BEFORE any of this batch was touched
+   ( see the observer ) -- freezing it is what stops a paper dropping out above the
+   viewport from yanking the page up under you. */
+function unmountPaper( p , h ) {
+	if ( !MOUNTED.has( p ) || PINNED.has( p ) ) return;
+	const g = gridOf( p );
+	// Remembered WITH the count it was measured at : a filter change invalidates it.
+	if ( h > 0 ) {
+		g.dataset.h  = h;
+		g.dataset.hn = p.dataset.nvis != null ? p.dataset.nvis : ( g.dataset.n || 0 );
+	}
+	MOUNTED.delete( p );
+	g.innerHTML = "";
+	sizeGrid( p );
+}
+/* Keep a paper mounted for a moment regardless of where it is -- "Last pick" has
+   to have something to scroll to , and the scroll is still in flight. */
+function pinPaper( p , ms ) {
+	PINNED.add( p );
+	setTimeout( () => PINNED.delete( p ) , ms || 3000 );
+}
+
+/* Belt and braces. The observer is the mechanism ; this is the guarantee that the
+   window stays a window -- it drops whatever is still up furthest from the
+   viewport once there's more mounted than the band can hold. Runs on the scroll
+   PAUSE , and only over what's mounted , so it's a handful of measurements. */
+const MOUNT_CAP = 32;
+function reapMounted() {
+	if ( MOUNTED.size <= MOUNT_CAP ) return;
+	const mid = window.scrollY + window.innerHeight / 2;
+	const far = Array.from( MOUNTED )
+		.filter( p => !PINNED.has( p ) )
+		.map( p => ( { p , d: Math.abs( p.offsetTop - mid ) } ) )
+		.sort( ( a , b ) => b.d - a.d )
+		.slice( 0 , MOUNTED.size - MOUNT_CAP );
+	const heights = far.map( x => gridOf( x.p ).offsetHeight );
+	far.forEach( ( x , i ) => unmountPaper( x.p , heights[ i ] ) );
+}
+
+let io = null;
+function startMounting() {
+	if ( !( "IntersectionObserver" in window ) ) {
+		papersAll().forEach( mountPaper );   // ancient browser : just build it all
+		return;
+	}
+	io = new IntersectionObserver( entries => {
+		/* One delivery can carry SEVERAL records for the same paper -- a fast scroll
+		   ( or "Last pick" jumping the length of the report ) crosses it and leaves
+		   again between callbacks. Only the LAST record is its state now , so collapse
+		   them : taking the entries in order would mount a paper on its stale
+		   'arriving' record after having just unmounted it , and leave it up for good. */
+		const state = new Map();
+		entries.forEach( e => state.set( e.target , e.isIntersecting ) );
+		const arriving = [] , leaving = [];
+		state.forEach( ( inView , p ) => ( inView ? arriving : leaving ).push( p ) );
+		// Read every leaving paper's height BEFORE emptying any of them , so a
+		// batch costs one layout instead of one per paper.
+		const heights = leaving.map( p => MOUNTED.has( p ) ? gridOf( p ).offsetHeight : 0 );
+		leaving.forEach( ( p , i ) => unmountPaper( p , heights[ i ] ) );
+		arriving.forEach( mountPaper );
+	} , { root: null , rootMargin: MOUNT_MARGIN + " 0px" } );
+	papersAll().forEach( p => io.observe( p ) );
+	let reapTimer = 0;
+	window.addEventListener( "scroll" , () => {
+		clearTimeout( reapTimer );
+		reapTimer = setTimeout( reapMounted , 400 );
+	} , { passive: true } );
+}
+
+// Column count changes with the window , which changes every placeholder.
+let resizeTimer = 0;
+window.addEventListener( "resize" , () => {
+	clearTimeout( resizeTimer );
+	resizeTimer = setTimeout( () => {
+		measureGrid();
+		// Measured heights were taken at the old width ; drop them and re-estimate.
+		papersAll().forEach( p => {
+			if ( MOUNTED.has( p ) ) return;
+			const g = gridOf( p );
+			delete g.dataset.h; delete g.dataset.hn;
+			sizeGrid( p );
+		} );
+	} , 200 );
+} );
 
 function toggleIn( set , value ) {
 	if ( set.has( value ) ) set.delete( value ); else set.add( value );
@@ -471,24 +856,60 @@ function nearestPaper() {
 	// Index ( among visible papers ) of the one nearest the cursor's landing line ,
 	// so a first ←/→ or Space acts on what you're already looking at.
 	const vis = visiblePapers();
-	let best = -1 , bestD = Infinity;
-	vis.forEach( ( p , i ) => {
-		const d = Math.abs( p.getBoundingClientRect().top - 80 );
-		if ( d < bestD ) { bestD = d; best = i; }
-	} );
+	if ( !vis.length ) return -1;
+	/* Visible papers are in document order , so their tops only ever increase :
+	   binary search rather than measuring all 2000+ of them. This runs on every
+	   ( throttled ) scroll tick , and each measurement forces layout , so the
+	   difference is ~11 reads instead of two thousand. */
+	const y  = window.scrollY + 80;
+	const at = i => vis[ i ].offsetTop;      // main isn't positioned , so this is
+	let lo = 0 , hi = vis.length - 1 , best = 0;   // absolute page position
+	while ( lo <= hi ) {
+		const mid = ( lo + hi ) >> 1;
+		if ( at( mid ) <= y ) { best = mid; lo = mid + 1; } else hi = mid - 1;
+	}
+	// Whichever of the two neighbours actually sits closest to the landing line.
+	if ( best + 1 < vis.length &&
+		Math.abs( at( best + 1 ) - y ) < Math.abs( at( best ) - y ) ) best += 1;
 	return best;
 }
 function setCurrent( idx ) {
 	document.querySelectorAll( ".paper.current" ).forEach( p => p.classList.remove( "current" ) );
 	const vis = visiblePapers();
-	if ( !vis.length ) { curIdx = -1; return null; }
+	if ( !vis.length ) { curIdx = -1; updateNav(); return null; }
 	idx = Math.max( 0 , Math.min( idx , vis.length - 1 ) );
 	curIdx = idx;
 	const p = vis[ idx ];
 	p.classList.add( "current" );
 	const r = p.getBoundingClientRect();
 	scrollToY( window.scrollY + r.top - 80 );
+	settleOn( p );           // a long jump lands approximately ; this finishes it
+	updateNav( idx );        // reflect the target immediately , before the smooth scroll lands
 	return p;
+}
+/* A jump ( the box , or a long ←/→ run ) crosses papers that mount on the way ,
+   each trading its estimated placeholder for its real height , so where we aimed
+   can move a few hundred pixels while we're travelling. Once the scroll has
+   stopped , put the paper back on the landing line. Gives up the moment it isn't
+   the cursor any more , so it never fights a scroll you've since made yourself ,
+   and is a no-op for the short moves where nothing shifted. */
+let settleTimer = 0;
+function settleOn( p , rounds ) {
+	clearTimeout( settleTimer );
+	let last = -1 , still = 0 , left = rounds == null ? 4 : rounds;
+	const tick = () => {
+		if ( !p.classList.contains( "current" ) || left <= 0 ) return;
+		const y = Math.round( window.scrollY );
+		if ( y === last ) still += 1; else { last = y; still = 0; }
+		if ( still < 2 ) { settleTimer = setTimeout( tick , 120 ); return; }
+		const want = Math.max( 0 , Math.round( y + p.getBoundingClientRect().top - 80 ) );
+		if ( Math.abs( want - y ) <= 8 ) { updateNav(); return; }
+		left -= 1;
+		window.scrollTo( { top: want , behavior: "auto" } );
+		last = -1; still = 0;
+		settleTimer = setTimeout( tick , 120 );   // the correction can mount more
+	};
+	settleTimer = setTimeout( tick , 200 );
 }
 /* Move the ←/→ cursor onto a paper WITHOUT scrolling to it -- used when a pick
    should adopt its paper silently ( you're already looking at it ) , so the next
@@ -499,6 +920,7 @@ function markCurrentPaper( paper ) {
 	document.querySelectorAll( ".paper.current" ).forEach( p => p.classList.remove( "current" ) );
 	paper.classList.add( "current" );
 	curIdx = visiblePapers().indexOf( paper );
+	updateNav( curIdx );
 }
 function moveCurrent( delta ) {
 	const vis = visiblePapers();
@@ -510,8 +932,8 @@ function moveCurrent( delta ) {
 		   across a reload ) , falling back to the paper you're looking at. Within a
 		   session a pick already sets the cursor ( see toggleCard ) , so this covers
 		   the cold start where the selection was restored but nothing's been clicked. */
-		const pick = lastPickCard();
-		const pp   = pick ? pick.closest( ".paper" ) : null;
+		const pick = lastPickRec();
+		const pp   = pick ? pick.paper : null;
 		const i    = pp && !pp.classList.contains( "hidden" ) ? vis.indexOf( pp ) : -1;
 		setCurrent( i >= 0 ? i : nearestPaper() );
 		return;
@@ -534,6 +956,7 @@ function toggleSkip( paper ) {
 		if ( paper.classList.contains( "hidden" ) ) setCurrent( idx );
 		else { paper.classList.add( "current" ); curIdx = visiblePapers().indexOf( paper ); }
 	}
+	updateNav();
 }
 
 document.addEventListener( "click" , ev => {
@@ -549,8 +972,9 @@ document.addEventListener( "keydown" , ev => {
 	const t   = ev.target;
 	const tag = ( t.tagName || "" ).toLowerCase();
 	if ( tag === "input" || tag === "textarea" || t.isContentEditable ) return;
-	if ( ev.key === "ArrowRight" ) { ev.preventDefault(); moveCurrent( +1 ); return; }
-	if ( ev.key === "ArrowLeft"  ) { ev.preventDefault(); moveCurrent( -1 ); return; }
+	// ↑ / ↓ navigate between papers , same as → / ← .
+	if ( ev.key === "ArrowRight" || ev.key === "ArrowDown" ) { ev.preventDefault(); moveCurrent( +1 ); return; }
+	if ( ev.key === "ArrowLeft"  || ev.key === "ArrowUp"   ) { ev.preventDefault(); moveCurrent( -1 ); return; }
 	if ( ev.key === "Enter" || ev.key === " " ) {
 		// A focused figure card keeps its own keyboard toggle ( Enter / Space ).
 		const card = t.closest ? t.closest( ".fig-card" ) : null;
@@ -567,27 +991,47 @@ document.addEventListener( "keydown" , ev => {
 
 chips.forEach(    ch => ch.addEventListener( "click" , () => toggleIn( activeKws  , ch.dataset.kw   ) ) );
 modChips.forEach( ch => ch.addEventListener( "click" , () => toggleIn( activeMods , ch.dataset.modf ) ) );
-leadBtn.addEventListener( "click" , () => { leadOnly = !leadOnly; apply(); } );
+if ( leadBtn ) leadBtn.addEventListener( "click" , () => { leadOnly = !leadOnly; apply(); } );
+if ( xrefBtn ) xrefBtn.addEventListener( "click" , () => { xrefOnly = !xrefOnly; apply(); } );
 selBtn.addEventListener( "click"  , () => { selOnly  = !selOnly;  apply(); } );
 skipBtn.addEventListener( "click" , () => { skipOnly = !skipOnly; apply(); } );
 // 'All' is the one-click way back out of any combination of filters.
 allBtn.addEventListener( "click"  , () => {
-	activeKws.clear(); activeMods.clear(); leadOnly = false; selOnly = false; skipOnly = false; apply();
+	activeKws.clear(); activeMods.clear();
+	leadOnly = false; selOnly = false; skipOnly = false; xrefOnly = false;
+	apply();
 } );
 document.getElementById( "sel-clear" ).addEventListener( "click" , () => {
 	const here = selectedHere();
 	if ( !here.length ) return;
 	if ( !confirm( "Clear all " + here.length + " selected figures?" ) ) return;
 	/* Only the figures shown HERE -- picks a keyword change is hiding stay put. */
-	here.forEach( c => { selected.delete( c.dataset.id ); persistSelected( c.dataset.id , false ); } );
+	here.forEach( f => { selected.delete( f.id ); persistSelected( f.id , false ); } );
 	paintSelection();
 	apply();
 } );
 
-/* ---- export --------------------------------------------------------------- */
+/* ---- export ---------------------------------------------------------------
+   A record knows which figure it is , but not its caption / crop path / page --
+   those live on the card , and the card only exists while its paper is mounted.
+   So a paper you picked from but have long since scrolled past gets its deferred
+   markup parsed here , off-document ( no images requested ) and once per export ,
+   whatever it contributed. Papers you never picked from are never touched. */
 function records() {
-	return selectedHere().map( c => {
-		const p = c.closest( ".paper" );
+	const parsed = new Map();
+	const cardsFor = p => {
+		if ( MOUNTED.has( p ) ) return p.querySelectorAll( ".fig-card" );
+		if ( !parsed.has( p ) ) {
+			const t   = document.createElement( "template" );
+			const tpl = p.querySelector( "script.figs" );
+			t.innerHTML = tpl ? tpl.textContent : "";
+			parsed.set( p , t.content.querySelectorAll( ".fig-card" ) );
+		}
+		return parsed.get( p );
+	};
+	return selectedHere().map( f => {
+		const p = f.paper , c = cardsFor( p )[ f.i ];
+		if ( !c ) return null;
 		return {
 			id:       c.dataset.id ,
 			key:      p.dataset.key || null ,
@@ -604,12 +1048,16 @@ function records() {
 			caption:  c.querySelector( ".cap" ).textContent.trim() ,
 			keywords: ( c.dataset.kws || "" ).split( "|" ).filter( Boolean ) ,
 			lead:     c.dataset.lead === "1" ,
+			/* /images only : was this figure ALSO picked on /method-images? Carried
+			   into the export so a downstream merge can tell a fresh pick from one
+			   that just confirms what's already curated. Always false over there. */
+			in_method_images: xrefSel.has( c.dataset.id ) ,
 			image:    c.dataset.abs || null ,
 			pdf:      p.dataset.pdf || null ,
 			md:       p.dataset.md || null ,
 			methods:  p.dataset.methods || null ,
 		};
-	} );
+	} ).filter( Boolean );
 }
 function download( text , name , mime ) {
 	const url = URL.createObjectURL( new Blob( [ text ] , { type: mime } ) );
@@ -618,14 +1066,18 @@ function download( text , name , mime ) {
 	document.body.appendChild( a ); a.click(); a.remove();
 	URL.revokeObjectURL( url );
 }
+/* Exports are namespaced by report too , so a JSON from each can sit in the same
+   folder without one overwriting the other. */
+const EXPORT_SOURCE = "prma " + ( MODE === "images" ? "all-images" : "method-images" );
+const EXPORT_STEM   = MODE + "-selected";
 document.getElementById( "export-json" ).addEventListener( "click" , () => {
 	const figures = records();
 	download( JSON.stringify( {
-		source:    "prma method-images" ,
+		source:    EXPORT_SOURCE ,
 		generated: new Date().toISOString() ,
 		count:     figures.length ,
 		figures ,
-	} , null , 2 ) , "method-images-selected.json" , "application/json" );
+	} , null , 2 ) , EXPORT_STEM + ".json" , "application/json" );
 } );
 
 /* ---- scroll controls ------------------------------------------------------ */
@@ -653,14 +1105,21 @@ window.addEventListener( "scroll" , () => {
 lastFab.addEventListener( "click" , () => {
 	// The most recent pick still IN this report ( a keyword change can hide the
 	// newest pick without dropping it ) -- same one the ←/→ cursor seeds from.
-	const card = lastPickCard();
-	if ( !card ) return;
+	const rec = lastPickRec();
+	if ( !rec ) return;
 	/* If a filter is hiding it , drop the filters rather than scroll to nothing.
 	   ( selOnly can never hide a selected card , so leave that one alone. ) */
-	if ( card.classList.contains( "hidden" ) ) {
+	if ( !rec.vis || rec.paper.classList.contains( "hidden" ) ) {
 		activeKws.clear(); activeMods.clear(); leadOnly = false;
 		apply();
 	}
+	/* Its paper is almost certainly nowhere near the viewport , so there's no card
+	   to scroll to until we build one -- and it has to survive the trip , which is
+	   what the pin is for ( the observer would otherwise reap it mid-scroll ). */
+	pinPaper( rec.paper , 4000 );
+	mountPaper( rec.paper );
+	const card = cardOf( rec );
+	if ( !card ) return;
 	const r = card.getBoundingClientRect();
 	scrollToY( window.scrollY + r.top - ( window.innerHeight - r.height ) / 2 );
 	card.classList.remove( "flash" );
@@ -670,21 +1129,234 @@ lastFab.addEventListener( "click" , () => {
 } );
 document.getElementById( "export-csv" ).addEventListener( "click" , () => {
 	const cols = [ "id","doi","title","modalities","modalities_inferred","figure","page","image","pdf","md","methods","keywords","lead","caption" ];
+	// The cross-report column only means something on /images.
+	if ( XREF ) cols.splice( cols.indexOf( "lead" ) + 1 , 0 , "in_method_images" );
 	const esc = v => {
 		const s = Array.isArray( v ) ? v.join( "; " ) : ( v === null ? "" : String( v ) );
 		return /[",\n]/.test( s ) ? '"' + s.replace( /"/g , '""' ) + '"' : s;
 	};
 	const rows = records().map( r => cols.map( c => esc( r[ c ] ) ).join( "," ) );
-	download( [ cols.join( "," ) ].concat( rows ).join( "\n" ) , "method-images-selected.csv" , "text/csv" );
+	download( [ cols.join( "," ) ].concat( rows ).join( "\n" ) , EXPORT_STEM + ".csv" , "text/csv" );
 } );
+
+/* ---- sort : reorder the paper sections client-side ------------------------
+   Every <section class="paper"> carries data-added ( when it entered the library ) ,
+   data-published ( its publication date ) , data-nfigs ( how many cards it holds )
+   and data-rank ( the renderer's order , 0 = first -- relevance on /method-images ,
+   a stable tiebreak on /images ). We physically re-append the sections in sorted
+   order , so the ←/→ paper cursor -- which walks live DOM order -- follows the sort
+   too. The chosen key + direction persist in localStorage , per report ( presentation
+   only , so this is fine both served and off disk ). Default is Recently added ,
+   newest first , which already matches the order the reports are written in ( so no
+   reorder flash ). */
+const lsGet = ( k , d ) => { try { const v = window.localStorage.getItem( k ); return v === null ? d : v; } catch ( e ) { return d; } };
+const lsSet = ( k , v ) => { try { window.localStorage.setItem( k , v ); } catch ( e ) {} };
+
+const mainEl     = document.querySelector( "main" );
+const sortKeyEl  = document.getElementById( "sort-key" );
+const sortDirBtn = document.getElementById( "sort-dir" );
+const SORT_KEY_LS = NS( "sort.key" );
+const SORT_DIR_LS = NS( "sort.dir" );
+/* Drop the option belonging to the OTHER report -- 'Best match' means nothing
+   without keywords , 'Most figures' is only offered where there's no relevance
+   to sort by. Removed , not hidden : a display:none <option> is honoured
+   inconsistently across browsers. */
+Array.from( sortKeyEl.options ).forEach( o => {
+	if ( ( o.classList.contains( "only-mi" ) && MODE !== "method-images" ) ||
+	     ( o.classList.contains( "only-ai" ) && MODE !== "images" ) ) o.remove();
+} );
+/* Each key's natural direction ( dates newest-first , relevance best-first ) , used
+   as the default and when you switch keys. */
+const SORT_DEFAULT_DIR = { added: "desc" , published: "desc" , rank: "asc" , nfigs: "desc" };
+const SORT_DIR_LABEL = {
+	added:     { desc: "Newest first" , asc: "Oldest first" } ,
+	published: { desc: "Newest first" , asc: "Oldest first" } ,
+	rank:      { desc: "Best last"    , asc: "Best first"   } ,
+	nfigs:     { desc: "Most first"   , asc: "Fewest first" } ,
+};
+// Only the keys this report actually offers , so a stored sort from the sibling
+// page ( or an old build ) can't leave the control on an option that isn't there.
+const SORT_KEYS = new Set( Array.from( sortKeyEl.options ).map( o => o.value ) );
+let sortKey = lsGet( SORT_KEY_LS , "added" );
+if ( !SORT_KEYS.has( sortKey ) ) sortKey = "added";
+let sortDir = lsGet( SORT_DIR_LS , SORT_DEFAULT_DIR[ sortKey ] );
+if ( sortDir !== "asc" && sortDir !== "desc" ) sortDir = SORT_DEFAULT_DIR[ sortKey ];
+
+const SORT_NUMERIC = { rank: "rank" , nfigs: "nfigs" };
+function sortMeta( p , key ) {
+	const num = SORT_NUMERIC[ key ];
+	if ( num ) return { present: true , num: Number( p.dataset[ num ] || 0 ) };
+	const s = ( key === "added" ? p.dataset.added : p.dataset.published ) || "";
+	return { present: !!s , str: s };   // date strings compare lexicographically
+}
+function applySort() {
+	const key = sortKey , dir = sortDir;
+	// Sorts the cached section list IN PLACE and re-appends in that order , so the
+	// list and the document stay in step -- which is what visiblePapers() , the
+	// ←/→ cursor and nearestPaper()'s binary search all assume.
+	papersAll().sort( ( a , b ) => {
+		const ma = sortMeta( a , key ) , mb = sortMeta( b , key );
+		// Papers with no value for this key always sink to the bottom.
+		if ( ma.present !== mb.present ) return ma.present ? -1 : 1;
+		let cmp = SORT_NUMERIC[ key ]
+			? ma.num - mb.num
+			: ( ma.str < mb.str ? -1 : ma.str > mb.str ? 1 : 0 );
+		cmp = dir === "desc" ? -cmp : cmp;
+		// Stable tiebreak : the server's relevance order , always best-first.
+		if ( cmp === 0 ) cmp = Number( a.dataset.rank || 0 ) - Number( b.dataset.rank || 0 );
+		return cmp;
+	} ).forEach( p => mainEl.appendChild( p ) );
+	sortKeyEl.value = key;
+	sortDirBtn.textContent = ( SORT_DIR_LABEL[ key ] || SORT_DIR_LABEL.added )[ dir ];
+}
+sortKeyEl.addEventListener( "change" , () => {
+	sortKey = sortKeyEl.value;
+	sortDir = SORT_DEFAULT_DIR[ sortKey ] || "desc";   // reset to that key's natural order
+	lsSet( SORT_KEY_LS , sortKey ); lsSet( SORT_DIR_LS , sortDir );
+	applySort(); apply();
+} );
+sortDirBtn.addEventListener( "click" , () => {
+	sortDir = sortDir === "desc" ? "asc" : "desc";
+	lsSet( SORT_DIR_LS , sortDir );
+	applySort(); apply();
+} );
+
+/* ---- live update : refresh when ` prma server ` rebuilds the report ---------
+   Served , we poll a cheap version token ( the report file's mtime ) . When the
+   --watch worker finishes processing newly added papers it rewrites report.html ,
+   the token moves , and we bring the fresh page in. Selection / skip already live
+   on the server ; we additionally stash the scroll position + active filters +
+   cursor so the refresh lands you back where you were. To avoid yanking the page
+   out from under you , we auto-refresh only when it won't interrupt ( tab in the
+   background , or you've been idle a few seconds and aren't selecting text ) ;
+   otherwise the "New papers" pill lets you refresh when you're ready. */
+const refreshFab = document.getElementById( "fab-refresh" );
+const VIEW_KEY   = NS( "view" );   // sessionStorage : view across a refresh
+let   pendingView = null;
+
+function reloadPreserving() {
+	try {
+		const curEl = document.querySelector( ".paper.current" );
+		sessionStorage.setItem( VIEW_KEY , JSON.stringify( {
+			y:        window.scrollY ,
+			kws:      Array.from( activeKws ) ,
+			mods:     Array.from( activeMods ) ,
+			leadOnly , selOnly , skipOnly , xrefOnly ,
+			more:     !!moreBtn && !chipBar.classList.contains( "collapsed" ) ,
+			cur:      curEl ? ( curEl.dataset.key || null ) : null ,
+		} ) );
+	} catch ( e ) {}
+	location.reload();
+}
+function restoreView() {
+	try { pendingView = JSON.parse( sessionStorage.getItem( VIEW_KEY ) || "null" ); sessionStorage.removeItem( VIEW_KEY ); }
+	catch ( e ) { pendingView = null; }
+	if ( !pendingView ) return;
+	const v = pendingView;
+	// Re-activate only filters whose chip still exists after the rebuild.
+	const kwSet  = new Set( chips.map( c => c.dataset.kw ) );
+	const modSet = new Set( modChips.map( c => c.dataset.modf ) );
+	( v.kws  || [] ).forEach( k => { if ( kwSet.has( k )  ) activeKws.add( k ); } );
+	( v.mods || [] ).forEach( m => { if ( modSet.has( m ) ) activeMods.add( m ); } );
+	leadOnly = !!v.leadOnly; selOnly = !!v.selOnly; skipOnly = !!v.skipOnly;
+	xrefOnly = !!v.xrefOnly && !!xrefBtn;
+	if ( v.more && moreBtn && chipBar.classList.contains( "collapsed" ) ) moreBtn.click();
+}
+function restoreScrollCursor() {
+	if ( !pendingView ) return;
+	const v = pendingView; pendingView = null;
+	if ( v.cur ) {
+		const p = document.querySelector( '.paper[data-key="' + CSS.escape( v.cur ) + '"]' );
+		if ( p && !p.classList.contains( "hidden" ) ) { p.classList.add( "current" ); curIdx = visiblePapers().indexOf( p ); }
+	}
+	if ( typeof v.y === "number" ) window.scrollTo( { top: v.y , behavior: "auto" } );
+}
+
+let reportVersion   = null;
+let lastInteraction = Date.now();
+[ "scroll" , "keydown" , "pointerdown" ].forEach( ev =>
+	window.addEventListener( ev , () => { lastInteraction = Date.now(); } , { passive: true } ) );
+
+async function checkVersion() {
+	try {
+		const r = await fetch( api( MODE , "version" ) , { cache: "no-store" } );
+		const j = await r.json();
+		const v = j && j.version;
+		if ( !v ) return;
+		if ( reportVersion === null ) { reportVersion = v; return; }   // baseline
+		if ( v === reportVersion ) return;
+		const idle      = ( Date.now() - lastInteraction ) > 4000;
+		const selecting = String( window.getSelection() ).trim().length > 0;
+		if ( document.hidden || ( idle && !selecting ) ) { reloadPreserving(); return; }
+		refreshFab.classList.remove( "hidden" );   // let the reader pick the moment
+	} catch ( e ) { /* server momentarily unreachable : just try again next tick */ }
+}
+
+/* ---- position indicator + jump box ( bottom-right ) ------------------------
+   Shows which paper you're on out of how many ( a thin progress bar + "cur / total" )
+   and lets you jump : type a paper number and press Enter. "Current" is the paper
+   nearest the top of the viewport , so it tracks scrolling ; the ↑/↓ + ←/→ cursor
+   and a jump both scroll a paper to the top , so the number follows them too. */
+const navWidget = document.getElementById( "fab-nav" );
+const navInput  = document.getElementById( "nav-idx" );
+const navTotal  = document.getElementById( "nav-total" );
+const navFill   = document.getElementById( "nav-fill" );
+
+function updateNav( idx ) {
+	const total = visiblePapers().length;
+	navTotal.textContent = total;
+	navWidget.classList.toggle( "hidden" , total === 0 );
+	if ( !total ) { navFill.style.width = "0%"; return; }
+	// No explicit index -> the paper currently at the top of the viewport.
+	if ( idx == null || idx < 0 ) idx = nearestPaper();
+	const cur = ( idx >= 0 ? Math.min( idx , total - 1 ) : 0 ) + 1;
+	navInput.max = total;
+	// Don't fight the user while they're typing a number to jump to.
+	if ( document.activeElement !== navInput ) navInput.value = cur;
+	navFill.style.width = ( cur / total * 100 ) + "%";
+}
+
+function jumpTo( n ) {
+	const total = visiblePapers().length;
+	if ( !total || isNaN( n ) ) return;
+	n = Math.max( 1 , Math.min( Math.round( n ) , total ) );
+	navInput.value = n;
+	navInput.blur();       // so the next arrow key steps papers , not the number box
+	setCurrent( n - 1 );   // scroll that paper to the top , mark it , update the readout
+}
+navInput.addEventListener( "change" , () => jumpTo( parseInt( navInput.value , 10 ) ) );
+navInput.addEventListener( "keydown" , ev => {
+	ev.stopPropagation();   // keep the page's Space / arrow shortcuts out of the box
+	if ( ev.key === "Enter" ) { ev.preventDefault(); jumpTo( parseInt( navInput.value , 10 ) ); }
+} );
+// Track scroll position ( throttled : nearestPaper scans every visible paper ).
+let navThrottle = 0;
+window.addEventListener( "scroll" , () => {
+	if ( navThrottle ) return;
+	navThrottle = setTimeout( () => { navThrottle = 0; updateNav(); } , 120 );
+} , { passive: true } );
 
 /* Load the saved curation ( server when served , else localStorage ) BEFORE the
    first paint , then apply() so skipped papers start hidden. */
 ( async function init() {
-	await loadState();
-	paintSelection();
+	applySort();                 // reorder to the saved / default sort first
+	measureGrid();               // column count + card height , before any placeholder
+	// This report's own curation , and ( on /images ) a read-only look at the
+	// other report's picks. Fetched together -- neither depends on the other.
+	await Promise.all( [ loadState() , loadXref() ] );
+	restoreView();               // re-activate filters if we just auto-refreshed
+	paintXref();                 // flag the cross-referenced records first , so the
+	paintSelection();            // first apply() can filter on them
 	updateSkipCount();
-	apply();
+	apply();                     // every record's visibility + every placeholder's size
+	startMounting();             // sizes are right : now let the window fill in
+	restoreScrollCursor();       // land back on the same paper / scroll position
+	updateNav();                 // seed the position readout ( paper at the top / total )
+	if ( SERVED ) {
+		refreshFab.addEventListener( "click" , reloadPreserving );
+		checkVersion();                       // establish the baseline promptly
+		setInterval( checkVersion , 15000 );
+	}
 } )();
 </script>
 </body>

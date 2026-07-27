@@ -280,12 +280,17 @@ def refresh_reports( args , progress=None ):
 	after the papers have landed. The server's --watch worker calls it once per
 	BATCH for the same reason.
 
-	Never raises : a broken report must not fail the processing run."""
-	if progress:
-		try: progress( "method-images" )
-		except Exception: pass
-	from . import method_images
-	method_images.rebuild( args )
+	Never raises : a broken report must not fail the processing run.
+
+	BOTH figure reports , sequentially : /method-images ( caption-matched ) and
+	/images ( every crop ). They read the same records and stamp the same
+	modality field , so there's nothing to gain from overlapping them."""
+	from . import all_images , method_images
+	for label , mod in ( ( "method-images" , method_images ) , ( "all-images" , all_images ) ):
+		if progress:
+			try: progress( label )
+			except Exception: pass
+		mod.rebuild( args )
 
 
 # ---------------------------------------------------------------------------

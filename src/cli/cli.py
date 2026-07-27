@@ -444,6 +444,20 @@ def method_images( sub , global_parser ):
 		"method_images_out":       None ,
 	}
 
+def all_images( sub , global_parser ):
+	p = sub.add_parser(
+		"all-images" ,
+		parents=[ global_parser ] ,
+		help="` prma method-images ` with the keyword filter taken OFF : write an HTML contact sheet of EVERY figure the pipeline cropped , from every processed paper , captioned or not. Same dependency ( the per-paper PDF suite -- yolo -> ocr -> images -> ... -- must have run ; papers it hasn't reached are skipped and counted ) and the same page , so you get the same per-paper sections , DOI / PDF / .md / methods / montage links , modality pills + filter chips , click-to-select curation , keyboard triage ( arrows + Space ) and JSON / CSV export -- just no keywords , no tiers , no threshold and no relevance ranking , because nothing is being matched. This report keeps its OWN selection and skipped-paper list ( output/cache/images-state.json ) , so a pass over everything never disturbs your /method-images picks -- and figures you already picked THERE are badged here and filterable via the 'In Model Design' pill , read-only. Output : output/all-images/report.html , served by ` prma server ` at /images. NOTE this is the whole library , so it's big : ~15k cards / tens of MB of HTML on a 2000-paper library ( images lazy-load , but expect a slow first paint ). Overwritten on each run."
+	)
+	p.add_argument( "--out" , dest="all_images_out" ,
+		type=Path , default=None ,
+		help="Report path ( default : output/all-images/report.html ). Image / md / methods links are written relative to this file" )
+	p.set_defaults( _entry=tasks.all_images )
+	return {
+		"all_images_out": None ,
+	}
+
 def reindex( sub , global_parser ):
 	p = sub.add_parser(
 		"reindex" ,
@@ -526,6 +540,7 @@ REGISTRARS = (
 	code          ,
 	modalities    ,
 	method_images ,
+	all_images    ,
 	reindex       ,
 	server        ,
 )

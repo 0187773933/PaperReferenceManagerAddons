@@ -49,10 +49,19 @@ caption ( 'self-attention' , 'neural network' ). --threshold ( default
 85 ) is the score cutoff.
 
 Output : output/method-images/report.html ( --out to move it ) -- one
-section per matched paper ( DOI / PDF / .md / methods .txt / montage
-links ) , one card per matched figure ( crop image , highlighted caption ,
+section per matched paper ( PDF / .md / methods .txt / montage / DOI / library
+proxy links + a publication-date moniker ) , one card per matched figure
+( crop image , highlighted caption ,
 matched-keyword tags ) , with clickable per-keyword filter chips up top.
 Overwritten on each run.
+
+Papers are emitted MOST-RECENTLY-ADDED first ( paper[ 'created_at' ] , when it
+entered our library ) , so a paper you just added lands at the top ; the page's
+sort control ( see method_images.html ) can re-sort to publication date or back
+to the relevance ranking ( 'Best match' ) using the data-added / data-published /
+data-rank attributes each section carries. When served by ` prma server ` the
+page also polls /api/method-images/version and refreshes itself once the report
+is rebuilt , so newly processed papers appear without a manual reload.
 
 The PAGE -- its style , markup skeleton and in-browser behaviour -- is NOT
 in this module : it lives in src/dashboard/method_images.html , alongside
@@ -98,14 +107,22 @@ pruned ).
 
 Persistence : when the report is SERVED by ` prma server ` it reads / writes the
 selection through /api/method-images/state ( stored in
-output/cache/method-images-state.json ; see src/db/method_images_state.py ) , so
-it follows you across browsers and survives a rebuild. Opened straight off disk
+output/cache/method-images-state.json ; see src/db/figure_state.py ) , so it
+follows you across browsers and survives a rebuild. Opened straight off disk
 over file:// -- no server to talk to -- the page falls back to this browser's
 localStorage , as it always did. Either way this task never writes the selection
 itself ; it only renders the report.
+
+SIBLING REPORT : ` prma all-images ` ( /images , src/tasks/all_images.py ) is
+this same page over EVERY extracted figure , with the keyword filtering removed
+-- same template , same curation machinery , its own separate selection. The
+pieces both reports share ( the template + its slots , the paper-section /
+figure-card HTML , the publication-date lookup , the caption pairing ) live
+HERE and are imported there , so the two can't drift.
 """
 
 import html
+import json
 import os
 import re
 import threading
@@ -445,10 +462,19 @@ _CHIP_HEAD = 18
 
 # The page itself -- style , markup skeleton and behaviour -- lives in
 # src/dashboard/method_images.html , next to the other dashboard pages , and is
-# edited there like any other HTML. This module only generates the four
-# fragments that MUST come from the data ( see _fill ).
+# edited there like any other HTML. This module only generates the fragments
+# that MUST come from the data ( see _fill ).
+#
+# The SAME template backs ` prma all-images ` ( /images ) : the two reports differ
+# only in which figures they carry and which chips sit above them , which is data ,
+# so they share one page rather than forking it. The ` mode ` slot lands on <body>
+# as data-mode and is what the page keys its per-report bits off ( heading , footer
+# legend , /api/<mode>/state , localStorage namespace , export filenames ).
 TEMPLATE_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "method_images.html" )
+
+# data-mode values ( == the figure_state collection == the /api/<mode>/… prefix ).
+MODE = "method-images"
 
 
 def _fill( parts ):
@@ -473,6 +499,183 @@ def _fill( parts ):
 			)
 		tpl = tpl.replace( token , value )
 	return tpl
+
+
+def render_paper_sections( matched , out_dir ):
+	"""The <section class="paper"> blocks -- the body of BOTH figure reports
+	( /method-images and /images ) , which is why it lives here rather than
+	inside _render_report.
+
+	`matched` is the list of per-paper dicts run() assembles ( key / title / doi /
+	added / published / rank / mods / pdf / md / methods / montage + a 'figures'
+	list ) ; `out_dir` is the report's own directory , which every relative href
+	is written against.
+
+	Each figure carries seq / page / caption / png , plus 'hits' -- the matched
+	keywords. ` prma all-images ` has no keywords , so it passes an EMPTY hits
+	list and the card comes out without tags , without caption highlighting and
+	with data-lead="0" ; everything else about the card is identical , so a pick
+	made on one page is describable by the other ( same data-* , same export ).
+
+	DEFERRED CARDS. A paper's <div class="grid"> is emitted EMPTY , and its cards
+	go into a <script type="text/html" class="figs"> beside it ; the page mounts a
+	paper's grid only while it's near the viewport and empties it again once it's
+	well past ( see "batched rendering" in method_images.html ). ` prma all-images `
+	renders 15k+ figures across 2000+ papers -- built into the document up front
+	that's ~150k nodes and 15k <img> elements , which is what made the report crawl.
+	Inside a script element the same bytes are TEXT : the parser skips them , and
+	only the window you're looking at is ever real.
+
+	Cards must therefore be self-describing ( they are -- every field the export
+	reads is a data-* on the card ) and , because it's the page that mounts them ,
+	the per-paper markup and the per-paper index rows below have to stay in the
+	SAME ORDER : the page pairs them up by position."""
+	L    = []
+	# Per-figure filter index , keyed by paper : [ seq , "kw|kw" , lead ] . The
+	# chips , the counters and the paper cursor all have to see the WHOLE report
+	# while only a window of it is mounted , so this is what they read instead of
+	# the cards. Tiny beside the markup it stands in for ( ~30 bytes a figure ).
+	index = {}
+	for p in matched:
+		title = html.escape( p[ "title" ] or p[ "key" ] )
+		# Paper-level metadata rides on the section as data-* so the in-page
+		# export can rebuild a full record for each picked figure without us
+		# shipping a second copy of everything as JSON.
+		attrs = [ f'data-title="{html.escape( p[ "title" ] or p[ "key" ] , quote=True )}"' ]
+		attrs.append( f'data-key="{html.escape( p[ "key" ] , quote=True )}"' )
+		attrs.append( f'data-mods="{html.escape( "|".join( p[ "mods" ] ) , quote=True )}"' )
+		attrs.append( f'data-mods-inferred="{1 if p[ "mods_inferred" ] else 0}"' )
+		# Sort keys for the page's sort control ( see method_images.html ) : when the
+		# paper entered our library , when it was published , and its relevance order.
+		attrs.append( f'data-added="{html.escape( p.get( "added" ) or "" , quote=True )}"' )
+		attrs.append( f'data-published="{html.escape( p.get( "published" ) or "" , quote=True )}"' )
+		attrs.append( f'data-rank="{p.get( "rank" , 0 )}"' )
+		# How many cards this section holds -- /images sorts on it ( 'Most figures' ) ,
+		# since with no keywords there's no relevance to rank by.
+		attrs.append( f'data-nfigs="{len( p[ "figures" ] )}"' )
+		if p[ "doi" ]:
+			attrs.append( f'data-doi="{html.escape( p[ "doi" ] , quote=True )}"' )
+		for k in ( "pdf" , "md" , "methods" ):
+			if p[ k ]:
+				attrs.append( f'data-{k}="{html.escape( str( p[ k ].resolve() ) , quote=True )}"' )
+		L.append( f'<section class="paper" {" ".join( attrs )}>' )
+		if p[ "doi" ]:
+			# Canonical resolver as a no-JS fallback. Routing DOIs through a library
+			# proxy is a LINK decision , not data , so it lives in the page ( the PROXY
+			# constant in method_images.html , shared with the sibling dashboards ) : the
+			# class marks the anchor , the JS rewrites this href from the section's
+			# data-doi. Keeping it there -- not in this string -- means changing the proxy
+			# is an HTML edit , which report_is_stale watches.
+			L.append( f'<h2><a class="doi-link" href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">{title}</a></h2>' )
+		else:
+			L.append( f"<h2>{title}</h2>" )
+		# What the study itself measured with. Omitted entirely when nothing was
+		# detected -- an empty row would read as "unknown" when the honest answer
+		# for a review / theory paper is "no modality".
+		if p[ "mods" ]:
+			# Inferred = read off the md body because no abstract / Methods section
+			# existed. Weaker evidence , so it looks weaker and says why on hover.
+			cls  = "mod inferred" if p[ "mods_inferred" ] else "mod"
+			hint = (
+				" title=\"Inferred from the paper's full text -- no abstract or "
+				"Methods section was available , so this may be a modality the "
+				"paper discusses rather than one it used\""
+			) if p[ "mods_inferred" ] else ""
+			pills = "".join(
+				f'<span class="{cls}" data-mod="{html.escape( m , quote=True )}"{hint}>{html.escape( m )}</span>'
+				for m in p[ "mods" ]
+			)
+			L.append( f'<p class="mods">{pills}</p>' )
+		links = []
+		if p[ "pdf" ]:
+			# file:// works when this report is opened straight off disk , but a
+			# browser refuses to follow it from an http page -- so when we're
+			# served by ` prma server ` the JS below swaps it for /pdf?key=... .
+			links.append(
+				f'<a class="pdf-link" href="{html.escape( p[ "pdf" ].as_uri() , quote=True )}" '
+				f'target="_blank">PDF</a>'
+			)
+		if p[ "md" ]:
+			links.append( f'<a href="{_href( p[ "md" ] , out_dir )}" target="_blank">Markdown</a>' )
+		if p[ "methods" ]:
+			links.append( f'<a href="{_href( p[ "methods" ] , out_dir )}" target="_blank">Methods</a>' )
+		if p[ "montage" ]:
+			links.append( f'<a href="{_href( p[ "montage" ] , out_dir )}" target="_blank">All figures ( montage )</a>' )
+		if p[ "doi" ]:
+			# Two ways to the paper , after the montage : a DIRECT resolver link and a
+			# PROXY link routed through your library's EZproxy. Both ship a plain
+			# https://doi.org/ href ; only the proxy one carries class="doi-link" , so
+			# the page's PROXY rewrite ( the shared PROXY const in method_images.html )
+			# upgrades that one in place and leaves the direct link alone.
+			doi_q = quote( p[ "doi" ] )
+			links.append( f'<a href="https://doi.org/{doi_q}" target="_blank">DOI</a>' )
+			links.append( f'<a class="doi-link" href="https://doi.org/{doi_q}" target="_blank">Proxy</a>' )
+		# Publication date moniker , right after the DOI / proxy links. Omitted when
+		# unknown so it never shows a fake date.
+		if p.get( "published" ):
+			links.append( f'<span class="pubdate">{html.escape( p[ "published" ] )}</span>' )
+		L.append( f'<p class="links">{" &nbsp;·&nbsp; ".join( links )}</p>' )
+		# Empty on purpose -- the page fills it from the deferred markup below and
+		# empties it again on the way past. data-n is how many cards it will hold ,
+		# which is what sizes the placeholder so the scrollbar stays honest.
+		L.append( f'<div class="grid" data-n="{len( p[ "figures" ] )}"></div>' )
+		L.append( '<script type="text/html" class="figs">' )
+		rows = []
+		for fig in p[ "figures" ]:
+			img   = _href( fig[ "png" ] , out_dir )
+			hits  = fig.get( "hits" ) or []
+			kws   = "|".join( html.escape( h[ "kw" ] , quote=True ) for h in hits )
+			terms = [ h[ "kw" ] for h in hits ] + [ h[ "tok" ] for h in hits if h[ "tok" ] ]
+			tags  = "".join(
+				f'<span class="tag {h[ "tier" ]}">{html.escape( h[ "kw" ] )}'
+				f'<span class="n">{round( h[ "score" ] )}</span></span>'
+				for h in hits
+			)
+			# Stable across re-runs ( doi + figure number , not a row index ) , so
+			# a re-generated report restores the same picks from localStorage --
+			# and so the two reports name the same figure the same way , which is
+			# what lets /images mark what you already picked on /method-images.
+			fid = html.escape( f'{p[ "key" ]}#figure-{fig[ "seq" ]}' , quote=True )
+			# The index row for this card. Raw text , not escaped : it goes out as
+			# JSON , and the keywords have to compare equal to the chips' data-kw
+			# once the parser has un-escaped those. The id isn't stored -- the page
+			# rebuilds it from the section's data-key and this seq , which is
+			# exactly how the two reports agree on a figure's name.
+			rows.append( [ fig[ "seq" ] , "|".join( h[ "kw" ] for h in hits ) ,
+				1 if fig.get( "lead" ) else 0 ] )
+			# The whole card is the control : click anywhere ( image , caption ,
+			# tags ) to add it to the selection.
+			L.append(
+				f'<figure class="fig-card" data-id="{fid}" data-kws="{kws}" '
+				f'data-lead="{1 if fig.get( "lead" ) else 0}" data-seq="{fig[ "seq" ]}" '
+				f'data-page="{fig[ "page" ] + 1}" '
+				f'data-abs="{html.escape( str( fig[ "png" ].resolve() ) , quote=True )}" '
+				f'role="button" tabindex="0" aria-pressed="false" '
+				f'title="Click to add this figure to your selection ( kept across refreshes )">'
+			)
+			L.append( '<div class="thumb">' )
+			L.append( f'<img loading="lazy" src="{img}" alt="Figure {fig[ "seq" ]}">' )
+			L.append( "</div>" )
+			L.append( "<figcaption>" )
+			# No keywords ( ` prma all-images ` ) -> no tag row at all , rather than an
+			# empty one holding open 6px of gap on every card in the report.
+			if tags:
+				L.append( f'<div class="tags">{tags}</div>' )
+			L.append( f'<p class="cap">{_highlight( fig[ "caption" ] , terms )}</p>' )
+			L.append( f'<p class="fig-meta">Figure {fig[ "seq" ]} &nbsp;·&nbsp; page {fig[ "page" ] + 1}</p>' )
+			L.append( "</figcaption>" )
+			L.append( "</figure>" )
+		L.append( "</script>" )
+		L.append( "</section>" )
+		index[ p[ "key" ] ] = rows
+	# One blob for the whole report , read once at load. '</' is broken up because
+	# the JSON sits inside a <script> : any literal '</script' in a caption-derived
+	# string would end the element early ( escaping the slash is legal JSON and
+	# parses back identically ).
+	L.append( '<script type="application/json" id="figindex">'
+		+ json.dumps( index , separators=( "," , ":" ) ).replace( "</" , "<\\/" )
+		+ "</script>" )
+	return L
 
 
 def _render_report( out_path , strong , weak , matched , stats ):
@@ -560,112 +763,75 @@ def _render_report( out_path , strong , weak , matched , stats ):
 	if len( chips ) > _CHIP_HEAD:
 		C.append( f'<button class="chip more" id="chip-more">+{len( chips ) - _CHIP_HEAD} more</button>' )
 
-	L = []
-	for p in matched:
-		title = html.escape( p[ "title" ] or p[ "key" ] )
-		# Paper-level metadata rides on the section as data-* so the in-page
-		# export can rebuild a full record for each picked figure without us
-		# shipping a second copy of everything as JSON.
-		attrs = [ f'data-title="{html.escape( p[ "title" ] or p[ "key" ] , quote=True )}"' ]
-		attrs.append( f'data-key="{html.escape( p[ "key" ] , quote=True )}"' )
-		attrs.append( f'data-mods="{html.escape( "|".join( p[ "mods" ] ) , quote=True )}"' )
-		attrs.append( f'data-mods-inferred="{1 if p[ "mods_inferred" ] else 0}"' )
-		if p[ "doi" ]:
-			attrs.append( f'data-doi="{html.escape( p[ "doi" ] , quote=True )}"' )
-		for k in ( "pdf" , "md" , "methods" ):
-			if p[ k ]:
-				attrs.append( f'data-{k}="{html.escape( str( p[ k ].resolve() ) , quote=True )}"' )
-		L.append( f'<section class="paper" {" ".join( attrs )}>' )
-		if p[ "doi" ]:
-			# Canonical resolver as a no-JS fallback. Routing DOIs through a library
-			# proxy is a LINK decision , not data , so it lives in the page ( the PROXY
-			# constant in method_images.html , shared with the sibling dashboards ) : the
-			# class marks the anchor , the JS rewrites this href from the section's
-			# data-doi. Keeping it there -- not in this string -- means changing the proxy
-			# is an HTML edit , which report_is_stale watches.
-			L.append( f'<h2><a class="doi-link" href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">{title}</a></h2>' )
-		else:
-			L.append( f"<h2>{title}</h2>" )
-		# What the study itself measured with. Omitted entirely when nothing was
-		# detected -- an empty row would read as "unknown" when the honest answer
-		# for a review / theory paper is "no modality".
-		if p[ "mods" ]:
-			# Inferred = read off the md body because no abstract / Methods section
-			# existed. Weaker evidence , so it looks weaker and says why on hover.
-			cls  = "mod inferred" if p[ "mods_inferred" ] else "mod"
-			hint = (
-				" title=\"Inferred from the paper's full text -- no abstract or "
-				"Methods section was available , so this may be a modality the "
-				"paper discusses rather than one it used\""
-			) if p[ "mods_inferred" ] else ""
-			pills = "".join(
-				f'<span class="{cls}" data-mod="{html.escape( m , quote=True )}"{hint}>{html.escape( m )}</span>'
-				for m in p[ "mods" ]
-			)
-			L.append( f'<p class="mods">{pills}</p>' )
-		links = []
-		if p[ "doi" ]:
-			# Same DOI , same proxy upgrade in the page ( see the title link above ).
-			links.append( f'<a class="doi-link" href="https://doi.org/{quote( p[ "doi" ] )}" target="_blank">DOI</a>' )
-		if p[ "pdf" ]:
-			# file:// works when this report is opened straight off disk , but a
-			# browser refuses to follow it from an http page -- so when we're
-			# served by ` prma server ` the JS below swaps it for /pdf?key=... .
-			links.append(
-				f'<a class="pdf-link" href="{html.escape( p[ "pdf" ].as_uri() , quote=True )}" '
-				f'target="_blank">PDF</a>'
-			)
-		if p[ "md" ]:
-			links.append( f'<a href="{_href( p[ "md" ] , out_dir )}" target="_blank">Markdown</a>' )
-		if p[ "methods" ]:
-			links.append( f'<a href="{_href( p[ "methods" ] , out_dir )}" target="_blank">Methods</a>' )
-		if p[ "montage" ]:
-			links.append( f'<a href="{_href( p[ "montage" ] , out_dir )}" target="_blank">All figures ( montage )</a>' )
-		L.append( f'<p class="links">{" &nbsp;·&nbsp; ".join( links )}</p>' )
-		L.append( '<div class="grid">' )
-		for fig in p[ "figures" ]:
-			img   = _href( fig[ "png" ] , out_dir )
-			kws   = "|".join( html.escape( h[ "kw" ] , quote=True ) for h in fig[ "hits" ] )
-			terms = [ h[ "kw" ] for h in fig[ "hits" ] ] + [ h[ "tok" ] for h in fig[ "hits" ] if h[ "tok" ] ]
-			tags  = "".join(
-				f'<span class="tag {h[ "tier" ]}">{html.escape( h[ "kw" ] )}'
-				f'<span class="n">{round( h[ "score" ] )}</span></span>'
-				for h in fig[ "hits" ]
-			)
-			# Stable across re-runs ( doi + figure number , not a row index ) , so
-			# a re-generated report restores the same picks from localStorage.
-			fid = html.escape( f'{p[ "key" ]}#figure-{fig[ "seq" ]}' , quote=True )
-			# The whole card is the control : click anywhere ( image , caption ,
-			# tags ) to add it to the selection.
-			L.append(
-				f'<figure class="fig-card" data-id="{fid}" data-kws="{kws}" '
-				f'data-lead="{1 if fig[ "lead" ] else 0}" data-seq="{fig[ "seq" ]}" '
-				f'data-page="{fig[ "page" ] + 1}" '
-				f'data-abs="{html.escape( str( fig[ "png" ].resolve() ) , quote=True )}" '
-				f'role="button" tabindex="0" aria-pressed="false" '
-				f'title="Click to add this figure to your selection ( kept across refreshes )">'
-			)
-			L.append( '<div class="thumb">' )
-			L.append( f'<img loading="lazy" src="{img}" alt="Figure {fig[ "seq" ]}">' )
-			L.append( "</div>" )
-			L.append( "<figcaption>" )
-			L.append( f'<div class="tags">{tags}</div>' )
-			L.append( f'<p class="cap">{_highlight( fig[ "caption" ] , terms )}</p>' )
-			L.append( f'<p class="fig-meta">Figure {fig[ "seq" ]} &nbsp;·&nbsp; page {fig[ "page" ] + 1}</p>' )
-			L.append( "</figcaption>" )
-			L.append( "</figure>" )
-		L.append( "</div>" )
-		L.append( "</section>" )
+	L = render_paper_sections( matched , out_dir )
 
 	if not matched:
 		L.append( "<p>No figure captions matched. Lower <code>--threshold</code> , lower <code>--min-weak</code> , broaden the keywords , or check that the pipeline ( yolo / ocr / images ) has run.</p>" )
 
 	return _fill( {
+		"mode":     MODE ,
 		"meta":     meta ,
 		"chips":    "\n".join( C ) ,
 		"papers":   "\n".join( L ) ,
 		"min_weak": str( stats[ "min_weak" ] ) ,
 	} )
+
+
+# ---------------------------------------------------------------------------
+# Per-paper sort keys ( added-to-manager + publication date )
+# ---------------------------------------------------------------------------
+# The page sorts papers client-side ( Recently added / Publication date / Best
+# match -- see method_images.html ) , so each section carries these as data-* :
+#   added     : paper[ 'created_at' ] , when the paper first entered our unified
+#               DB ( i.e. when we added it to the manager and snapshot picked it
+#               up ) -- the DEFAULT order , newest first.
+#   published : the paper's publication date , OpenAlex first ( clean YYYY-MM-DD )
+#               then the manager's own date string.
+# Both are plain strings the page compares lexicographically ; '' sorts last.
+
+_YEAR_RE = re.compile( r"(?:19|20)\d{2}" )
+
+
+def _oa_meta( args , doi ):
+	"""The cached OpenAlex work meta for a DOI ( output/cache/openalex/… ) , or
+	{} on any miss. Same file the OpenAlex / library-search pipelines read."""
+	if not doi:
+		return {}
+	try:
+		b64 = utils.base64_encode( doi )
+		if not b64:
+			return {}
+		fp = args.output.joinpath( "cache" , "openalex" , f"{b64}.json" )
+		return utils.read_json( fp ) or {} if fp.exists() else {}
+	except Exception:
+		return {}
+
+
+def _publication_date( args , paper ):
+	"""Best-available publication date as a sortable string ( 'YYYY-MM-DD' ,
+	'YYYY-01-01' , or '' when unknown ). OpenAlex is preferred ( it gives a clean
+	full date for most library papers ) ; otherwise fall back to the manager's own
+	date field ( Zotero '2020-12-00 2020-12' , Mendeley an int year ) , from which
+	we keep a real YYYY-MM-DD if present and else synthesise YYYY-01-01."""
+	oa = _oa_meta( args , paper.get( "doi" ) )
+	pd = oa.get( "publication_date" )
+	if pd:
+		return str( pd )
+	py = oa.get( "publication_year" )
+	if py:
+		return f"{py}-01-01"
+	for src in ( "zotero" , "mendeley" ):
+		d = ( ( paper.get( "sources" ) or {} ).get( src ) or {} ).get( "date" )
+		if d is None:
+			continue
+		s = str( d )
+		dm = re.match( r"\s*(\d{4}-\d{2}-\d{2})" , s )
+		if dm:
+			return dm.group( 1 )
+		m = _YEAR_RE.search( s )
+		if m:
+			return f"{m.group( 0 )}-01-01"
+	return ""
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +1035,10 @@ def run( args ):
 			"key":     key ,
 			"title":   ( paper.get( "title" ) or "" ).strip() ,
 			"doi":     paper.get( "doi" ) ,
+			# When this paper entered our library ( default sort , newest first )
+			# and when it was published ( the page's Publication-date sort ).
+			"added":     paper.get( "created_at" ) or "" ,
+			"published": _publication_date( args , paper ) ,
 			"mods":    modalities ,
 			"mods_inferred": inferred ,
 			"pdf":     pdf_path if ( pdf_path and pdf_path.exists() ) else None ,
@@ -894,10 +1064,21 @@ def run( args ):
 		p[ "n_strong" ] = sum(
 			1 for f in p[ "figures" ] if any( h[ "tier" ] == "strong" for h in f[ "hits" ] )
 		)
+	# Relevance ranking -- the architecture-diagram-first order ( leads with a
+	# structural caption , then any strong match , then volume ). We keep it as the
+	# page's 'Best match' sort AND as the stable tiebreak for the other sorts , so
+	# it's captured as each paper's data-rank BEFORE we reorder for the default view.
 	matched.sort( key=lambda p: (
 		-p[ "n_lead" ] , -p[ "n_strong" ] , -len( p[ "figures" ] ) ,
 		( p[ "title" ] or p[ "key" ] ).lower() ,
 	) )
+	for i , p in enumerate( matched ):
+		p[ "rank" ] = i
+	# Default DOM order = most-recently-ADDED first ( what the page opens on ) , so a
+	# paper you just added to the manager lands at the very top. The sort is STABLE ,
+	# so papers added in the same import keep their relevance order among themselves ;
+	# the page can re-sort to publication date or back to Best match client-side.
+	matched.sort( key=lambda p: p.get( "added" ) or "" , reverse=True )
 
 	# Figures per modality , for the filter chips ( a paper's figures all inherit
 	# its modalities ) , in the config's canonical order.

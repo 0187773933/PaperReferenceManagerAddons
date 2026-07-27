@@ -338,12 +338,20 @@ class DashboardData:
 				"results": list( rows ) }
 
 
-class MethodImagesState:
-	"""In-memory holder for the /method-images report's curation -- the FIGURES
-	the user picked ( selected ) and the PAPERS they skipped -- persisted via
-	src/db/method_images_state.py so it follows the user across browsers and
-	survives a report rebuild ( the page used to keep this in localStorage , which
-	broke on a browser switch ).
+class FigureSelectionState:
+	"""In-memory holder for ONE figure report's curation -- the FIGURES the user
+	picked ( selected ) and the PAPERS they skipped -- persisted via
+	src/db/figure_state.py so it follows the user across browsers and survives a
+	report rebuild ( the page used to keep this in localStorage , which broke on a
+	browser switch ).
+
+	There is one instance PER REPORT , each bound to its own collection :
+	  "method-images"  /method-images  ( the keyword-matched design figures )
+	  "images"         /images         ( every cropped figure )
+	They are entirely independent -- picking a figure on one does not pick it on
+	the other. /images does READ the method-images collection to badge figures
+	already curated over there , but that read goes through the same
+	/api/method-images/state route and never writes.
 
 	Mirrors DashboardData's skip handling : loaded once at startup , mutated one
 	id at a time from the page ( so two browsers editing at once don't clobber
@@ -354,22 +362,23 @@ class MethodImagesState:
 	"Last pick" relies on , and re-picking a figure moves its id to the END , same
 	as the page's own toggle. `skipped` is a set ; order is irrelevant."""
 
-	def __init__( self , args ):
-		self.args     = args
-		self._lock    = threading.Lock()
-		self.selected = []       # ordered : insertion order IS pick order
-		self.skipped  = set()
+	def __init__( self , args , collection ):
+		self.args       = args
+		self.collection = collection
+		self._lock      = threading.Lock()
+		self.selected   = []       # ordered : insertion order IS pick order
+		self.skipped    = set()
 
 	def load( self ):
 		"""Populate from disk ( call at startup ). Never raises."""
-		from ..db import method_images_state as mistate
+		from ..db import figure_state
 		try:
-			sel , skip = mistate.load( self.args )
+			sel , skip = figure_state.load( self.args , self.collection )
 			with self._lock:
 				self.selected = list( sel )
 				self.skipped  = set( skip )
 		except Exception as e:
-			print( f"method-images :: could not load curation state ( {e} )" )
+			print( f"{self.collection} :: could not load curation state ( {e} )" )
 
 	def snapshot( self ):
 		with self._lock:
@@ -377,11 +386,11 @@ class MethodImagesState:
 			         "skipped":  sorted( self.skipped ) }
 
 	def _persist_locked( self ):
-		from ..db import method_images_state as mistate
+		from ..db import figure_state
 		try:
-			mistate.save( self.args , self.selected , self.skipped )
+			figure_state.save( self.args , self.selected , self.skipped , self.collection )
 		except Exception as e:
-			print( f"method-images :: could not persist curation state ( {e} )" )
+			print( f"{self.collection} :: could not persist curation state ( {e} )" )
 
 	def set_selected( self , fid , on ):
 		"""Add ( on=True ) or remove a figure id. Re-adding moves it to the END so
@@ -406,6 +415,28 @@ class MethodImagesState:
 			else:  s.discard( key )
 			self.skipped = s
 			self._persist_locked()
+
+
+# The two figure reports , by mode name ( == figure_state collection == the
+# /api/<mode>/… prefix the page fetches ). Both modules expose the same three
+# entry points -- report_path / report_is_stale / rebuild -- which is all the
+# server ever needs from them , so every route below is written once against
+# the pair rather than twice against each.
+FIGURE_REPORTS = ( "method-images" , "images" )
+
+
+def _report_module( mode ):
+	from ..tasks import all_images , method_images
+	return all_images if mode == "images" else method_images
+
+
+def _figure_mode( path , suffix ):
+	"""'/api/images/state' -> 'images' , for the routes shared by both reports.
+	Returns None when `path` isn't one of them."""
+	for mode in FIGURE_REPORTS:
+		if path == f"/api/{mode}/{suffix}":
+			return mode
+	return None
 
 
 def _load_dashboard_html():
@@ -1198,7 +1229,10 @@ class Handler( BaseHTTPRequestHandler ):
 	cache:  SnapshotCache = None   # injected at startup
 	dash:   DashboardData = None   # injected at startup
 	worker: "ProcessWorker" = None # injected at startup IFF --watch ; else None
-	mistate: "MethodImagesState" = None  # injected at startup ( /method-images curation )
+	# One per figure report , injected at startup. Keyed by the report's mode name ,
+	# which is also its figure_state collection and its /api/<mode>/… prefix , so a
+	# route only has to pull the name out of the path.
+	figstate: Dict[ str , "FigureSelectionState" ] = {}
 
 	def log_message( self , *_ ):
 		return
@@ -1250,33 +1284,40 @@ class Handler( BaseHTTPRequestHandler ):
 		self.end_headers()
 		self.wfile.write( data )
 
-	def _send_method_images( self ):
-		"""Serve the report ` prma method-images ` writes -- the SAME file on disk ,
-		not a second renderer , so the CLI and the server can never drift. The
-		--watch worker rebuilds it after each batch of new papers ( see
-		process.refresh_reports ) , so it stays current on its own.
+	def _send_figure_report( self , mode ):
+		"""Serve one of the two figure reports -- the SAME file on disk its command
+		writes , not a second renderer , so the CLI and the server can never drift :
+
+		  "method-images"  ` prma method-images ` -> /method-images
+		  "images"         ` prma all-images `    -> /images
+
+		The --watch worker rebuilds both after each batch of new papers ( see
+		process.refresh_reports ) , so they stay current on their own.
 
 		Built lazily on first open when it isn't there yet ( the pattern the
-		dashboard uses for its index ) : the server is threaded , so the ~15s
-		sweep doesn't block other requests. When there's nothing to build from
-		we explain why rather than 404 -- the usual cause is an empty keyword
-		list or a library the PDF suite hasn't reached."""
-		from ..tasks import method_images as mi
+		dashboard uses for its index ) : the server is threaded , so the sweep
+		doesn't block other requests. When there's nothing to build from we
+		explain why rather than 404 -- the usual cause is a library the PDF suite
+		hasn't reached ( plus , for method-images , an empty keyword list )."""
+		mod  = _report_module( mode )
 		args = self.dash.args
-		path = mi.report_path( args )
+		path = mod.report_path( args )
 		if not path.exists():
-			print( "server    :: no method-images report yet ; building it now ( first open )" )
-			mi.rebuild( args )
+			print( f"server    :: no {mode} report yet ; building it now ( first open )" )
+			mod.rebuild( args )
 		try:
 			page = path.read_text( encoding="utf-8" )
 		except Exception as e:
+			cmd  = "prma all-images" if mode == "images" else "prma method-images"
+			kw   = ( "" if mode == "images" else
+				" , plus search terms on the command line or in "
+				"<code>config/method-images.txt</code>" )
 			page = (
-				"<h1>No method-images report yet</h1>"
+				f"<h1>No {mode} report yet</h1>"
 				f"<p>Nothing has been written to <code>{path}</code> ( {e} ).</p>"
 				"<p>It needs the PDF suite to have run ( <code>prma process</code> , or "
-				"this server with <code>--watch</code> ) , plus search terms on the "
-				"command line or in <code>config/method-images.txt</code>. Run "
-				"<code>prma method-images</code> to see what it says.</p>"
+				f"this server with <code>--watch</code> ){kw}. Run "
+				f"<code>{cmd}</code> to see what it says.</p>"
 				'<p><a href="/">&larr; Dashboard</a></p>'
 			)
 		self._send_html( 200 , page )
@@ -1345,7 +1386,14 @@ class Handler( BaseHTTPRequestHandler ):
 			return
 
 		if path in ( "/method-images" , "/method-images.html" ):
-			self._send_method_images()
+			self._send_figure_report( "method-images" )
+			return
+
+		# The unfiltered sibling : every cropped figure. Exact match only -- the
+		# "/images/" PREFIX below is the crop directory ` prma images ` writes ,
+		# which this page's <img> tags point into.
+		if path in ( "/images" , "/images.html" ):
+			self._send_figure_report( "images" )
 			return
 
 		if path == "/api/status":
@@ -1365,12 +1413,29 @@ class Handler( BaseHTTPRequestHandler ):
 				self.dash.args , self._arg( self._qs() , "key" , "" ) ) )
 			return
 
-		if path == "/api/method-images/state":
-			# The /method-images report's curation ( selected figures + skipped
-			# papers ) , persisted server-side so it follows the user across
-			# browsers. The page fetches this on load.
-			self._send_json( 200 , self.mistate.snapshot() if self.mistate
+		mode = _figure_mode( path , "state" )
+		if mode:
+			# One figure report's curation ( selected figures + skipped papers ) ,
+			# persisted server-side so it follows the user across browsers. Each
+			# page fetches its OWN on load ; /images additionally reads the
+			# method-images one to badge what's already curated there.
+			st = self.figstate.get( mode )
+			self._send_json( 200 , st.snapshot() if st
 				else { "selected": [] , "skipped": [] } )
+			return
+
+		mode = _figure_mode( path , "version" )
+		if mode:
+			# A cheap "has the report been rebuilt" token ( the report file's mtime )
+			# each figure page polls : when it moves , the --watch worker has rebuilt
+			# that report.html with newly processed papers , so the page refreshes
+			# itself ( no manual reload ). A bare stat() -- no library walk , no
+			# rebuild -- so polling it is effectively free.
+			try:
+				m = _report_module( mode ).report_path( self.dash.args ).stat().st_mtime
+			except Exception:
+				m = 0.0
+			self._send_json( 200 , { "version": f"{m:.3f}" } )
 			return
 
 		if path.startswith( "/images/" ):
@@ -1378,9 +1443,9 @@ class Handler( BaseHTTPRequestHandler ):
 				path[ len( "/images/" ): ] )
 			return
 
-		# The /method-images report links its papers' rendered text with the same
-		# relative paths it uses off disk ( ../md/… , ../methods/… ) , which land
-		# here once it's served from /method-images .
+		# The figure reports link their papers' rendered text with the same
+		# relative paths they use off disk ( ../md/… , ../methods/… ) , which land
+		# here once they're served from /method-images and /images .
 		if path.startswith( "/md/" ):
 			self._send_static( self.dash.args.output.joinpath( "md" ) ,
 				path[ len( "/md/" ): ] )
@@ -1452,14 +1517,20 @@ class Handler( BaseHTTPRequestHandler ):
 		self._send_json( 404 , { "error": "not found" } )
 
 	def do_POST( self ):
-		if self.path == "/api/method-images/state":
-			# Toggle one figure's selected state or one paper's skipped state on the
-			# /method-images report , persisted server-side. Body :
+		mode = _figure_mode( self.path , "state" )
+		if mode:
+			# Toggle one figure's selected state or one paper's skipped state on ONE
+			# figure report , persisted server-side. Body :
 			#   { "kind": "selected"|"skipped" , "id": "<id>" , "on": bool }
 			# One id per request ( like /api/skip ) so concurrent browsers don't
 			# clobber each other's whole set. Returns the full state back so the
-			# page can reconcile ( e.g. pick order ) if it wants to.
+			# page can reconcile ( e.g. pick order ) if it wants to. The two reports'
+			# collections are separate stores : a write here never touches the other.
 			try:
+				st = self.figstate.get( mode )
+				if st is None:
+					self._send_json( 503 , { "ok": False , "error": "state not loaded" } )
+					return
 				length = int( self.headers.get( "Content-Length" , "0" ) )
 				body   = self.rfile.read( length ) if length > 0 else b"{}"
 				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
@@ -1471,10 +1542,10 @@ class Handler( BaseHTTPRequestHandler ):
 				ident = data.get( "id" ) or ""
 				on    = bool( data.get( "on" , True ) )
 				if kind == "selected":
-					self.mistate.set_selected( ident , on )
+					st.set_selected( ident , on )
 				else:
-					self.mistate.set_skipped( ident , on )
-				self._send_json( 200 , { "ok": True , **self.mistate.snapshot() } )
+					st.set_skipped( ident , on )
+				self._send_json( 200 , { "ok": True , **st.snapshot() } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
@@ -1580,29 +1651,37 @@ def run( args ):
 	dash.load_skips()                # restore the user's hidden ( skipped ) rows
 	Handler.dash = dash
 
-	# /method-images curation ( selected figures + skipped papers ) : restore the
-	# user's picks so the report serves them to whatever browser opens it.
-	mistate = MethodImagesState( args )
-	mistate.load()
-	Handler.mistate = mistate
+	# Figure-report curation ( selected figures + skipped papers ) , one store per
+	# report : restore the user's picks so each report serves them to whatever
+	# browser opens it.
+	Handler.figstate = {}
+	for _mode in FIGURE_REPORTS:
+		_st = FigureSelectionState( args , _mode )
+		_st.load()
+		Handler.figstate[ _mode ] = _st
 
-	# The /method-images report is a pre-built artifact served verbatim. If the
-	# PAGE template or the keyword list changed since it was last built ( e.g. you
-	# edited the page and restarted the server ) , rebuild it now -- in the
-	# background , so startup isn't blocked on the whole-library sweep. Without
-	# this , an already-processed library never rebuilds the report ( the --watch
-	# data path only fires when NEW papers land ) , so edits to the page would
-	# never show. mtime-gated , so there's no cost when nothing changed.
+	# Both figure reports are pre-built artifacts served verbatim. If the PAGE
+	# template , a report's own renderer , or ( for method-images ) the keyword list
+	# changed since one was last built -- e.g. you edited the page and restarted the
+	# server -- rebuild it now , in the background so startup isn't blocked on the
+	# whole-library sweep. Without this , an already-processed library never rebuilds
+	# ( the --watch data path only fires when NEW papers land ) , so edits to the page
+	# would never show. mtime-gated , so there's no cost when nothing changed.
+	#
+	# ONE thread for both , sequentially : each is a full-library pass and both stamp
+	# paper[ 'modalities' ] on any straggler they meet , so running them concurrently
+	# would just contend for the same CPU and the same records.
 	try:
-		from ..tasks import method_images as _mi
-		if _mi.report_is_stale( args ):
-			def _rebuild_report():
-				print( "method-images :: report inputs changed ( page / keywords ) ; rebuilding in background" )
-				_mi.rebuild( args )
-				print( "method-images :: report rebuilt" )
-			threading.Thread( target=_rebuild_report , daemon=True ).start()
+		stale = [ m for m in FIGURE_REPORTS if _report_module( m ).report_is_stale( args ) ]
+		if stale:
+			def _rebuild_reports():
+				for m in stale:
+					print( f"{m} :: report inputs changed ( page / renderer / keywords ) ; rebuilding in background" )
+					_report_module( m ).rebuild( args )
+					print( f"{m} :: report rebuilt" )
+			threading.Thread( target=_rebuild_reports , daemon=True ).start()
 	except Exception as e:
-		print( f"method-images :: staleness check skipped ( {e} )" )
+		print( f"figure reports :: staleness check skipped ( {e} )" )
 
 	# Opt-in live terminal UI ( --tui ). A separate read-only thread that renders
 	# task progress bars + the queue by polling worker state. Requires --watch
@@ -1644,6 +1723,8 @@ def run( args ):
 		f"dashboard      {base}/          ({dash_state})" ,
 		f"errors         {base}/errors   (pipeline problems log)" ,
 		f"status         {base}/status   (pipeline completeness ; run ` prma status `)" ,
+		f"design figures {base}/method-images  (caption-matched ; run ` prma method-images `)" ,
+		f"all figures    {base}/images   (every crop , unfiltered ; run ` prma all-images `)" ,
 	]
 	if getattr( args , "watch" , False ):
 		sm = " +summarize" if getattr( args , "watch_summarize" , False ) else ""

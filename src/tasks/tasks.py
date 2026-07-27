@@ -119,6 +119,13 @@ def method_images( args ):
 	from . import method_images
 	method_images.run( args )
 
+def all_images( args ):
+	# The same report with the keyword filter taken off -- every cropped figure.
+	# No snapshot , same reason as method-images : a pure pass over what the
+	# suite already wrote.
+	from . import all_images
+	all_images.run( args )
+
 def modalities( args ):
 	# No snapshot : like method-images , a pure pass over what the suite
 	# already produced ( OpenAlex cache , methods .txt , md ) -- it just
