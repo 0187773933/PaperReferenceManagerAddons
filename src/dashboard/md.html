@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · md</title>
+<!-- Apply the saved theme BEFORE first paint so there's no flash. Same key the
+     dashboard writes ( "prma-theme" ) , so a tab opened from it matches. -->
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<style>
+  /* Palette copied from dashboard.html so the reader tab looks like the page it
+     was opened from -- light by default , dark opt-in via [data-theme="dark"]. */
+  :root {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --chip:#eceff3;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --chip:#262c37;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header {
+    position:sticky; top:0; z-index:5; background:var(--panel);
+    border-bottom:1px solid var(--line); padding:12px 18px;
+  }
+  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .grow { flex:1; }
+  button {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
+  }
+  button:hover { border-color:var(--accent); }
+  .navlink {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
+    white-space:nowrap;
+  }
+  .navlink:hover { border-color:var(--accent); }
+  .hidden { display:none !important; }
+  /* Section jump chips. A ` prma md ` render runs long ( every section , plus the
+     OCR body ) , so the headers double as the table of contents. */
+  .toc { display:flex; gap:6px; flex-wrap:wrap; margin-top:11px; }
+  .toc a {
+    background:var(--chip); color:var(--muted); text-decoration:none;
+    border-radius:10px; padding:2px 9px; font-size:12px;
+  }
+  .toc a:hover { color:var(--accent); }
+  main { padding:18px; max-width:900px; margin:0 auto; }
+  .sec { margin:0 0 26px; scroll-margin-top:96px; }
+  .sec h2 {
+    font-size:15px; margin:0 0 10px; padding-bottom:6px;
+    border-bottom:1px solid var(--line); font-weight:600;
+  }
+  .body p { margin:0 0 11px; }
+  .body h4 { margin:16px 0 6px; font-size:14px; }
+  .body ul { margin:0 0 11px; padding-left:20px; }
+  .body a { color:var(--accent); }
+  /* Figures the md render links out of output/images/ ( served at /images/ ). */
+  .body img {
+    max-width:100%; height:auto; display:block; margin:10px 0;
+    border:1px solid var(--line); border-radius:6px; background:var(--panel2);
+  }
+  .empty { color:var(--muted); padding:48px; text-align:center; }
+  code { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1 id="title">…</h1>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the paper list">← Dashboard</a>
+    <a class="navlink hidden" id="doilink" target="_blank" rel="noopener" title="Resolve this DOI">DOI</a>
+    <a class="navlink hidden" id="proxylink" target="_blank" rel="noopener" title="Resolve this DOI through your library's proxy">Proxy</a>
+    <a class="navlink" id="rawlink" href="?raw=1" title="Download the Markdown source">.md</a>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+  <div class="toc" id="toc"></div>
+</header>
+<main id="main"><div class="empty">Loading…</div></main>
+<script>
+// Route DOI links through your library's proxy. Same PROXY constant ( same
+// value ) the sibling pages use -- dashboard.html / status.html / errors.html /
+// method_images.html -- so a fork for another library greps one name.
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+const $ = s => document.querySelector(s);
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+// Which paper : everything after /md/ . The dashboard's MD button sends the
+// paper's key ( its DOI ) ; the figure reports' relative ../md/<file>.md links
+// land here too, and the server resolves either form to the same document.
+const IDENT = decodeURIComponent(location.pathname.replace(/^\/md\/?/, ""));
+
+function render(d){
+  if(!d || !d.available){
+    $("#title").textContent = IDENT || "md";
+    $("#main").innerHTML =
+      `<div class="empty">No rendered Markdown for <b>${esc(IDENT)}</b> — run <code>prma md</code>.</div>`;
+    return;
+  }
+  const title = d.title || IDENT;
+  $("#title").textContent = title;
+  document.title = title + " · prma md";
+  if(d.doi){
+    const q = encodeURIComponent(d.doi).replace(/%2F/gi, "/");
+    const doi = $("#doilink"), px = $("#proxylink");
+    doi.href = "https://doi.org/" + q;  doi.classList.remove("hidden");
+    if(PROXY){ px.href = PROXY + q;     px.classList.remove("hidden"); }
+  }
+  const secs = d.sections || [];
+  // Section HTML comes from the server's md renderer ( the same payload the
+  // dashboard's inline "Read" accordion draws ) , images already pointed at
+  // /images/ , so it goes in as markup.
+  $("#main").innerHTML = secs.length
+    ? secs.map((s,i)=>
+        `<section class="sec" id="sec-${i}"><h2>${esc(s.title)}</h2>`+
+        `<div class="body">${s.html||""}</div></section>`).join("")
+    : `<div class="empty">This paper's Markdown render is empty.</div>`;
+  $("#toc").innerHTML = secs.map((s,i)=>
+    `<a href="#sec-${i}">${esc(s.title)}</a>`).join("");
+}
+
+(async ()=>{
+  let d = null;
+  try { d = await (await fetch(`/api/paper?key=${encodeURIComponent(IDENT)}`)).json(); }
+  catch(e){ d = null; }
+  render(d);
+})();
+
+// ---- Theme toggle ( shared with the dashboard via localStorage ) ------------
+const curTheme = () => document.documentElement.dataset.theme || "light";
+function labelTheme(){ $("#toggleTheme").textContent = curTheme()==="dark" ? "☀ Light" : "🌙 Dark"; }
+$("#toggleTheme").addEventListener("click", ()=>{
+  const next = curTheme()==="dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("prma-theme", next); } catch(e){}
+  labelTheme();
+});
+labelTheme();
+</script>
+</body>
+</html>

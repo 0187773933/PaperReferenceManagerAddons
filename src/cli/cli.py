@@ -1,7 +1,19 @@
 import os
+import sys
 import argparse
 from pathlib import Path
 import src.tasks.tasks as tasks
+
+# Minimal mode. Registered TWICE -- on the ` server ` subparser and on the
+# top-level parser -- so both ` prma server --exists ` and a bare
+# ` prma --exists ` work ; the text lives here so the two can't drift.
+EXISTS_HELP = (
+	"Minimal mode : serve ONLY what the browser userscripts need "
+	"( POST /exists + GET /api/version ) and nothing else. No dashboard index , "
+	"no figure reports , and -- the point -- no background per-paper processing "
+	"when you add papers to your library ( implies --watch off ; overrides it if "
+	"passed ). For when you want the userscript's ' do I already have this ' "
+	"coloring without running the whole pipeline." )
 
 def global_parser():
 	g = argparse.ArgumentParser( add_help=False )
@@ -475,7 +487,7 @@ def server( sub , global_parser ):
 	p = sub.add_parser(
 		"server" ,
 		parents=[ global_parser ] ,
-		help="Run the local HTTP server : the 'exists' endpoint for browser userscripts ( POST /exists ) AND the full-text-search dashboard ( GET / ). The dashboard serves the index that ` prma reindex ` persists to disk -- it loads instantly and auto-reloads when you re-run reindex. If no index exists yet , it builds one lazily on first open."
+		help="Run the local HTTP server : the 'exists' endpoint for browser userscripts ( POST /exists ) AND the full-text-search dashboard ( GET / ). The dashboard serves the index that ` prma reindex ` persists to disk -- it loads instantly and auto-reloads when you re-run reindex. If no index exists yet , it builds one lazily on first open. Pass --exists for the minimal userscript-only server ( no dashboard , no background processing )."
 	)
 	p.add_argument( "--host"     , default=os.environ.get( "SERVER_HOST" , "127.0.0.1" ) ,
 		help="Bind host ( env SERVER_HOST )" )
@@ -485,6 +497,9 @@ def server( sub , global_parser ):
 		help="Min seconds between source stat() checks" )
 	p.add_argument( "--ttl"      , type=float , default=60.0 ,
 		help="TTL for managers without an mtime watch ( Mendeley API )" )
+	p.add_argument( "--exists" , dest="exists_only" ,
+		action="store_true" , default=False ,
+		help=EXISTS_HELP )
 	p.add_argument( "--watch" , dest="watch" , action="store_true" , default=False ,
 		help="Live processing : a background worker detects papers you add to "
 		     "your manager , runs the full per-paper suite on each "
@@ -512,6 +527,7 @@ def server( sub , global_parser ):
 		"port":            9371        ,
 		"debounce":        0.5         ,
 		"ttl":             60.0        ,
+		"exists_only":     False       ,
 		"watch":           False       ,
 		"watch_summarize": False       ,
 		"watch_backlog":   True        ,
@@ -554,6 +570,15 @@ def cli():
 		description="Paper Reference Manager Addons" ,
 	)
 
+	# Minimal mode is the one server flag worth having WITHOUT the subcommand ,
+	# since it's the whole point of the invocation : ` prma --exists ` is how
+	# someone who doesn't want the pipeline starts the userscript endpoint. The
+	# ` server ` subparser carries the same flag ( see server() above ) , so
+	# ` prma server --exists ` works too.
+	parser.add_argument( "--exists" , dest="exists_only" ,
+		action="store_true" , default=False ,
+		help=EXISTS_HELP )
+
 	sub = parser.add_subparsers( dest="command" , metavar="<command>" )
 
 	top_defaults = {}
@@ -563,6 +588,13 @@ def cli():
 
 	args = parser.parse_args()
 
+	# argparse gives the SUBparser the last word on a flag both parsers define ,
+	# so ` prma --exists server ` would otherwise have its True stomped back to
+	# False by the server subparser's own default -- silently handing back the
+	# full server. It's a bare switch , so honor it wherever it appeared.
+	if "--exists" in sys.argv[ 1: ]:
+		args.exists_only = True
+
 	# Bare ` prma ` ( no subcommand ) is an alias for ` prma server --watch ` :
 	# it launches the exists endpoint + dashboard + the live auto-processing
 	# worker. ( The old base pipeline -- snapshot + full OpenAlex backfill --
@@ -571,7 +603,9 @@ def cli():
 	# already on the namespace via the server registrar's top-level defaults ;
 	# we just flip watch on.
 	if getattr( args , "_entry" , None ) is None:
-		args.watch  = True
+		# ` prma --exists ` is the opposite ask : the minimal userscript server
+		# with no background processing , so leave watch off for it.
+		args.watch  = not getattr( args , "exists_only" , False )
 		# args.tui = True
 		args._entry = tasks.server
 

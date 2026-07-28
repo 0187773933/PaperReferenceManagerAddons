@@ -323,15 +323,44 @@ footer { padding: 0 32px 40px; color: var(--muted); font-size: 12px; max-width: 
    the file:// PDF hrefs work as written ; served by ` prma server ` at
    /method-images they resolve to its /images/ , /md/ and /methods/ routes --
    except file:// , which a browser won't follow from an http page. So rewrite
-   just those to the server's own /pdf?key=... , keyed off the paper section. */
+   just those to the server's own /pdf?key=... , keyed off the paper section.
+
+   The Markdown link gets the same treatment for a different reason : off disk it
+   can only hand over the .md FILE , but the server can RENDER it -- figures and
+   all -- at /md/<doi> , which is a far better read than a download. Keyed off
+   the paper's DOI , falling back to the md file's own name for a paper without
+   one ( the server resolves either spelling ). */
 const SERVED = location.protocol !== "file:";
 if ( SERVED ) {
 	document.querySelectorAll( ".paper" ).forEach( p => {
 		const a = p.querySelector( "a.pdf-link" );
 		if ( a && p.dataset.key ) a.href = "/pdf?key=" + encodeURIComponent( p.dataset.key );
+		const m = p.querySelector( "a.md-link" );
+		if ( m ) {
+			const id = p.dataset.doi ||
+				( p.dataset.md || "" ).split( /[\\/]/ ).pop().replace( /\.md$/i , "" );
+			if ( id ) m.href = "/md/" + encodeURIComponent( id ).replace( /%2F/gi , "/" );
+		}
 	} );
 	document.getElementById( "nav" ).classList.remove( "hidden" );
 }
+
+/* Open the rendered Markdown WITHOUT stealing focus , so a pass down the report
+   can queue several up. A browser won't let a page open a truly backgrounded
+   tab , so this does the closest thing it allows : open it , then hand focus
+   straight back here. Modifier / middle clicks are left alone -- the browser
+   already backgrounds those. Delegated , so it covers every paper section. */
+document.addEventListener( "click" , e => {
+	const a = e.target.closest( "a.md-link" );
+	if ( !a ) return;
+	if ( e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 ) return;
+	e.preventDefault();
+	// No "noopener" feature : it makes window.open return null , and the handle
+	// is exactly what we need to blur.
+	const w = window.open( a.href , "_blank" );
+	if ( w ) { try { w.blur(); } catch ( err ) {} }
+	window.focus();
+} );
 
 /* ---- which report is this? ------------------------------------------------
    Filled by whichever task rendered the document ( see the head comment ) :

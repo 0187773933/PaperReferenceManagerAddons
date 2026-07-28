@@ -596,7 +596,13 @@ def render_paper_sections( matched , out_dir ):
 				f'target="_blank">PDF</a>'
 			)
 		if p[ "md" ]:
-			links.append( f'<a href="{_href( p[ "md" ] , out_dir )}" target="_blank">Markdown</a>' )
+			# The relative path is the OFF-DISK fallback ( it opens the .md file ).
+			# Served by ` prma server ` , the page's JS swaps this for the rendered
+			# reader at /md/<doi> -- a LINK decision , so it lives in
+			# method_images.html with the PDF / proxy rewrites , not here.
+			links.append(
+				f'<a class="md-link" href="{_href( p[ "md" ] , out_dir )}" '
+				f'target="_blank">Markdown</a>' )
 		if p[ "methods" ]:
 			links.append( f'<a href="{_href( p[ "methods" ] , out_dir )}" target="_blank">Methods</a>' )
 		if p[ "montage" ]:

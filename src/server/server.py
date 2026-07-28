@@ -13,6 +13,11 @@ Both end up calling run( args ). The args namespace must have:
     manager , zotero , mendeley , output , config ,
     mendeley_source , mendeley_sqlite , zotero_sqlite ,
     host , port , debounce , ttl
+
+Beyond that endpoint the same server hosts the dashboard , the figure reports and
+( with --watch ) the live per-paper worker. Set exists_only=True ( ` prma --exists ` )
+for MINIMAL mode : the userscript surface only -- POST /exists , GET /api/version
+and POST /refresh -- with none of the rest built or started.
 """
 
 import os
@@ -29,7 +34,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler , HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from urllib.parse import urlparse , parse_qs , unquote
+from urllib.parse import urlparse , parse_qs , quote , unquote
 from typing import Dict , List , Optional , Set , Tuple
 
 from rapidfuzz import fuzz , process
@@ -53,6 +58,13 @@ ERRORS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 # its data comes from GET /api/status .
 STATUS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "status.html" )
+
+# Companion page that RENDERS one paper's ` prma md ` document -- headings ,
+# figures and all -- in the browser. Served at GET /md/<doi> ; its sections come
+# from GET /api/paper?key=<doi> , the same payload the dashboard's inline "Read"
+# accordion draws. ?raw=1 still hands back the Markdown file itself.
+MD_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "md.html" )
 
 
 class _RequestLog:
@@ -466,6 +478,14 @@ def _load_status_html():
 		return f"<h1>status.html not found</h1><pre>{e}</pre>"
 
 
+def _load_md_html():
+	"""Read the Markdown reader page fresh on each request. Falls back to a stub."""
+	try:
+		return MD_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>md.html not found</h1><pre>{e}</pre>"
+
+
 # Serializes status recomputes so a flurry of /status loads can't kick off
 # several full library walks at once ; they share the one in-flight result.
 _STATUS_LOCK = threading.Lock()
@@ -509,9 +529,26 @@ def _md_to_html( md ):
 	return "\n".join( out )
 
 
+def _md_slug( ident ):
+	"""Filename stem of a paper's ` prma md ` render : its DOI with the path
+	separators folded to '_' ( what utils.doi_to_filename writes ) , tolerating an
+	identifier that already carries the '.md' suffix -- so the DOI form the
+	dashboard's MD button uses ( /md/10.1038/foo ) and the file form the figure
+	reports link ( ../md/10.1038_foo.md ) both land on the same document.
+	Returns None for anything that could climb out of output/md/ ."""
+	s = ( ident or "" ).strip().strip( "/" )
+	if s.lower().endswith( ".md" ):
+		s = s[ :-3 ]
+	s = s.replace( "\\" , "_" ).replace( "/" , "_" )
+	if not s or s.startswith( "." ) or "\x00" in s:
+		return None
+	return s
+
+
 def _paper_md_payload( args , key ):
-	"""Split a library paper's ` prma md ` render into per-section HTML for the
-	'Read' accordion. Relative image links ( ../images/... ) are rewritten to
+	"""Split a library paper's ` prma md ` render into per-section HTML -- drawn
+	both by the dashboard's inline 'Read' accordion and by the standalone reader
+	page at /md/<doi> . Relative image links ( ../images/... ) are rewritten to
 	the server's /images/ route so figures resolve. Sections split on the
 	'## ' headers the md renderer emits ; the '# Title' line becomes the page
 	title , anything before the first '## ' becomes an 'Overview' section."""
@@ -519,7 +556,13 @@ def _paper_md_payload( args , key ):
 	paper  = papers_db.load( args , key )
 	rk     = papers_db.record_key( paper ) if paper else key
 	prefix = utils.doi_to_filename( rk ) if rk else None
-	md_path = args.output.joinpath( "md" , f"{prefix}.md" ) if prefix else None
+	md_dir  = args.output.joinpath( "md" )
+	md_path = md_dir.joinpath( f"{prefix}.md" ) if prefix else None
+	if not ( md_path and md_path.exists() ):
+		# Not a known record key -> read the identifier as the md file's own name
+		# ( what the figure reports link ) rather than as a paper key.
+		slug    = _md_slug( key )
+		md_path = md_dir.joinpath( f"{slug}.md" ) if slug else None
 	if not ( md_path and md_path.exists() ):
 		return { "available": False }
 	try:
@@ -535,8 +578,12 @@ def _paper_md_payload( args , key ):
 			if cur is not None or any( s.strip() for s in buf ):
 				raw.append( ( cur , buf ) )
 			cur , buf = line[ 3: ].strip() , []
-		elif line.startswith( "# " ) and cur is None and not title:
-			title = line[ 2: ].strip()
+		elif line.startswith( "# " ) and cur is None:
+			# The document's own '# Title' line is the HEADING , not body text , so
+			# it's always consumed here -- otherwise it prints again inside
+			# 'Overview' , under the title the reader page already shows. The
+			# record's title wins when we have one ; this is the fallback.
+			title = title or line[ 2: ].strip()
 		else:
 			buf.append( line )
 	if cur is not None or any( s.strip() for s in buf ):
@@ -546,7 +593,11 @@ def _paper_md_payload( args , key ):
 		{ "title": ( t or "Overview" ) , "html": _md_to_html( "\n".join( b ) ) }
 		for t , b in raw
 	]
-	return { "available": True , "key": key , "title": title , "sections": sections }
+	return { "available": True , "key": key , "title": title ,
+		# The reader page's DOI / Proxy buttons. Empty when the identifier didn't
+		# resolve to a record ( a bare filename ) -- the page just omits them.
+		"doi": utils.normalize_doi( ( paper or {} ).get( "doi" ) ) or "" ,
+		"sections": sections }
 
 
 def _status_payload( args , regen=False ):
@@ -1227,8 +1278,12 @@ class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
 
 class Handler( BaseHTTPRequestHandler ):
 	cache:  SnapshotCache = None   # injected at startup
-	dash:   DashboardData = None   # injected at startup
+	dash:   DashboardData = None   # injected at startup ; None in minimal mode
 	worker: "ProcessWorker" = None # injected at startup IFF --watch ; else None
+	# Minimal mode ( ` prma --exists ` ) : only the userscript surface is up , so
+	# every other route is refused with an explanation instead of dereferencing
+	# a dash / figstate that was deliberately never built.
+	minimal: bool = False
 	# One per figure report , injected at startup. Keyed by the report's mode name ,
 	# which is also its figure_state collection and its /api/<mode>/… prefix , so a
 	# route only has to pull the name out of the path.
@@ -1258,6 +1313,24 @@ class Handler( BaseHTTPRequestHandler ):
 		self.send_header( "Cache-Control"  , "no-store" )
 		self.end_headers()
 		self.wfile.write( raw )
+
+	def _send_minimal_notice( self ):
+		"""The answer to every route that ISN'T part of the userscript surface when
+		the server was started with --exists. Minimal mode never builds the
+		dashboard index , the figure reports or the live worker , so there's nothing
+		behind those routes -- say so plainly rather than 404 ( which reads like a
+		bug ) or blow up on a None. HTML for a browser , JSON for a fetch."""
+		msg  = ( "minimal mode ( --exists ) : only POST /exists and GET /api/version "
+			"are served -- the dashboard , figure reports and background processing "
+			"are not running" )
+		hint = "restart without --exists ( ` prma server ` , or ` prma ` for the live one )"
+		if "text/html" in ( self.headers.get( "Accept" ) or "" ):
+			self._send_html( 503 ,
+				"<h1>prma &mdash; minimal mode</h1>"
+				f"<p>{html.escape( msg )}.</p>"
+				f"<p>{html.escape( hint )}.</p>" )
+		else:
+			self._send_json( 503 , { "error": msg , "hint": hint } )
 
 	def _send_static( self , base , rel ):
 		"""Serve a file under `base` ( e.g. output/images/ ) by relative path ,
@@ -1369,6 +1442,29 @@ class Handler( BaseHTTPRequestHandler ):
 	def do_GET( self ):
 		path = urlparse( self.path ).path
 
+		if path == "/api/version":
+			# A cheap "did the reference library change" token for the DOI-button
+			# userscript : it polls this and , when the token moves , re-queries
+			# /exists and recolors the page in place ( a paper you just saved
+			# flips green without a reload ). cache.get() refreshes only when the
+			# Zotero source actually changed , so this is a bare stat() otherwise
+			# -- independent of --watch. The token folds the last-refresh time and
+			# the title / DOI counts so it bumps on any add / remove.
+			#
+			# Handled FIRST because it's the one GET the userscripts need , so it
+			# has to sit above the minimal-mode guard below ( it only reads the
+			# SnapshotCache , which minimal mode does build ).
+			titles , dois = self.cache.get()
+			n_t , n_d = len( titles or () ) , len( dois or () )
+			ver = f"{getattr( self.cache , '_last_refresh' , 0.0 ):.3f}:{n_t}:{n_d}"
+			self._send_json( 200 , { "version": ver , "titles": n_t , "dois": n_d } )
+			return
+
+		if self.minimal:
+			# ` prma --exists ` : nothing past the userscript surface exists.
+			self._send_minimal_notice()
+			return
+
 		if path in ( "/" , "/index.html" , "/dashboard" ):
 			self._send_html( 200 , _load_dashboard_html() )
 			return
@@ -1443,14 +1539,23 @@ class Handler( BaseHTTPRequestHandler ):
 				path[ len( "/images/" ): ] )
 			return
 
-		# The figure reports link their papers' rendered text with the same
-		# relative paths they use off disk ( ../md/… , ../methods/… ) , which land
-		# here once they're served from /method-images and /images .
+		# One paper's ` prma md ` document , RENDERED in the browser ( figures and
+		# all ) rather than handed over as a file to download. Reached two ways ,
+		# both resolved by _md_slug : /md/<doi> ( the dashboard's MD button ) and
+		# the figure reports' relative ../md/<file>.md links , which land here
+		# once they're served from /method-images and /images . ?raw=1 still
+		# serves the Markdown source for anything that wants the file itself.
 		if path.startswith( "/md/" ):
-			self._send_static( self.dash.args.output.joinpath( "md" ) ,
-				path[ len( "/md/" ): ] )
+			if self._arg( self._qs() , "raw" , "" ) in ( "1" , "true" , "yes" ):
+				slug = _md_slug( unquote( path[ len( "/md/" ): ] ) )
+				self._send_static( self.dash.args.output.joinpath( "md" ) ,
+					quote( f"{slug}.md" ) if slug else "" )
+				return
+			self._send_html( 200 , _load_md_html() )
 			return
 
+		# The figure reports' other extracted-text link : the plain Methods section
+		# ( ../methods/… off disk ) , served as the .txt file it is.
 		if path.startswith( "/methods/" ):
 			self._send_static( self.dash.args.output.joinpath( "methods" ) ,
 				path[ len( "/methods/" ): ] )
@@ -1464,20 +1569,6 @@ class Handler( BaseHTTPRequestHandler ):
 				self._send_json( 200 , { "enabled": False } )
 			else:
 				self._send_json( 200 , self.worker.snapshot_jobs() )
-			return
-
-		if path == "/api/version":
-			# A cheap "did the reference library change" token for the DOI-button
-			# userscript : it polls this and , when the token moves , re-queries
-			# /exists and recolors the page in place ( a paper you just saved
-			# flips green without a reload ). cache.get() refreshes only when the
-			# Zotero source actually changed , so this is a bare stat() otherwise
-			# -- independent of --watch. The token folds the last-refresh time and
-			# the title / DOI counts so it bumps on any add / remove.
-			titles , dois = self.cache.get()
-			n_t , n_d = len( titles or () ) , len( dois or () )
-			ver = f"{getattr( self.cache , '_last_refresh' , 0.0 ):.3f}:{n_t}:{n_d}"
-			self._send_json( 200 , { "version": ver , "titles": n_t , "dois": n_d } )
 			return
 
 		if path == "/api/meta":
@@ -1517,6 +1608,14 @@ class Handler( BaseHTTPRequestHandler ):
 		self._send_json( 404 , { "error": "not found" } )
 
 	def do_POST( self ):
+		# Minimal mode ( --exists ) serves exactly two POSTs , both of which work off
+		# the SnapshotCache : /exists itself , and /refresh ( force a re-read of the
+		# library , handy when a manager gives us no file to watch ). Everything
+		# else here is dashboard / figure-report state that minimal mode never built.
+		if self.minimal and urlparse( self.path ).path not in ( "/exists" , "/refresh" ):
+			self._send_minimal_notice()
+			return
+
 		mode = _figure_mode( self.path , "state" )
 		if mode:
 			# Toggle one figure's selected state or one paper's skipped state on ONE
@@ -1642,10 +1741,39 @@ def run( args ):
 	parser ; either way it needs the manager + server fields."""
 	_normalize_manager( args )
 
+	# --exists : minimal mode. Everything below the SnapshotCache -- the dashboard
+	# index , the figure reports and their curation state , the live --watch worker
+	# -- is skipped , so the only thing running is the userscript surface
+	# ( POST /exists + GET /api/version , both served straight off the cache ).
+	minimal = bool( getattr( args , "exists_only" , False ) )
+	if minimal and getattr( args , "watch" , False ):
+		# Explicit --exists --watch : minimal wins ( no background processing is
+		# the reason to ask for minimal ) , but don't do it silently.
+		print( "--exists :: minimal mode ; ignoring --watch ( no background processing )" )
+		args.watch = False
+
 	cache = SnapshotCache( args , debounce=args.debounce , ttl=args.ttl )
 	cache.get( force=True )   # fail fast
 
-	Handler.cache = cache
+	Handler.cache   = cache
+	Handler.minimal = minimal
+
+	if minimal:
+		# Nothing to inject : the dashboard-backed routes are refused up front by
+		# the minimal guards in do_GET / do_POST , so they never touch these.
+		Handler.dash     = None
+		Handler.worker   = None
+		Handler.figstate = {}
+		httpd   = ThreadingHTTPServer( ( args.host , args.port ) , Handler )
+		watched = "mtime-watched" if cache._watch_files else f"ttl={args.ttl}s"
+		base    = f"http://{args.host}:{args.port}"
+		print( f"exists server  {base}/exists   (manager={args.manager}, {watched})" )
+		print( f"version token  {base}/api/version   (userscript change poll)" )
+		print(  "minimal mode   ON       (--exists : no dashboard , no figure reports , "
+			"no background processing ; drop --exists for the full server)" )
+		httpd.serve_forever()
+		return
+
 	dash = DashboardData( args )
 	loaded = dash.load_from_disk()   # serve last ` prma reindex ` instantly if present
 	dash.load_skips()                # restore the user's hidden ( skipped ) rows

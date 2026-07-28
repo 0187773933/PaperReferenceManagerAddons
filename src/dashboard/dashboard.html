@@ -228,8 +228,18 @@ function links(r){
   // Library extras : montage grid ( prma images ) + section reader ( prma md ).
   if(r.montage) out.push(`<a href="${esc(r.montage)}" target="_blank" title="Figure montage">Figures</a>`);
   if(r.has_md)  out.push(`<a href="#" class="readlink" data-key="${esc(r.key)}">Read</a>`);
+  // Same document as "Read" , but as its OWN page ( /md/<doi> ) instead of an
+  // inline accordion -- opened in a BACKGROUND tab so a reading queue can be
+  // stacked up without leaving the list. See openBackground() below.
+  if(r.has_md)  out.push(`<a href="${mdHref(r.key)}" class="mdlink" target="_blank" rel="noopener" `+
+    `title="Open the rendered Markdown ( with figures ) in a background tab">MD</a>`);
   return out.join(" ");
 }
+
+// The reader page for a paper. The key IS the DOI for anything with one ( see
+// papers.record_key ) , so its slashes stay slashes in the path -- /md/10.1038/…
+// -- the way the server and the figure reports both spell it.
+const mdHref = k => "/md/" + encodeURIComponent(k).replace(/%2F/gi, "/");
 
 // Source-code / data links harvested by ` prma code ` ( abstract + OCR text ) ,
 // each rendered as its host label ( GitHub / OSF / Dryad / … ) linking out to
@@ -523,6 +533,26 @@ $("#view").addEventListener("click", async (e)=>{
     : `<div class="reader">${(d.sections||[]).map(secHtml).join("")}</div>`;
   tr.insertAdjacentHTML("afterend",
     `<tr class="readrow"><td colspan="${cols().length}">${body}</td></tr>`);
+});
+
+// "MD" : the same render as Read, but on its own page. Open it WITHOUT stealing
+// focus, so you can flick through a list and queue several up. A browser won't
+// let a page open a truly backgrounded tab, so this does the closest thing it
+// allows: open it, then hand focus straight back to this window. Modifier /
+// middle clicks are left alone — the browser already backgrounds those.
+function openBackground(url){
+  // No "noopener" feature here on purpose: it makes window.open return null,
+  // and the returned handle is exactly what we need to blur. Same-origin page.
+  const w = window.open(url, "_blank");
+  if(w){ try { w.blur(); } catch(e){} }
+  window.focus();
+}
+$("#view").addEventListener("click", (e)=>{
+  const a = e.target.closest(".mdlink");
+  if(!a) return;
+  if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  e.preventDefault();
+  openBackground(a.href);
 });
 
 // Skip / unskip a paper. Persist server-side, then ( default view ) drop the row
