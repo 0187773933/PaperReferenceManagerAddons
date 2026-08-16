@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma tiers</title>
+<!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<style>
+  :root {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38;
+    --chip:#eceff3; --visited:#CEA052; --warn:#c1670c; --row:#ffffff;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
+    --chip:#262c37; --visited:#CEA052; --warn:#e8a33d; --row:#141821;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header { position:sticky; top:0; z-index:20; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 16px; }
+  .titlebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .counts { color:var(--muted); font-size:12px; display:flex; gap:12px; flex-wrap:wrap; }
+  .counts b { color:var(--fg); font-weight:600; }
+  .grow { flex:1; }
+  button {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:6px 11px; cursor:pointer; font-size:13px;
+  }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  .navlink {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:6px 11px; font-size:13px; text-decoration:none;
+  }
+  .navlink:hover { border-color:var(--accent); }
+  .savestate { font-size:12px; color:var(--muted); min-width:104px; text-align:right; }
+  .savestate.dirty { color:var(--warn); }
+
+  /* ---- toolbar : search + paint chips ---- */
+  .toolbar { display:flex; gap:10px; align-items:flex-start; margin-top:9px; flex-wrap:wrap; }
+  .searchwrap { position:relative; flex:1; min-width:320px; }
+  input[type=search], input[type=text] {
+    width:100%; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:9px 12px; font-size:14px;
+  }
+  input[type=search]:focus, input[type=text]:focus { outline:none; border-color:var(--accent); }
+  select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 9px; font-size:13px; }
+  .results {
+    display:none; position:absolute; left:0; right:0; top:calc(100% + 5px); z-index:40;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    max-height:56vh; overflow:auto; box-shadow:0 12px 34px rgba(0,0,0,.30);
+  }
+  .results.show { display:block; }
+  .hit { display:flex; gap:10px; align-items:flex-start; padding:8px 11px; border-bottom:1px solid var(--line); cursor:grab; }
+  .hit:last-child { border-bottom:none; }
+  .hit.sel { background:var(--panel2); }
+  .hit .ht { font-weight:500; }
+  .hit .hm { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .hit .add { flex:none; }
+  .hit .in { flex:none; color:var(--green); font-size:12px; white-space:nowrap; padding-top:3px; }
+  .rhint { padding:7px 11px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--line); }
+
+  .paintbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
+  .pblabel { color:var(--muted); font-size:12px; }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+  .chip {
+    display:inline-flex; align-items:center; gap:4px; font-size:12px; padding:2px 8px;
+    border-radius:11px; background:var(--chip); color:var(--fg); border:1px solid transparent;
+    cursor:pointer; user-select:none; white-space:nowrap;
+  }
+  .chip:hover { border-color:var(--muted); }
+  .chip.armed { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 2px rgba(62,166,255,.18); }
+  /* With rows selected the top chips become checkboxes for them : solid = every
+     selected row has it , dashed = only some do. */
+  .chip.has  { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  .chip.some { border-color:var(--accent); border-style:dashed; color:var(--accent); }
+  .chip .x { color:var(--muted); font-size:11px; cursor:pointer; }
+  .chip .x:hover { color:var(--warn); }
+  .chip.mod { background:#1a2740; color:#7fb6ff; }
+  :root[data-theme="light"] .chip.mod { background:#e4eefc; color:#1a4d8f; }
+  .chip.ghost { background:transparent; border:1px dashed var(--line); color:var(--muted); }
+  .newtag { width:118px !important; padding:3px 8px !important; font-size:12px !important; border-radius:11px !important; }
+  body.painting .rows .row { cursor:crosshair; }
+  .paintnote { color:var(--accent); font-size:12px; }
+
+  /* ---- board ---- */
+  main { padding:12px 16px 120px; }
+  .colhead, .row { display:grid; grid-template-columns:var(--grid); align-items:stretch; }
+  .colhead {
+    position:sticky; top:var(--headh,132px); z-index:9; background:var(--bg);
+    color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    border-bottom:1px solid var(--line); padding:4px 0;
+  }
+  .colhead > div { padding:2px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .colhead .colname { cursor:pointer; }
+  .tier { margin:14px 0 0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--panel); }
+  .tierhead {
+    display:flex; align-items:center; gap:9px; padding:7px 10px;
+    background:linear-gradient(90deg, color-mix(in srgb, var(--tc) 26%, transparent), transparent 62%);
+    border-bottom:1px solid var(--line);
+  }
+  .tierhead.target { box-shadow:inset 0 0 0 2px var(--accent); }
+  .tbadge {
+    flex:none; text-align:center; font-weight:700; font-size:15px;
+    background:var(--tc); color:#10131a; border-radius:7px; padding:5px 6px;
+  }
+  .tlabel { width:72px; background:transparent; border:none; color:inherit; font:inherit; text-align:center; padding:0; }
+  .tlabel:focus { outline:1px solid rgba(0,0,0,.35); }
+  .tdesc { flex:1; min-width:120px; background:transparent; border:1px solid transparent; color:var(--fg); border-radius:6px; padding:3px 7px; font-size:13px; }
+  .tdesc:hover { border-color:var(--line); }
+  .tdesc:focus { outline:none; border-color:var(--accent); background:var(--panel2); }
+  .tcount { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .tierhead input[type=color] { width:26px; height:24px; padding:0; border:1px solid var(--line); border-radius:5px; background:none; cursor:pointer; }
+  .tbtn { padding:3px 7px; font-size:12px; line-height:1.2; }
+  .rows { min-height:34px; padding:2px 0; }
+  .rows.dropinto { background:color-mix(in srgb, var(--accent) 10%, transparent); }
+  .row { border-bottom:1px solid var(--line); background:var(--row); }
+  .row:last-child { border-bottom:none; }
+  .row:hover { background:var(--panel2); }
+  .row.dragging { opacity:.4; }
+  .row.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
+  .row.drop-after  { box-shadow:inset 0 -2px 0 var(--accent); }
+  .row.selected { background:color-mix(in srgb, var(--accent) 9%, var(--row)); }
+  .row.selected .c:first-child { box-shadow:inset 3px 0 0 var(--accent); }
+  .row.selected .c { border-top:1px solid var(--accent); border-bottom:1px solid var(--accent); }
+  .row.flash { animation:flash 1.1s ease-out; }
+  @keyframes flash { from { background:color-mix(in srgb, var(--accent) 26%, transparent); } }
+  .row.hide { display:none; }
+  .c { padding:7px 8px; min-width:0; border-right:1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+  .c:last-child { border-right:none; }
+  /* The row's rank inside its tier : type a number in to send it there, or grab
+     the grip underneath and drag it ( to anywhere, in any tier ). */
+  .numc { text-align:center; padding:7px 3px; }
+  .numin {
+    width:36px; text-align:center; background:transparent; border:1px solid transparent;
+    color:var(--fg); border-radius:6px; padding:2px 3px; font:600 13px/1.2 inherit;
+    font-variant-numeric:tabular-nums;
+  }
+  .numin:hover { border-color:var(--line); }
+  .numin:focus { outline:none; border-color:var(--accent); background:var(--panel2); }
+  .handle { cursor:grab; color:var(--muted); user-select:none; text-align:center; padding:0; font-size:11px; opacity:.6; display:block; }
+  .handle:hover { opacity:1; color:var(--accent); }
+  .handle:active { cursor:grabbing; }
+  .titlec .tt { font-weight:500; }
+  .titlec a.titlelink { color:var(--fg); text-decoration:none; }
+  .titlec a.titlelink:hover { color:var(--accent); }
+  .titlec a.titlelink:visited { color:var(--visited); }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .links { margin-top:3px; }
+  .links a { color:var(--accent); text-decoration:none; margin-right:8px; font-size:12px; white-space:nowrap; }
+  .links a:hover { text-decoration:underline; }
+  .loose { color:var(--warn); font-size:11px; }
+  .cellchips { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+  .chipin {
+    width:52px; min-width:52px; background:transparent; border:1px dashed var(--line);
+    color:var(--fg); border-radius:11px; padding:2px 7px; font-size:12px;
+  }
+  .chipin:focus { outline:none; width:118px; min-width:118px; border-style:solid; border-color:var(--accent); }
+  .notecell textarea {
+    width:100%; min-height:44px; resize:vertical; background:transparent; color:var(--fg);
+    border:1px solid transparent; border-radius:6px; padding:4px 6px; font:13px/1.4 inherit;
+  }
+  .notecell textarea:hover { border-color:var(--line); }
+  .notecell textarea:focus { outline:none; border-color:var(--accent); background:var(--panel2); min-height:110px; }
+  .rowtools { display:flex; gap:5px; align-items:flex-start; }
+  .rowtools select { padding:3px 4px; font-size:11px; max-width:74px; }
+  .xbtn { padding:2px 8px; font-size:13px; color:var(--muted); }
+  .xbtn:hover { color:#fff; background:#c0392b; border-color:#c0392b; }
+  .emptyrow { color:var(--muted); font-size:12px; padding:9px 12px; }
+
+  /* ---- autocomplete popup ---- */
+  #acpop {
+    display:none; position:absolute; z-index:80; min-width:170px; max-height:220px; overflow:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    box-shadow:0 10px 28px rgba(0,0,0,.32); padding:4px;
+  }
+  #acpop.show { display:block; }
+  .acopt { padding:5px 9px; border-radius:6px; font-size:13px; cursor:pointer; white-space:nowrap; }
+  .acopt.sel, .acopt:hover { background:var(--panel2); color:var(--accent); }
+  .acnew { color:var(--muted); font-size:11px; padding:4px 9px; }
+
+  /* ---- overlay ( import options / help ) ---- */
+  #overlay { display:none; position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.45); align-items:center; justify-content:center; }
+  #overlay.show { display:flex; }
+  .sheet { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; max-width:560px; width:calc(100% - 40px); max-height:80vh; overflow:auto; }
+  .sheet h3 { margin:0 0 10px; font-size:15px; }
+  .sheet p { color:var(--muted); font-size:13px; margin:0 0 14px; }
+  .sheet .btns { display:flex; gap:9px; justify-content:flex-end; flex-wrap:wrap; }
+  .sheet kbd { background:var(--chip); border-radius:4px; padding:1px 5px; font-size:11px; }
+  .sheet ul { margin:0 0 14px 18px; padding:0; color:var(--muted); font-size:13px; }
+  .sheet li { margin:3px 0; }
+  #toast {
+    position:fixed; right:18px; bottom:18px; z-index:90; display:none; align-items:center; gap:12px;
+    background:var(--panel); border:1px solid var(--line); border-radius:9px;
+    padding:10px 14px; font-size:13px; box-shadow:0 6px 22px rgba(0,0,0,.28);
+  }
+  #toast.show { display:flex; }
+  #toast button { padding:3px 9px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma tiers</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+    <a class="navlink" href="/sort" title="The other board: one numbered list, ordered by hand, tagged fMRI / EEG / anything">⬒ Sort</a>
+    <button id="autotag" title="Fill in modalities from the ` prma modalities ` stamp for every row that has none">⚡ Auto-tag</button>
+    <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
+    <button id="importbtn" title="Import a CSV — merge into this list or replace it">⇩ Import CSV</button>
+    <button id="exportbtn" title="Download the whole tier list as CSV">⇧ Export CSV</button>
+    <button id="helpbtn" title="How this page works">?</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+    <div class="savestate" id="savestate">loading…</div>
+  </div>
+  <div class="toolbar">
+    <div class="searchwrap">
+      <input type="search" id="q" autocomplete="off"
+        placeholder='Type any part of a title…   ( ↵ adds the highlighted hit )'>
+      <div class="results" id="results"></div>
+    </div>
+    <select id="smode" title="Titles: type any part of a title, typos and all — closest first. Full text: the dashboard's boolean search over everything.">
+      <option value="title">match titles</option>
+      <option value="text">full text</option>
+    </select>
+    <select id="pool" title="Which pool to search">
+      <option value="library">In library</option>
+      <option value="external">Missing ( all )</option>
+      <option value="references">In bibliographies</option>
+      <option value="cited_by">Newer / citing</option>
+    </select>
+    <input type="text" id="filter" style="max-width:220px" placeholder="Filter the board…" autocomplete="off">
+  </div>
+  <div class="paintbar">
+    <span class="pblabel">Paint:</span>
+    <div class="chips" id="modchips"></div>
+    <span class="pblabel">·</span>
+    <div class="chips" id="tagchips"></div>
+    <span class="paintnote" id="paintnote"></span>
+  </div>
+</header>
+<main>
+  <div class="colhead" id="colhead"></div>
+  <div id="board"></div>
+  <div style="margin-top:14px"><button id="addtier">＋ Add tier</button></div>
+</main>
+<div id="acpop"></div>
+<div id="overlay"><div class="sheet" id="sheet"></div></div>
+<div id="toast"></div>
+<script>
+// The proxy every prma page links DOIs through ( see the dashboard's copy ).
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+// The reader page for a paper : the key IS the DOI when there is one, so its
+// slashes stay slashes in the path -- /md/10.1038/… ( same as the dashboard ).
+const mdHref = k => "/md/" + encodeURIComponent(k).replace(/%2F/gi, "/");
+// Matches utils.doi_to_filename() -- how output/md and output/methods name files.
+const fileStem = k => String(k||"").replace(/[\/\\]/g, "_");
+const STAGING = "unranked";
+
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48);
+const nowISO = () => new Date().toISOString();
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let DOC   = { version:1, columns:[{id:"notes",label:"Notes"}], vocab:{tags:[]}, tiers:[] };
+let REV   = 0;              // server revision we are in sync with
+let VOCAB = [];             // modality vocabulary ( config/methods.py )
+let META  = {};             // paper key -> /api/tiers/meta entry
+let armed = null;           // { kind:"mod"|"tag", value } -- click-to-tag paint mode
+let SEL   = new Set();      // keys of the selected rows ( outlined ) -- see selectRow
+let selAnchor = null;       // where a shift-click range starts from
+let addTier = localStorage.getItem("prma-tier-target") || STAGING;
+let dirty = false, saving = false, saveTimer = null;
+
+function itemsOf(tid){ const t = DOC.tiers.find(t=>t.id===tid); return t ? t.items : null; }
+function allItems(){ return DOC.tiers.flatMap(t=>t.items.map(it=>({ it, tier:t }))); }
+function findItem(key){
+  for(const t of DOC.tiers){ const i = t.items.findIndex(x=>x.key===key); if(i>=0) return { tier:t, idx:i, it:t.items[i] }; }
+  return null;
+}
+function usedValues(kind){
+  const s = new Set();
+  allItems().forEach(({it})=> (kind==="mod"?it.mods:it.tags||[]).forEach(v=>s.add(v)));
+  return Array.from(s);
+}
+function modOptions(){ const s=new Set(VOCAB); usedValues("mod").forEach(v=>s.add(v)); return Array.from(s); }
+function tagOptions(){
+  const s = new Set((DOC.vocab.tags||[]).map(t=>t.name));
+  usedValues("tag").forEach(v=>s.add(v));
+  return Array.from(s);
+}
+
+// ---------------------------------------------------------------------------
+// Load / save
+// ---------------------------------------------------------------------------
+function markDirty(){
+  dirty = true;
+  $("#savestate").textContent = "unsaved…";
+  $("#savestate").classList.add("dirty");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 700);
+}
+async function save(){
+  clearTimeout(saveTimer);
+  if(saving){ saveTimer = setTimeout(save, 400); return; }
+  saving = true;
+  try {
+    const r = await (await fetch("/api/tiers", { method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ doc: DOC }) })).json();
+    if(r && r.ok){
+      REV = r.rev; dirty = false;
+      $("#savestate").classList.remove("dirty");
+      $("#savestate").textContent = "saved " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+    } else {
+      $("#savestate").textContent = "save failed";
+    }
+  } catch(e){ $("#savestate").textContent = "save failed ( offline? )"; }
+  saving = false;
+}
+async function loadDoc(){
+  const d = await (await fetch("/api/tiers")).json();
+  DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
+  if(!DOC.tiers.some(t=>t.id===addTier)) addTier = STAGING;
+  dirty = false;
+  $("#savestate").classList.remove("dirty");
+  $("#savestate").textContent = DOC.updated_at ? ("saved " + DOC.updated_at.replace("T"," ").slice(0,16)) : "empty list";
+  renderAll();
+  fetchMeta(allItems().map(({it})=>it.key));
+}
+// Another tab saved -> pick it up, as long as we have nothing of our own pending.
+async function pollRev(){
+  try {
+    const d = await (await fetch("/api/tiers/version")).json();
+    if(d && d.rev !== REV && !dirty && !saving){ await loadDoc(); toast("Reloaded — the list changed in another tab"); }
+  } catch(e){}
+  setTimeout(pollRev, 6000);
+}
+
+// Per-row lookup : which links a paper has, and ( mods=true ) its modality stamp.
+async function fetchMeta(keys, wantMods){
+  keys = Array.from(new Set(keys.filter(k=>k && (wantMods || !META[k]))));
+  if(!keys.length) return {};
+  const got = {};
+  for(let i=0; i<keys.length; i+=60){
+    const chunk = keys.slice(i, i+60);
+    try {
+      const r = await (await fetch("/api/tiers/meta", { method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ keys: chunk, mods: !!wantMods }) })).json();
+      Object.assign(META, r.meta || {});
+      Object.assign(got,  r.meta || {});
+    } catch(e){}
+  }
+  repaintLinks();
+  return got;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+// One grid for the whole board, so every tier's rows line up like a spreadsheet.
+// The free-text columns share what's left ; they get tighter as you add more
+// rather than pushing the board into a horizontal scroll.
+function gridTemplate(){
+  const n = DOC.columns.length;
+  const min = n > 3 ? "112px" : "150px";
+  const custom = DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ");
+  return `46px minmax(${n>3?"200px":"240px"},2.1fr) 150px 160px ${custom} 86px`;
+}
+function renderColHead(){
+  document.documentElement.style.setProperty("--grid", gridTemplate());
+  $("#colhead").innerHTML =
+    `<div style="text-align:center">#</div><div>Paper</div><div>Modalities</div><div>Tags</div>`+
+    DOC.columns.map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
+    `<div></div>`;
+}
+function rowLinks(it){
+  const m = META[it.key] || {};
+  const doi = it.doi || m.doi || "";
+  const wid = it.wid || m.wid || "";
+  const out = [];
+  if(doi){
+    out.push(`<a href="https://doi.org/${esc(doi)}" target="_blank" rel="noopener">DOI</a>`);
+    out.push(`<a href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">Proxy</a>`);
+  }
+  // Library papers stream from disk ; an external one carries whatever open-access
+  // url its pool row had.
+  if(m.pdf)      out.push(`<a href="/pdf?key=${encodeURIComponent(it.key)}" target="_blank">PDF</a>`);
+  else if(it.pdf) out.push(`<a href="${esc(it.pdf)}" target="_blank" rel="noopener">PDF</a>`);
+  if(wid)       out.push(`<a href="https://openalex.org/${esc(wid)}" target="_blank" rel="noopener">OA</a>`);
+  if(m.montage) out.push(`<a href="${esc(m.montage)}" target="_blank" title="Figure montage">Figures</a>`);
+  if(m.has_md)  out.push(`<a href="${mdHref(it.key)}" class="mdlink" target="_blank" rel="noopener" title="The rendered Markdown, with figures">MD</a>`);
+  if(m.methods) out.push(`<a href="${esc(m.methods)}" target="_blank" title="The extracted Methods section">Methods</a>`);
+  return out.join(" ");
+}
+function chipsCell(it, kind){
+  const vals = (kind==="mod" ? it.mods : it.tags) || [];
+  return `<div class="cellchips">`+
+    vals.map(v=>`<span class="chip ${kind==='mod'?'mod':''}" data-val="${esc(v)}">${esc(v)}`+
+      `<span class="x" data-drop="${esc(v)}" data-kind="${kind}" title="Remove">×</span></span>`).join("")+
+    `<input class="chipin" data-kind="${kind}" placeholder="+" autocomplete="off"></div>`;
+}
+function rowHtml(it, n){
+  const m = META[it.key] || {};
+  const title = it.title || m.title || it.key;
+  const doi   = it.doi || m.doi || "";
+  const year  = it.year || m.year || "";
+  const inner = doi
+    ? `<a class="titlelink" href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">${esc(title)}</a>`
+    : esc(title);
+  const loose = (m.in_library === false) ? ` <span class="loose" title="Not matched to a paper in your library — links other than the DOI are unavailable">not in library</span>` : "";
+  const tierOpts = DOC.tiers.map(t=>`<option value="${esc(t.id)}">${esc(t.label)}</option>`).join("");
+  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
+    `<div class="c numc">`+
+      `<input class="numin" value="${n}" title="This paper's place in its tier — type a number and press ↵ to send it there" `+
+        `inputmode="numeric" autocomplete="off">`+
+      `<span class="handle" title="Drag to re-rank, or into another tier">⠿</span></div>`+
+    `<div class="c titlec">`+
+      `<div class="tt">${inner}${loose}</div>`+
+      `<div class="meta">${year?esc(year):""}${it.journal?" · "+esc(it.journal):""}<span class="mkey"> · ${esc(it.key)}</span></div>`+
+      `<div class="links" data-links="1">${rowLinks(it)}</div>`+
+    `</div>`+
+    `<div class="c" data-cell="mod">${chipsCell(it,"mod")}</div>`+
+    `<div class="c" data-cell="tag">${chipsCell(it,"tag")}</div>`+
+    DOC.columns.map(c=>`<div class="c notecell"><textarea data-field="${esc(c.id)}" `+
+      `placeholder="${esc(c.label)}…" spellcheck="false">${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
+    `<div class="c rowtools">`+
+      `<select class="movesel" title="Move to another tier">${tierOpts}</select>`+
+      `<button class="xbtn" data-act="remove" title="Delete this paper from the list ( undoable )">🗑</button>`+
+    `</div>`+
+  `</div>`;
+}
+function tierHtml(t){
+  return `<section class="tier" data-tier="${esc(t.id)}">`+
+    `<div class="tierhead${t.id===addTier?' target':''}" style="--tc:${esc(t.color||'#8b94a3')}">`+
+      `<div class="tbadge" style="background:${esc(t.color||'#8b94a3')}"><input class="tlabel" value="${esc(t.label)}" ${t.locked?'readonly':''}></div>`+
+      `<input class="tdesc" value="${esc(t.desc||'')}" placeholder="what belongs in this tier">`+
+      `<span class="tcount">${t.items.length}</span>`+
+      `<input type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(t.color||'')?t.color:'#8b94a3')}" title="Tier colour">`+
+      `<button class="tbtn" data-act="target" title="Send everything you add from search into this tier">${t.id===addTier?'◉':'○'} target</button>`+
+      `<button class="tbtn" data-act="up" title="Move tier up">↑</button>`+
+      `<button class="tbtn" data-act="down" title="Move tier down">↓</button>`+
+      (t.locked?"":`<button class="tbtn" data-act="del" title="Delete this tier ( its papers move to Unranked )">✕</button>`)+
+    `</div>`+
+    `<div class="rows" data-tier="${esc(t.id)}">`+
+      (t.items.length ? t.items.map((it,i)=>rowHtml(it, i+1)).join("")
+        : `<div class="emptyrow">Empty — drag papers here, or search above and add them.</div>`)+
+    `</div></section>`;
+}
+function renderBoard(){
+  $("#board").innerHTML = DOC.tiers.map(tierHtml).join("");
+  // Each row's tier <select> shows where it currently lives.
+  DOC.tiers.forEach(t=>t.items.forEach(it=>{
+    const sel = document.querySelector(`.row[data-key="${cssEsc(it.key)}"] .movesel`);
+    if(sel) sel.value = t.id;
+  }));
+  applyFilter();
+}
+function renderCounts(){
+  const n = allItems().length;
+  const ranked = DOC.tiers.filter(t=>t.id!==STAGING).reduce((a,t)=>a+t.items.length,0);
+  $("#counts").innerHTML = `<span><b>${n}</b> papers</span><span><b>${ranked}</b> ranked</span>`+
+    `<span>${DOC.tiers.length} tiers</span>`;
+}
+// The paint bar has two jobs. With rows SELECTED it's a row of checkboxes for
+// them : solid means every selected row carries that value, dashed means some
+// do, and a click flips it on all of them. With nothing selected a click arms
+// the value for painting instead ( click rows to toggle it ).
+function renderPaintbar(){
+  const sel = selectedItems();
+  const state = (v, kind)=>{
+    const on  = sel.length && sel.every(it=>hasValue(it, kind, v));
+    const som = !on && sel.some(it=>hasValue(it, kind, v));
+    return { cls: on ? "has" : som ? "some" : "",
+      title: sel.length ? `${on?"on":som?"on some of":"off"} the ${sel.length} selected row(s) — click to flip it`
+                        : "click to paint it onto rows" };
+  };
+  $("#modchips").innerHTML = modOptions().map(v=>{
+    const s = state(v, "mod");
+    return `<span class="chip mod ${armed&&armed.kind==='mod'&&armed.value===v?'armed':''} ${s.cls}" `+
+      `data-kind="mod" data-val="${esc(v)}" title="${esc(s.title)}">${esc(v)}</span>`;
+  }).join("");
+  $("#tagchips").innerHTML = tagOptions().map(v=>{
+    const s = state(v, "tag");
+    return `<span class="chip ${armed&&armed.kind==='tag'&&armed.value===v?'armed':''} ${s.cls}" `+
+      `data-kind="tag" data-val="${esc(v)}" title="${esc(s.title)}">${esc(v)}`+
+      `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
+  }).join("")+
+    `<input class="chipin newtag" id="newtag" placeholder="+ new tag" autocomplete="off">`;
+  $("#paintnote").textContent = sel.length
+    ? `${sel.length} row(s) selected — click a chip above to toggle it on them ( Esc clears )`
+    : armed ? `painting “${armed.value}” — click rows to toggle it ( Esc to stop )` : "";
+  document.body.classList.toggle("painting", !!armed);
+}
+const hasValue = (it, kind, v) =>
+  ((kind==="mod" ? it.mods : it.tags) || []).some(x=>x.toLowerCase()===v.toLowerCase());
+function selectedItems(){
+  return Array.from(SEL).map(k=>findItem(k)).filter(Boolean).map(f=>f.it);
+}
+// Click a row to select it ( ⌘ / ctrl adds one, shift takes the range -- across
+// tiers, in board order ). A plain click on the only selected row deselects it.
+function selectRow(key, e){
+  if(e && (e.metaKey || e.ctrlKey)){
+    SEL.has(key) ? SEL.delete(key) : SEL.add(key);
+    selAnchor = key;
+  } else if(e && e.shiftKey && selAnchor){
+    const keys = allItems().map(({it})=>it.key);
+    let a = keys.indexOf(selAnchor), b = keys.indexOf(key);
+    if(a>=0 && b>=0){
+      if(a>b){ const t=a; a=b; b=t; }
+      for(let i=a;i<=b;i++) SEL.add(keys[i]);
+    }
+  } else {
+    const only = SEL.size===1 && SEL.has(key);
+    SEL = new Set(only ? [] : [key]);
+    selAnchor = only ? null : key;
+  }
+  paintSelection(); renderPaintbar();
+}
+function paintSelection(){
+  $$(".row").forEach(r=>r.classList.toggle("selected", SEL.has(r.dataset.key)));
+}
+function clearSelection(){
+  if(!SEL.size) return;
+  SEL.clear(); selAnchor = null;
+  paintSelection(); renderPaintbar();
+}
+// One value across every selected row : off everywhere if they ALL have it,
+// otherwise on everywhere ( so a half-tagged selection fills in rather than
+// flipping each row's state independently ).
+function toggleOnSelection(kind, value){
+  const items = selectedItems();
+  if(!items.length) return;
+  const all = items.every(it=>hasValue(it, kind, value));
+  items.forEach(it=>{
+    const list = kind==="mod" ? (it.mods = it.mods||[]) : (it.tags = it.tags||[]);
+    const i = list.findIndex(x=>x.toLowerCase()===value.toLowerCase());
+    if(all){ if(i>=0) list.splice(i,1); }
+    else if(i<0) list.push(value);
+  });
+  if(kind==="tag" && !(DOC.vocab.tags||[]).some(t=>t.name.toLowerCase()===value.toLowerCase()))
+    DOC.vocab.tags.push({ name:value, color:"" });
+  markDirty();
+  items.forEach(it=>refreshCell(it.key, kind));
+  renderPaintbar();
+  toast(`${all?"Removed":"Added"} “${value}” ${all?"from":"on"} ${items.length} row(s)`);
+}
+function renderAll(){ renderColHead(); renderBoard(); renderCounts(); renderPaintbar(); }
+// Only the link strips ( after a meta fetch lands ) -- keeps focus / typing intact.
+function repaintLinks(){
+  $$(".row").forEach(row=>{
+    const f = findItem(row.dataset.key);
+    if(!f) return;
+    const el = row.querySelector('[data-links]');
+    if(el) el.innerHTML = rowLinks(f.it);
+    const m = META[f.it.key];
+    if(m && m.in_library === false && !row.querySelector(".loose"))
+      row.querySelector(".tt").insertAdjacentHTML("beforeend",
+        ` <span class="loose" title="Not matched to a paper in your library">not in library</span>`);
+  });
+}
+function cssEsc(s){ return String(s).replace(/["\\]/g, "\\$&"); }
+function rowEl(key){ return document.querySelector(`.row[data-key="${cssEsc(key)}"]`); }
+function refreshCell(key, kind){
+  const f = findItem(key); const row = rowEl(key);
+  if(!f || !row) return;
+  const cell = row.querySelector(`[data-cell="${kind}"]`);
+  if(cell) cell.innerHTML = chipsCell(f.it, kind);
+}
+function toast(msg, ms, undoLabel, onUndo){
+  const t = $("#toast");
+  t.innerHTML = `<span>${esc(msg)}</span>`+(onUndo?`<button id="undobtn">${esc(undoLabel||"Undo")}</button>`:"");
+  t.classList.add("show");
+  if(onUndo) $("#undobtn").onclick = ()=>{ t.classList.remove("show"); onUndo(); };
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), ms||2600);
+}
+// The board's sticky column header sits directly under the ( variable-height ) header.
+function syncHeadOffset(){
+  document.documentElement.style.setProperty("--headh", document.querySelector("header").offsetHeight + "px");
+}
+
+// ---------------------------------------------------------------------------
+// Mutations
+// ---------------------------------------------------------------------------
+function newItem(hit){
+  return {
+    key: hit.key, title: hit.title||"", doi: hit.doi||"", wid: hit.wid||"",
+    pdf: hit.pdf_local ? "" : (hit.pdf||""),
+    year: hit.year||null, journal: hit.journal||"",
+    mods: hit.mods ? hit.mods.slice() : [], tags: [],
+    fields: Object.fromEntries(DOC.columns.map(c=>[c.id,""])), added_at: nowISO(),
+  };
+}
+async function addPaper(hit, tierId){
+  if(findItem(hit.key)){ toast("Already on the list"); return; }
+  const t = DOC.tiers.find(t=>t.id===(tierId||addTier)) || DOC.tiers[DOC.tiers.length-1];
+  const it = newItem(hit);
+  // Pre-fill the modalities ` prma modalities ` already worked out for this paper.
+  if(!it.mods.length){
+    const m = META[hit.key];
+    if(m && m.mods) it.mods = m.mods.slice();
+  }
+  t.items.unshift(it);
+  markDirty(); renderAll();
+  const el = rowEl(it.key);
+  if(el){ el.classList.add("flash"); el.scrollIntoView({ block:"center", behavior:"smooth" }); }
+  const got = await fetchMeta([it.key], true);
+  const m = got[it.key];
+  if(m && !it.mods.length && m.mods && m.mods.length){
+    it.mods = m.mods.slice(); markDirty(); refreshCell(it.key, "mod"); renderPaintbar();
+  }
+  renderCounts();
+  // The hit list stays open for the next add -- re-render it so this one now
+  // reads "✓ <tier>" instead of offering ＋ Add again.
+  if(hits.length) renderResults();
+}
+// One click removes ; the toast undoes it. No confirm dialog -- an undo you can
+// actually see beats a modal you have to dismiss on every delete.
+function removeItem(key){
+  const f = findItem(key);
+  if(!f) return;
+  const tier = f.tier, at = f.idx;
+  const [gone] = tier.items.splice(at, 1);
+  SEL.delete(key);
+  markDirty(); renderBoard(); renderCounts(); renderPaintbar();
+  toast(`Removed “${(gone.title||gone.key).slice(0,60)}”`, 6000, "Undo", ()=>{
+    tier.items.splice(Math.min(at, tier.items.length), 0, gone);
+    markDirty(); renderBoard(); renderCounts(); renderPaintbar();
+  });
+}
+function moveItem(key, tierId, index){
+  const f = findItem(key);
+  const t = DOC.tiers.find(t=>t.id===tierId);
+  if(!f || !t) return;
+  const [it] = f.tier.items.splice(f.idx, 1);
+  if(f.tier.id === tierId && f.idx < index) index--;
+  t.items.splice(Math.max(0, Math.min(index, t.items.length)), 0, it);
+  markDirty(); renderBoard(); renderCounts();
+}
+function toggleValue(it, kind, value){
+  const list = kind==="mod" ? it.mods : it.tags;
+  const i = list.findIndex(v=>v.toLowerCase()===value.toLowerCase());
+  if(i>=0) list.splice(i,1); else list.push(value);
+  markDirty();
+}
+function addValue(it, kind, value){
+  value = (value||"").trim();
+  if(!value) return false;
+  const list = kind==="mod" ? it.mods : it.tags;
+  if(list.some(v=>v.toLowerCase()===value.toLowerCase())) return false;
+  list.push(value);
+  if(kind==="tag" && !(DOC.vocab.tags||[]).some(t=>t.name.toLowerCase()===value.toLowerCase()))
+    DOC.vocab.tags.push({ name:value, color:"" });
+  markDirty();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Search ( the same /api/search the dashboard uses )
+//
+// Two ways to find a paper, and the default is the one you actually want here :
+//   match titles ( mode=title ) -- type any piece of a title and the closest
+//     titles come back, best first. Nothing has to match exactly, so a typo, a
+//     missing word or two words the wrong way round still lands the paper.
+//   full text   ( mode=text )  -- the boolean search over the whole OCR'd body,
+//     for when you're hunting a phrase rather than a paper.
+// See src/dashboard/index.py :: title_search .
+// ---------------------------------------------------------------------------
+let hits = [], hitIdx = 0, hitTotal = 0, hitFuzzy = false, hitMode = "title", searchTimer = null;
+async function runSearch(){
+  const q = $("#q").value.trim();
+  if(!q){ closeResults(); return; }
+  const pool = $("#pool").value, mode = $("#smode").value;
+  let d;
+  try {
+    d = await (await fetch(`/api/search?q=${encodeURIComponent(q)}&pool=${pool}`+
+      `&mode=${mode}&sort=relevance&limit=25&hide_skipped=0`)).json();
+  } catch(e){ return; }
+  if(d.status !== "ready"){
+    $("#results").innerHTML = `<div class="rhint">The search index isn't built yet — open the dashboard once to build it.</div>`;
+    $("#results").classList.add("show");
+    return;
+  }
+  hits = d.results || []; hitIdx = 0; hitTotal = d.total; hitFuzzy = !!d.fuzzy;
+  hitMode = d.mode || mode;
+  renderResults();
+  fetchMeta(hits.map(h=>h.key), true).then(()=>renderResults());
+}
+function renderResults(){
+  if(!hits.length){
+    $("#results").innerHTML = `<div class="rhint">Nothing close to that${hitMode==="title"?" in any title":""}.</div>`;
+    $("#results").classList.add("show");
+    return;
+  }
+  const tname = (DOC.tiers.find(t=>t.id===addTier)||{}).label || "Unranked";
+  const what = hitFuzzy ? `<span style="color:var(--warn)">nothing came close — the least-far-off titles</span>`
+             : hitMode === "title" ? `${hits.length} closest title${hits.length===1?"":"s"}`
+             : `${hits.length} of ${hitTotal}`;
+  $("#results").innerHTML =
+    `<div class="rhint">${what} · ↵ adds to <b>${esc(tname)}</b> · drag a hit onto any tier</div>`+
+    hits.map((h,i)=>{
+      const on = findItem(h.key);
+      const m  = META[h.key] || {};
+      const mods = (m.mods||[]).map(v=>`<span class="chip mod">${esc(v)}</span>`).join(" ");
+      return `<div class="hit ${i===hitIdx?'sel':''}" data-i="${i}" draggable="true">`+
+        `<div style="flex:1;min-width:0">`+
+          `<div class="ht">${esc(h.title||h.key)}</div>`+
+          `<div class="hm">${h.year?esc(h.year):""}${h.journal?" · "+esc(h.journal):""}`+
+            `${h.cited_by!=null?` · ${h.cited_by} cites`:""} ${mods}</div>`+
+        `</div>`+
+        (on ? `<div class="in">✓ ${esc(on.tier.label)}</div>`
+            : `<button class="add" data-i="${i}">＋ Add</button>`)+
+      `</div>`;
+    }).join("");
+  $("#results").classList.add("show");
+}
+function closeResults(){ $("#results").classList.remove("show"); hits = []; }
+function moveHit(delta){
+  if(!hits.length) return;
+  hitIdx = Math.max(0, Math.min(hits.length-1, hitIdx+delta));
+  $$("#results .hit").forEach((el,i)=>el.classList.toggle("sel", i===hitIdx));
+  const el = $$("#results .hit")[hitIdx];
+  if(el) el.scrollIntoView({ block:"nearest" });
+}
+
+// ---------------------------------------------------------------------------
+// Autocomplete ( modality / tag chip inputs )
+// ---------------------------------------------------------------------------
+let AC = { input:null, opts:[], idx:0 };
+function acOptions(input){
+  const kind = input.dataset.kind;
+  const row  = input.closest(".row");
+  const f    = row ? findItem(row.dataset.key) : null;
+  const have = f ? (kind==="mod" ? f.it.mods : f.it.tags).map(v=>v.toLowerCase()) : [];
+  const term = input.value.trim().toLowerCase();
+  return (kind==="mod" ? modOptions() : tagOptions())
+    .filter(v=>!have.includes(v.toLowerCase()))
+    .filter(v=>!term || v.toLowerCase().includes(term));
+}
+function acOpen(input){
+  AC.input = input; AC.idx = 0; AC.opts = acOptions(input);
+  acRender();
+}
+function acRender(){
+  const pop = $("#acpop");
+  if(!AC.input){ pop.classList.remove("show"); return; }
+  const term = AC.input.value.trim();
+  const body = AC.opts.map((v,i)=>`<div class="acopt ${i===AC.idx?'sel':''}" data-v="${esc(v)}">${esc(v)}</div>`).join("");
+  const isNew = term && !AC.opts.some(v=>v.toLowerCase()===term.toLowerCase());
+  pop.innerHTML = body + (isNew?`<div class="acnew">↵ creates “${esc(term)}”</div>`:"") ||
+    `<div class="acnew">type to create a new one</div>`;
+  const r = AC.input.getBoundingClientRect();
+  pop.style.left = (r.left + window.scrollX) + "px";
+  pop.style.top  = (r.bottom + window.scrollY + 4) + "px";
+  pop.classList.add("show");
+}
+function acClose(){ AC.input = null; AC.opts = []; $("#acpop").classList.remove("show"); }
+function acCommit(value){
+  const input = AC.input;
+  if(!input) return;
+  const kind = input.dataset.kind, row = input.closest(".row");
+  const v = (value != null ? value : input.value).trim();
+  if(!v){ acClose(); return; }
+  if(row){
+    const f = findItem(row.dataset.key);
+    if(f && addValue(f.it, kind, v)){
+      acClose();
+      refreshCell(f.it.key, kind); renderPaintbar();
+      // The cell was re-rendered , so the input is a NEW element : put the caret
+      // back in it so several tags in a row is just typing.
+      const again = rowEl(f.it.key).querySelector(`.chipin[data-kind="${kind}"]`);
+      if(again) again.focus();
+      return;
+    }
+  }
+  input.value = "";
+  acClose();
+}
+
+// ---------------------------------------------------------------------------
+// Drag and drop ( rows between tiers, and hits from the search panel )
+// ---------------------------------------------------------------------------
+let dragKey = null, dragHit = null;
+function clearDropMarks(){
+  $$(".row").forEach(r=>r.classList.remove("drop-before","drop-after"));
+  $$(".rows").forEach(r=>r.classList.remove("dropinto"));
+}
+function dropTarget(e){
+  // Dropping on a tier's HEADER means "into this tier" ( at the top ) -- the
+  // easiest target to hit when the tier is long or empty.
+  const head = e.target.closest(".tierhead");
+  if(head) return { tier: head.closest(".tier").dataset.tier, index:0, row:null, after:false };
+  const rows = e.target.closest(".rows");
+  if(!rows) return null;
+  const row = e.target.closest(".row");
+  const tid = rows.dataset.tier;
+  if(!row) return { tier:tid, index:(itemsOf(tid)||[]).length, row:null, after:false };
+  const r = row.getBoundingClientRect();
+  const after = (e.clientY - r.top) > r.height/2;
+  const list = itemsOf(tid) || [];
+  const idx  = list.findIndex(x=>x.key===row.dataset.key);
+  return { tier:tid, index: idx + (after?1:0), row, after };
+}
+document.addEventListener("dragover", e=>{
+  if(!dragKey && !dragHit) return;
+  const t = dropTarget(e);
+  if(!t) return;
+  e.preventDefault();
+  clearDropMarks();
+  if(t.row) t.row.classList.add(t.after?"drop-after":"drop-before");
+  else document.querySelector(`.rows[data-tier="${cssEsc(t.tier)}"]`).classList.add("dropinto");
+});
+document.addEventListener("drop", async e=>{
+  if(!dragKey && !dragHit) return;
+  const t = dropTarget(e);
+  clearDropMarks();
+  if(!t){ dragKey = dragHit = null; return; }
+  e.preventDefault();
+  if(dragKey){ moveItem(dragKey, t.tier, t.index); }
+  else if(dragHit){
+    const hit = dragHit;
+    if(!findItem(hit.key)){
+      const it = newItem(hit);
+      const m  = META[hit.key];
+      if(m && m.mods) it.mods = m.mods.slice();
+      const list = itemsOf(t.tier);
+      if(list){ list.splice(Math.min(t.index, list.length), 0, it); markDirty(); renderAll(); renderCounts();
+        fetchMeta([it.key], true); }
+    } else toast("Already on the list");
+  }
+  dragKey = dragHit = null;
+});
+document.addEventListener("dragend", ()=>{
+  clearDropMarks();
+  $$(".row.dragging").forEach(r=>r.classList.remove("dragging"));
+  $$(".row").forEach(r=>r.draggable = false);
+  dragKey = dragHit = null;
+});
+// Rows are only draggable once you grab the handle -- otherwise dragging would
+// fight with selecting text inside the notes boxes.
+$("#board").addEventListener("mousedown", e=>{
+  const h = e.target.closest(".handle");
+  if(!h) return;
+  const row = h.closest(".row");
+  if(row) row.draggable = true;
+});
+$("#board").addEventListener("dragstart", e=>{
+  const row = e.target.closest(".row");
+  if(!row || !row.draggable) { e.preventDefault(); return; }
+  dragKey = row.dataset.key;
+  row.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  try { e.dataTransfer.setData("text/plain", dragKey); } catch(err){}
+});
+$("#results").addEventListener("dragstart", e=>{
+  const hit = e.target.closest(".hit");
+  if(!hit) return;
+  dragHit = hits[+hit.dataset.i];
+  e.dataTransfer.effectAllowed = "copy";
+  try { e.dataTransfer.setData("text/plain", dragHit.key); } catch(err){}
+});
+
+// ---------------------------------------------------------------------------
+// Board interactions
+// ---------------------------------------------------------------------------
+$("#board").addEventListener("click", e=>{
+  const row = e.target.closest(".row");
+
+  // Tier header buttons
+  const tbtn = e.target.closest(".tierhead .tbtn");
+  if(tbtn){
+    const tid = tbtn.closest(".tier").dataset.tier;
+    const i   = DOC.tiers.findIndex(t=>t.id===tid);
+    const act = tbtn.dataset.act;
+    if(act==="target"){ addTier = tid; localStorage.setItem("prma-tier-target", tid); renderBoard(); if(hits.length) renderResults(); }
+    else if(act==="up" && i>0){ [DOC.tiers[i-1], DOC.tiers[i]] = [DOC.tiers[i], DOC.tiers[i-1]]; markDirty(); renderBoard(); }
+    else if(act==="down" && i<DOC.tiers.length-1 && DOC.tiers[i+1].id!==STAGING){
+      [DOC.tiers[i+1], DOC.tiers[i]] = [DOC.tiers[i], DOC.tiers[i+1]]; markDirty(); renderBoard(); }
+    else if(act==="del"){
+      const t = DOC.tiers[i];
+      if(t.items.length && !confirm(`Delete tier “${t.label}”? Its ${t.items.length} paper(s) move to Unranked.`)) return;
+      const staging = DOC.tiers.find(x=>x.id===STAGING);
+      staging.items = t.items.concat(staging.items);
+      DOC.tiers.splice(i,1);
+      if(addTier===t.id) addTier = STAGING;
+      markDirty(); renderBoard(); renderCounts();
+    }
+    return;
+  }
+
+  // Remove a chip
+  const x = e.target.closest(".cellchips .x");
+  if(x && row){
+    const f = findItem(row.dataset.key);
+    if(f){ toggleValue(f.it, x.dataset.kind, x.dataset.drop); refreshCell(f.it.key, x.dataset.kind); renderPaintbar(); }
+    return;
+  }
+  // Remove a row ( undoable from the toast )
+  if(e.target.closest('[data-act="remove"]') && row){ removeItem(row.dataset.key); return; }
+  // A click on the body of a row : paints the armed value if you're painting,
+  // otherwise selects the row ( so the chips at the top can tag it ). The grip
+  // is exempt -- grabbing a row to drag it shouldn't select or tag it.
+  if(row && !e.target.closest("input,textarea,select,button,a,.chip,.handle")){
+    if(armed){
+      const f = findItem(row.dataset.key);
+      if(f){ toggleValue(f.it, armed.kind, armed.value); refreshCell(f.it.key, armed.kind); renderPaintbar(); }
+    } else selectRow(row.dataset.key, e);
+  }
+});
+// Type a rank into a row's number and press ↵ ( or tab away ) to send it to that
+// place in its tier. Out of range clamps to the ends. Moving BETWEEN tiers is
+// the row's tier dropdown, or a drag.
+function applyNumber(input){
+  const row = input.closest(".row");
+  if(!row) return;
+  const f = findItem(row.dataset.key);
+  if(!f) return;
+  const want = parseInt(String(input.value).replace(/[^0-9]/g,""), 10);
+  if(isNaN(want) || want === f.idx+1){ input.value = f.idx+1; return; }
+  const to = Math.max(0, Math.min(want-1, f.tier.items.length-1));
+  moveItem(f.it.key, f.tier.id, to > f.idx ? to+1 : to);
+  const again = rowEl(f.it.key);
+  if(again){
+    const el = again.querySelector(".numin");
+    if(el){ el.focus(); el.select(); }
+    again.classList.add("flash");
+    again.scrollIntoView({ block:"nearest" });
+  }
+}
+$("#board").addEventListener("keydown", e=>{
+  if(!e.target.matches(".numin")) return;
+  if(e.key==="Enter"){ e.preventDefault(); applyNumber(e.target); }
+  else if(e.key==="Escape"){
+    const f = findItem(e.target.closest(".row").dataset.key);
+    if(f) e.target.value = f.idx+1;
+    e.target.blur();
+  }
+});
+$("#board").addEventListener("focusout", e=>{ if(e.target.matches(".numin")) applyNumber(e.target); });
+$("#board").addEventListener("focusin",  e=>{ if(e.target.matches(".numin")) e.target.select(); });
+// MD opens in a background tab, like the dashboard's MD button.
+$("#board").addEventListener("click", e=>{
+  const a = e.target.closest(".mdlink");
+  if(!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button!==0) return;
+  e.preventDefault();
+  const w = window.open(a.href, "_blank");
+  if(w){ try { w.blur(); } catch(err){} }
+  window.focus();
+});
+// Text cells : notes / custom columns, tier label + description. Typed straight
+// into the document ( no re-render, so the caret never jumps ).
+$("#board").addEventListener("input", e=>{
+  const el = e.target;
+  if(el.matches("textarea[data-field]")){
+    const f = findItem(el.closest(".row").dataset.key);
+    if(f){ (f.it.fields = f.it.fields||{})[el.dataset.field] = el.value; markDirty(); }
+    return;
+  }
+  const tier = el.closest(".tier");
+  if(!tier) return;
+  const t = DOC.tiers.find(x=>x.id===tier.dataset.tier);
+  if(!t) return;
+  if(el.matches(".tlabel")){ t.label = el.value; markDirty(); }
+  else if(el.matches(".tdesc")){ t.desc = el.value; markDirty(); }
+  else if(el.matches('input[type="color"]')){
+    t.color = el.value; markDirty();
+    tier.querySelector(".tierhead").style.setProperty("--tc", el.value);
+    tier.querySelector(".tbadge").style.background = el.value;
+  }
+});
+$("#board").addEventListener("change", e=>{
+  const sel = e.target.closest(".movesel");
+  if(!sel) return;
+  const key = sel.closest(".row").dataset.key;
+  moveItem(key, sel.value, 0);
+});
+
+// Chip inputs -> autocomplete
+document.addEventListener("focusin", e=>{ if(e.target.matches(".chipin:not(#newtag)")) acOpen(e.target); });
+document.addEventListener("input", e=>{ if(e.target.matches(".chipin:not(#newtag)") && AC.input===e.target){ AC.opts = acOptions(e.target); AC.idx = 0; acRender(); } });
+document.addEventListener("keydown", e=>{
+  if(!e.target.matches(".chipin:not(#newtag)")) return;
+  if(e.key==="ArrowDown"){ e.preventDefault(); AC.idx = Math.min(AC.opts.length-1, AC.idx+1); acRender(); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); AC.idx = Math.max(0, AC.idx-1); acRender(); }
+  else if(e.key==="Enter"){
+    // The highlighted option wins whenever what you typed is a prefix of it
+    // ( "fm" -> fMRI ) ; anything else creates exactly what you typed.
+    e.preventDefault();
+    const typed = e.target.value.trim(), pick = AC.opts[AC.idx];
+    acCommit(pick && (!typed || pick.toLowerCase().startsWith(typed.toLowerCase())) ? pick : typed);
+  }
+  else if(e.key==="Escape"){ acClose(); e.target.blur(); }
+  else if(e.key==="Backspace" && !e.target.value){
+    const row = e.target.closest(".row"), f = row && findItem(row.dataset.key);
+    if(f){ const list = e.target.dataset.kind==="mod" ? f.it.mods : f.it.tags;
+      if(list.length){ list.pop(); markDirty(); refreshCell(f.it.key, e.target.dataset.kind); renderPaintbar();
+        const again = rowEl(f.it.key).querySelector(`.chipin[data-kind="${e.target.dataset.kind}"]`);
+        if(again) again.focus(); } }
+  }
+});
+document.addEventListener("focusout", e=>{ if(e.target.matches(".chipin:not(#newtag)")) setTimeout(()=>{ if(AC.input===e.target) acClose(); }, 120); });
+$("#acpop").addEventListener("mousedown", e=>{
+  const o = e.target.closest(".acopt");
+  if(!o) return;
+  e.preventDefault();
+  acCommit(o.dataset.v);
+});
+
+// Paint chips : arm / disarm, create, delete
+$("#modchips").addEventListener("click", e=>{
+  const c = e.target.closest(".chip");
+  if(!c) return;
+  // Rows selected -> the chips tag them. Nothing selected -> arm for painting.
+  if(SEL.size){ toggleOnSelection("mod", c.dataset.val); return; }
+  armed = (armed && armed.kind==="mod" && armed.value===c.dataset.val) ? null : { kind:"mod", value:c.dataset.val };
+  renderPaintbar();
+});
+$("#tagchips").addEventListener("click", e=>{
+  const del = e.target.closest("[data-deltag]");
+  if(del){
+    const v = del.dataset.deltag;
+    const n = allItems().filter(({it})=>it.tags.some(t=>t.toLowerCase()===v.toLowerCase())).length;
+    if(!confirm(`Delete the tag “${v}”${n?` and remove it from ${n} paper(s)`:""}?`)) return;
+    DOC.vocab.tags = (DOC.vocab.tags||[]).filter(t=>t.name.toLowerCase()!==v.toLowerCase());
+    allItems().forEach(({it})=>{ it.tags = it.tags.filter(t=>t.toLowerCase()!==v.toLowerCase()); });
+    if(armed && armed.value===v) armed = null;
+    markDirty(); renderBoard(); renderPaintbar();
+    return;
+  }
+  const c = e.target.closest(".chip");
+  if(!c) return;
+  if(SEL.size){ toggleOnSelection("tag", c.dataset.val); return; }
+  armed = (armed && armed.kind==="tag" && armed.value===c.dataset.val) ? null : { kind:"tag", value:c.dataset.val };
+  renderPaintbar();
+});
+$("#tagchips").addEventListener("keydown", e=>{
+  if(e.target.id!=="newtag" || e.key!=="Enter") return;
+  const v = e.target.value.trim();
+  if(!v) return;
+  if(!(DOC.vocab.tags||[]).some(t=>t.name.toLowerCase()===v.toLowerCase())) DOC.vocab.tags.push({ name:v, color:"" });
+  markDirty();
+  if(SEL.size){
+    // A brand-new tag with rows selected goes straight onto them.
+    toggleOnSelection("tag", v);
+  } else {
+    armed = { kind:"tag", value:v };
+    renderPaintbar();
+    toast(`Painting “${v}” — click papers to tag them`);
+  }
+  const nt = $("#newtag"); if(nt){ nt.value=""; nt.focus(); }
+});
+
+// Column header : rename ( double-click ) / delete ( shift-click )
+$("#colhead").addEventListener("dblclick", e=>{
+  const c = e.target.closest(".colname");
+  if(!c) return;
+  const col = DOC.columns.find(x=>x.id===c.dataset.col);
+  const name = prompt("Column name", col.label);
+  if(name && name.trim()){ col.label = name.trim(); markDirty(); renderAll(); }
+});
+$("#colhead").addEventListener("click", e=>{
+  const c = e.target.closest(".colname");
+  if(!c || !e.shiftKey) return;
+  const col = DOC.columns.find(x=>x.id===c.dataset.col);
+  if(DOC.columns.length===1){ toast("Keep at least one column"); return; }
+  if(!confirm(`Delete the “${col.label}” column and everything typed in it?`)) return;
+  DOC.columns = DOC.columns.filter(x=>x.id!==col.id);
+  allItems().forEach(({it})=>{ delete it.fields[col.id]; });
+  markDirty(); renderAll();
+});
+
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
+$("#q").addEventListener("input", ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 200); });
+$("#pool").addEventListener("change", runSearch);
+// The match mode is a property of THIS browser -- it's a habit, not list data.
+function labelMode(){
+  $("#q").placeholder = $("#smode").value === "title"
+    ? "Type any part of a title…   ( ↵ adds the highlighted hit )"
+    : 'Full text…  fMRI NOT EEG · "inner speech" OR aphasia';
+}
+$("#smode").addEventListener("change", ()=>{
+  try { localStorage.setItem("prma-search-mode", $("#smode").value); } catch(e){}
+  labelMode(); runSearch();
+});
+$("#q").addEventListener("keydown", e=>{
+  if(e.key==="ArrowDown"){ e.preventDefault(); moveHit(1); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); moveHit(-1); }
+  else if(e.key==="Enter" && hits[hitIdx]){ e.preventDefault(); addPaper(hits[hitIdx]); }
+  else if(e.key==="Escape"){ closeResults(); e.target.blur(); }
+});
+$("#results").addEventListener("click", e=>{
+  const b = e.target.closest(".add");
+  if(b){ addPaper(hits[+b.dataset.i]); return; }
+  const h = e.target.closest(".hit");
+  if(h){ hitIdx = +h.dataset.i; moveHit(0); }
+});
+// Double-clicking a hit adds it, same as ↵ .
+$("#results").addEventListener("dblclick", e=>{
+  const h = e.target.closest(".hit");
+  if(!h) return;
+  e.preventDefault();
+  addPaper(hits[+h.dataset.i]);
+});
+document.addEventListener("click", e=>{
+  if(!e.target.closest(".searchwrap")) closeResults();
+});
+$("#filter").addEventListener("input", applyFilter);
+function applyFilter(){
+  const q = $("#filter").value.trim().toLowerCase();
+  $$(".row").forEach(row=>{
+    if(!q){ row.classList.remove("hide"); return; }
+    const f = findItem(row.dataset.key);
+    if(!f) return;
+    const hay = [ f.it.title, f.it.key, f.it.doi, (f.it.mods||[]).join(" "), (f.it.tags||[]).join(" "),
+      Object.values(f.it.fields||{}).join(" ") ].join(" ").toLowerCase();
+    row.classList.toggle("hide", !hay.includes(q));
+  });
+}
+$("#addtier").addEventListener("click", ()=>{
+  const label = prompt("Tier name", "New");
+  if(!label) return;
+  let id = slug(label, "tier") || ("t"+Date.now());
+  while(DOC.tiers.some(t=>t.id===id)) id += "-2";
+  const at = DOC.tiers.findIndex(t=>t.id===STAGING);
+  DOC.tiers.splice(at<0?DOC.tiers.length:at, 0,
+    { id, label, desc:"", color:"#9aa3b2", locked:false, items:[] });
+  markDirty(); renderBoard(); renderCounts();
+});
+$("#addcol").addEventListener("click", ()=>{
+  const label = prompt("New column name ( e.g. Decoding_Method )");
+  if(!label || !label.trim()) return;
+  let id = slug(label, "col");
+  while(DOC.columns.some(c=>c.id===id)) id += "-2";
+  DOC.columns.push({ id, label: label.trim() });
+  allItems().forEach(({it})=>{ it.fields[id] = ""; });
+  markDirty(); renderAll();
+});
+$("#autotag").addEventListener("click", async ()=>{
+  const btn = $("#autotag"); btn.disabled = true; btn.textContent = "⚡ Auto-tagging…";
+  const todo = allItems().filter(({it})=>!it.mods.length).map(({it})=>it.key);
+  if(!todo.length){ toast("Every paper already has at least one modality"); btn.disabled=false; btn.textContent="⚡ Auto-tag"; return; }
+  const got = await fetchMeta(todo, true);
+  let n = 0;
+  todo.forEach(k=>{
+    const m = got[k] || META[k];
+    const f = findItem(k);
+    if(f && m && m.mods && m.mods.length){ f.it.mods = m.mods.slice(); n++; }
+  });
+  if(n) markDirty();
+  renderBoard(); renderPaintbar();
+  btn.disabled = false; btn.textContent = "⚡ Auto-tag";
+  toast(n ? `Tagged ${n} paper(s) from their Methods stamp` :
+    `No modality stamps found — run \` prma modalities \` to tag the library`, 4000);
+});
+$("#toggleTheme").addEventListener("click", ()=>{
+  const next = document.documentElement.dataset.theme==="dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("prma-theme", next); } catch(e){}
+  labelTheme();
+});
+function labelTheme(){ $("#toggleTheme").textContent = document.documentElement.dataset.theme==="dark" ? "☀ Light" : "🌙 Dark"; }
+
+document.addEventListener("keydown", e=>{
+  if(e.key==="Escape"){
+    if(armed){ armed = null; renderPaintbar(); }
+    else clearSelection();
+  }
+  if(e.key==="/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){
+    e.preventDefault(); $("#q").focus(); $("#q").select();
+  }
+  if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); }
+});
+window.addEventListener("beforeunload", e=>{ if(dirty){ e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("resize", syncHeadOffset);
+
+// ---------------------------------------------------------------------------
+// CSV in / out
+//
+// The header is the one the hand-made spreadsheets already used , so a file
+// exported here reads the same as the ones that came before it , and one of
+// those imports straight back : Tier , Tier_Description , DOI_or_Key , Title ,
+// Year , Modalities_Tagged , Tags , < every free-text column > , MD_File.
+// Any OTHER column in an imported file becomes a new free-text column rather
+// than being dropped.
+// ---------------------------------------------------------------------------
+const csvCell = v => {
+  const s = (v==null ? "" : String(v));
+  return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+};
+function toCSV(){
+  const head = [ "Tier","Tier_Description","DOI_or_Key","Title","Year","Modalities_Tagged","Tags" ]
+    .concat(DOC.columns.map(c=>c.label)).concat([ "MD_File" ]);
+  const lines = [ head.map(csvCell).join(",") ];
+  DOC.tiers.forEach(t=>t.items.forEach(it=>{
+    const m = META[it.key] || {};
+    lines.push([
+      t.label, t.desc||"", it.key, it.title||m.title||"", it.year||m.year||"",
+      (it.mods||[]).join("; "), (it.tags||[]).join("; "),
+    ].concat(DOC.columns.map(c=>(it.fields||{})[c.id]||""))
+     .concat([ m.has_md ? fileStem(it.key)+".md" : "" ])
+     .map(csvCell).join(","));
+  }));
+  return lines.join("\n");
+}
+$("#exportbtn").addEventListener("click", ()=>{
+  const blob = new Blob([ toCSV() ], { type:"text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `prma-tiers-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+});
+function parseCSV(text){
+  const rows = []; let row = [], field = "", q = false, i = 0;
+  text = text.replace(/^\uFEFF/, "").replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+  while(i < text.length){
+    const c = text[i];
+    if(q){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i += 2; continue; }
+        q = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if(c === '"'){ q = true; i++; continue; }
+    if(c === ','){ row.push(field); field = ""; i++; continue; }
+    if(c === '\n'){ row.push(field); field = ""; rows.push(row); row = []; i++; continue; }
+    field += c; i++;
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r=>r.some(c=>String(c).trim().length));
+}
+const HEAD_TIER  = /^tier$/i, HEAD_DESC = /^tier[_ ]?desc/i;
+const HEAD_KEY   = /^(doi[_ ]?or[_ ]?key|key)$/i, HEAD_DOI = /^doi$/i;
+const HEAD_TITLE = /^title$/i, HEAD_YEAR = /^year$/i;
+const HEAD_MODS  = /^modalit/i, HEAD_TAGS = /^tags?$/i, HEAD_MD = /^md[_ ]?file$/i;
+const splitList  = s => String(s||"").split(/[;,|]/).map(x=>x.trim()).filter(Boolean);
+function docFromCSV(rows, merge){
+  const head = rows[0].map(h=>String(h||"").trim());
+  const idx  = { tier:-1, desc:-1, key:-1, doi:-1, title:-1, year:-1, mods:-1, tags:-1 };
+  const extra = [];      // column index -> { id , label }
+  head.forEach((h,i)=>{
+    if(HEAD_TIER.test(h)) idx.tier = i;
+    else if(HEAD_DESC.test(h)) idx.desc = i;
+    else if(HEAD_KEY.test(h)) idx.key = i;
+    else if(HEAD_DOI.test(h)) idx.doi = i;
+    else if(HEAD_TITLE.test(h)) idx.title = i;
+    else if(HEAD_YEAR.test(h)) idx.year = i;
+    else if(HEAD_MODS.test(h)) idx.mods = i;
+    else if(HEAD_TAGS.test(h)) idx.tags = i;
+    else if(HEAD_MD.test(h)) { /* derived from the key -- not stored */ }
+    else if(h) extra.push({ i, id: slug(h,"col"), label: h });
+  });
+  const doc = merge
+    ? JSON.parse(JSON.stringify(DOC))
+    : { version:1, updated_at:"", columns:[], vocab:{ tags: JSON.parse(JSON.stringify(DOC.vocab.tags||[])) },
+        tiers:[ { id:STAGING, label:"Unranked", desc:"Added but not ranked yet", color:"#8b94a3", locked:true, items:[] } ] };
+  // Every unrecognised header becomes a free-text column ( Notes included : it
+  // is just the column that ships by default ).
+  extra.forEach(x=>{ if(!doc.columns.some(c=>c.id===x.id)) doc.columns.push({ id:x.id, label:x.label }); });
+  if(!doc.columns.length) doc.columns.push({ id:"notes", label:"Notes" });
+  const findTier = (label, desc)=>{
+    const want = String(label||"Unranked").trim() || "Unranked";
+    let t = doc.tiers.find(t=>t.label.toLowerCase()===want.toLowerCase());
+    if(!t){
+      let id = slug(want,"tier") || ("t"+doc.tiers.length);
+      while(doc.tiers.some(x=>x.id===id)) id += "-2";
+      t = { id, label:want, desc:desc||"", color:"#9aa3b2", locked:false, items:[] };
+      const at = doc.tiers.findIndex(x=>x.id===STAGING);
+      doc.tiers.splice(at<0?doc.tiers.length:at, 0, t);
+    }
+    if(desc && !t.desc) t.desc = desc;
+    return t;
+  };
+  let added = 0, updated = 0;
+  rows.slice(1).forEach(r=>{
+    const cell = i => (i>=0 && i<r.length) ? String(r[i]).trim() : "";
+    const title = cell(idx.title);
+    const key   = cell(idx.key) || cell(idx.doi) || ("loose-" + (slug(title,"row") || Math.random().toString(36).slice(2,9)));
+    const t     = findTier(cell(idx.tier), cell(idx.desc));
+    const fields = {};
+    extra.forEach(x=>{ fields[x.id] = cell(x.i); });
+    const year = parseInt(cell(idx.year), 10);
+    // Same key already on the board -> update it in place ( and move it to the
+    // tier the file says ) rather than making a second row for the same paper.
+    let existing = null;
+    for(const tt of doc.tiers){
+      const j = tt.items.findIndex(x=>x.key===key);
+      if(j>=0){ existing = tt.items[j]; if(tt!==t){ tt.items.splice(j,1); t.items.push(existing); } break; }
+    }
+    if(existing){
+      if(title) existing.title = title;
+      if(!isNaN(year)) existing.year = year;
+      const mods = splitList(cell(idx.mods)), tags = splitList(cell(idx.tags));
+      if(mods.length) existing.mods = mods;
+      if(tags.length) existing.tags = Array.from(new Set((existing.tags||[]).concat(tags)));
+      existing.fields = Object.assign(existing.fields||{}, fields);
+      updated++;
+    } else {
+      t.items.push({
+        key, title, doi: cell(idx.doi) || (/^10\./.test(key) ? key : ""), wid:"",
+        year: isNaN(year) ? null : year, journal:"",
+        mods: splitList(cell(idx.mods)), tags: splitList(cell(idx.tags)),
+        fields, added_at: nowISO(),
+      });
+      added++;
+    }
+  });
+  // Any tag the file introduced joins the vocabulary, so it paints like the rest.
+  doc.tiers.forEach(t=>t.items.forEach(it=>it.tags.forEach(tag=>{
+    if(!doc.vocab.tags.some(x=>x.name.toLowerCase()===tag.toLowerCase())) doc.vocab.tags.push({ name:tag, color:"" });
+  })));
+  return { doc, added, updated };
+}
+$("#importbtn").addEventListener("click", ()=>{
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".csv,text/csv";
+  inp.onchange = async ()=>{
+    const file = inp.files && inp.files[0];
+    if(!file) return;
+    let rows;
+    try { rows = parseCSV(await file.text()); }
+    catch(e){ toast("Could not read that file"); return; }
+    if(rows.length < 2){ toast("That CSV has no rows"); return; }
+    sheet(`
+      <h3>Import ${rows.length-1} row(s) from ${esc(file.name)}</h3>
+      <p>Columns found: ${rows[0].filter(Boolean).map(h=>`<kbd>${esc(h)}</kbd>`).join(" ")}</p>
+      <p>Anything that isn't Tier / DOI_or_Key / Title / Year / Modalities / Tags becomes its own
+         free-text column. Rows whose key is already on the board are updated in place.</p>
+      <div class="btns">
+        <button data-act="cancel">Cancel</button>
+        <button data-act="merge">Merge into this list</button>
+        <button data-act="replace">Replace everything</button>
+      </div>`, act=>{
+      if(act==="cancel") return;
+      const r = docFromCSV(rows, act==="merge");
+      DOC = r.doc;
+      if(!DOC.tiers.some(t=>t.id===addTier)) addTier = STAGING;
+      markDirty(); renderAll();
+      fetchMeta(allItems().map(({it})=>it.key), true).then(()=>{
+        // Fill in modalities for anything the file didn't carry any for.
+        let n = 0;
+        allItems().forEach(({it})=>{
+          const m = META[it.key];
+          if(!it.mods.length && m && m.mods && m.mods.length){ it.mods = m.mods.slice(); n++; }
+        });
+        if(n){ markDirty(); renderBoard(); renderPaintbar(); }
+        toast(`Imported — ${r.added} added, ${r.updated} updated${n?`, ${n} auto-tagged`:""}`, 4200);
+      });
+    });
+  };
+  inp.click();
+});
+
+// ---------------------------------------------------------------------------
+// Overlay sheet + help
+// ---------------------------------------------------------------------------
+function sheet(html, onAct){
+  $("#sheet").innerHTML = html;
+  $("#overlay").classList.add("show");
+  $("#sheet").onclick = e=>{
+    const b = e.target.closest("button[data-act]");
+    if(!b) return;
+    $("#overlay").classList.remove("show");
+    if(onAct) onAct(b.dataset.act);
+  };
+}
+$("#overlay").addEventListener("click", e=>{ if(e.target.id==="overlay") $("#overlay").classList.remove("show"); });
+$("#helpbtn").addEventListener("click", ()=>sheet(`
+  <h3>How this page works</h3>
+  <ul>
+    <li><b>Search</b> ( <kbd>/</kbd> ) <b>matches titles</b>: type any piece of a title and the closest
+        titles come back, best first — a typo, a missing word or two words the wrong way round still
+        land the paper ( pasting a DOI works too ). Switch the dropdown to <kbd>full text</kbd> for the
+        boolean search over whole papers. <kbd>↑</kbd><kbd>↓</kbd> to pick, <kbd>↵</kbd> to add it to
+        the <i>target</i> tier — or drag a hit straight onto any tier.</li>
+    <li><b>Target tier</b>: the <kbd>◉ target</kbd> button on a tier header decides where <kbd>↵</kbd> adds land.</li>
+    <li><b>Rank</b>: every row is numbered inside its tier. <b>Type a number</b> into that box and press
+        <kbd>↵</kbd> to send the paper straight to that place — no scrolling, no dragging. Or grab the
+        <kbd>⠿</kbd> underneath to drag it, including into another tier; the little dropdown on the
+        right moves it between tiers without dragging.</li>
+    <li><b>Modalities</b> autocomplete from <code>config/methods.py</code> and arrive pre-filled from the
+        <code>prma modalities</code> stamp — <kbd>⚡ Auto-tag</kbd> back-fills every row that has none.</li>
+    <li><b>Tags</b> are yours. Three ways to put one on: type into a row's <kbd>+</kbd> box ;
+        <b>click a row to select it</b> ( <kbd>⌘</kbd>-click adds another, <kbd>⇧</kbd>-click takes the
+        range ) and click chips at the top to flip them on and off the whole selection ; or, with
+        nothing selected, click a chip to <b>paint</b> it and click rows to toggle it. <kbd>Esc</kbd>
+        clears.</li>
+    <li><b>Columns</b>: <kbd>＋ Column</kbd> adds another free-text column, double-click a column name to
+        rename it, shift-click to delete it.</li>
+    <li><b>Delete</b> a paper with <kbd>🗑</kbd> — the toast that pops up will undo it.</li>
+    <li><b>CSV</b> round-trips: unknown columns in an imported file become new columns here.</li>
+    <li>Everything saves to <code>output/cache/tiers.json</code> a moment after you stop typing
+        ( <kbd>⌘S</kbd> forces it ), and every version it replaces is kept in
+        <code>output/cache/tiers-history/</code>.</li>
+  </ul>
+  <div class="btns"><button data-act="ok">Got it</button></div>`));
+
+// ---------------------------------------------------------------------------
+labelTheme();
+syncHeadOffset();
+try { $("#smode").value = localStorage.getItem("prma-search-mode") || "title"; } catch(e){}
+labelMode();
+loadDoc().then(()=>{ syncHeadOffset(); pollRev(); });
+</script>
+</body>
+</html>

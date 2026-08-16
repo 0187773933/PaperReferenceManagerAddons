@@ -14,3 +14,5 @@ config/session.pkl
 *creds.json
 config/creds.json
 gitPushUpdate.sh
+method-images-selected.json
+*.csv

@@ -66,6 +66,20 @@ STATUS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 MD_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "md.html" )
 
+# The hand-curation surface : a drag-and-drop TIER LIST of the papers you've
+# decided are the premier references , with modality / tag / notes columns and
+# CSV in-out. Served at GET /tiers ; its document lives server-side ( see
+# src/db/tiers.py ) behind GET / POST /api/tiers .
+TIERS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "tiers.html" )
+
+# Its sibling , and the one built for this library's actual question : the same
+# curation surface , but the sections ARE tag sets ( "fMRI" , "EEG" , "fMRI EEG"
+# for the studies that ran both ) , so where a paper sits and what it's tagged
+# are the same fact. Served at GET /sort ; document behind GET / POST /api/sort .
+SORT_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "sort.html" )
+
 
 class _RequestLog:
 	"""Thread-safe ring of recent /exists queries + running totals, read by the
@@ -197,6 +211,29 @@ class DashboardData:
 			self.built_at      = pools.get( "built_at" )
 			self.lib_count     = pools.get( "lib_count" , 0 )
 			self.missing_count = pools.get( "missing_count" , len( self.references ) )
+		self._start_text_fold()
+
+	def _start_text_fold( self ):
+		"""Fold every pool's searchable text -- accents stripped , punctuation
+		flattened , DOI / key / journal folded in ( see index.prepare_rows ) --
+		so a colon , a slash or an umlaut can't hide a paper from search.
+
+		In the BACKGROUND : the library's haystacks carry each paper's whole OCR
+		body , ~20s of string work across a big library , and neither startup nor
+		the first query should wait on it. A search that lands mid-fold is still
+		correct -- index.search folds whatever rows it meets unfolded , the pass
+		is per row and idempotent -- it just pays for those rows itself."""
+		pools = ( self.references , self.cited_by , self.library )
+
+		def work():
+			from ..dashboard import index as dash_index
+			for pool in pools:
+				try:
+					dash_index.prepare_rows( pool )
+				except Exception as e:
+					print( f"dashboard :: search text fold failed ( {e} )" )
+
+		threading.Thread( target=work , daemon=True , name="prma-search-fold" ).start()
 
 	def load_from_disk( self ):
 		"""Populate pools from a previously persisted index, if one exists.
@@ -312,7 +349,12 @@ class DashboardData:
 		return bool( skipped )
 
 	def search( self , query , pool , sort , limit , offset=0 , direction=None ,
-			hide_skipped=True ):
+			hide_skipped=True , mode="text" ):
+		"""mode="text" : the dashboard's boolean full-text search.
+		mode="title"   : the /sort + /tiers boards' fuzzy TITLE lookup -- type
+		part of a title , get the closest titles back , best first ( see
+		dashboard/index.py :: title_search ). `sort` / `direction` don't apply
+		there : the order IS the closeness."""
 		from ..dashboard import index as dash_index
 		skipped = self.skipped   # copy-on-write set : safe to read lock-free
 		with self._data_lock:
@@ -324,9 +366,13 @@ class DashboardData:
 			# correct ( the data is still in the pool -- this is just the view ).
 			if hide_skipped and skipped:
 				rows = [ r for r in rows if r.get( "key" ) not in skipped ]
-			total , page = dash_index.search(
-				rows , query , sort=sort , limit=limit ,
-				offset=offset , direction=direction )
+			if mode == "title":
+				total , page , fuzzy = dash_index.title_search(
+					rows , query , limit=limit , offset=offset )
+			else:
+				total , page , fuzzy = dash_index.search(
+					rows , query , sort=sort , limit=limit ,
+					offset=offset , direction=direction )
 		results = []
 		for r in page:
 			pub = dash_index.to_public( r )
@@ -335,9 +381,13 @@ class DashboardData:
 		return {
 			"status":  "ready" ,
 			"pool":    pool ,
+			"mode":    mode ,
 			"total":   total ,
 			"offset":  offset ,
 			"shown":   len( page ) ,
+			# True -> the query matched nothing and these are near-miss titles ,
+			# so the page can say so instead of pretending they're hits.
+			"fuzzy":   fuzzy ,
 			"results": results ,
 		}
 
@@ -429,6 +479,156 @@ class FigureSelectionState:
 			self._persist_locked()
 
 
+class BoardState:
+	"""In-memory holder for ONE hand-curated board document -- the tier list
+	( src/db/tiers.py , /tiers ) or the tag-sectioned sort board
+	( src/db/sortboard.py , /sort ). Both are the same kind of thing to the
+	server : one JSON document the page owns.
+
+	Unlike the figure curation next door -- which is toggled one id at a time --
+	a board page owns a whole DOCUMENT ( group order , per-row tag / notes cells ,
+	the column set ) , so it posts the document back whole and this replaces it
+	wholesale under a lock. `rev` bumps on every accepted write ; the page polls
+	it ( GET /api/<board>/version ) and reloads when a SECOND tab moved the
+	document underneath it , which is the only concurrency this ever sees.
+
+	`store` is the src/db module that owns the file -- load / save / default_doc
+	is the whole interface , which is why a second board cost a module and one
+	more instance rather than a second copy of any of this."""
+
+	def __init__( self , args , store , name ):
+		self.args  = args
+		self.store = store
+		self.name  = name
+		self._lock = threading.Lock()
+		self.doc   = None
+		self.rev   = 0
+
+	def load( self ):
+		"""Populate from disk ( call at startup ). Never raises."""
+		try:
+			with self._lock:
+				self.doc = self.store.load( self.args )
+		except Exception as e:
+			print( f"{self.name} :: could not load the board ( {e} )" )
+			self.doc = None
+
+	def snapshot( self ):
+		with self._lock:
+			doc = self.doc if self.doc is not None else self.store.default_doc()
+			return { "rev": self.rev , "doc": doc }
+
+	def replace( self , doc ):
+		"""Write a whole document ( the page's save ). Returns the normalized
+		document as stored , with the new rev."""
+		with self._lock:
+			self.doc = self.store.save( self.args , doc )
+			self.rev += 1
+			return { "rev": self.rev , "doc": self.doc }
+
+
+class PaperMeta:
+	"""The per-row lookup both board pages ask for : which links a paper can
+	offer ( PDF / figures / MD / Methods ) and -- on request -- the modality
+	stamp ` prma modalities ` already pinned on it , which is what lets a freshly
+	added row arrive pre-tagged fMRI / EEG instead of blank ( and , on /sort ,
+	drop straight into the section that says so ).
+
+	Everything but the stamp comes off the in-memory dashboard index and is
+	free ; the stamp costs one paper-record read -- a few hundred KB -- so it is
+	memoized per key against the record's mtime and only read when the page
+	actually asks for modalities. One instance , shared by every board."""
+
+	def __init__( self , args , dash ):
+		self.args    = args
+		self.dash    = dash
+		self._mods   = {}      # paper key -> ( mtime , used[] , inferred , stale )
+		self._lib    = None    # paper key -> library row , rebuilt when the index
+		self._lib_at = None    #              is ( keyed on dash.built_at )
+
+	def _lib_index( self ):
+		"""key -> library row , off the dashboard's in-memory pool. Rebuilt only
+		when the index itself was rebuilt."""
+		built = getattr( self.dash , "built_at" , None )
+		if self._lib is None or self._lib_at != built:
+			rows = getattr( self.dash , "library" , None ) or []
+			self._lib    = { r.get( "key" ) : r for r in rows if r.get( "key" ) }
+			self._lib_at = built
+		return self._lib
+
+	def _modalities( self , key ):
+		"""( used , inferred , stale ) for one paper from the ` prma modalities `
+		stamp. stale = the stamp was minted under a different methods.py
+		vocabulary , so it is shown but flagged. ( [] , False , False ) when the
+		paper has no record or was never stamped."""
+		from ..db    import papers as papers_db
+		from ..tasks import modalities as modalities_task
+		try:
+			p     = papers_db.paper_path( self.args , key )
+			mtime = p.stat().st_mtime if p.exists() else 0.0
+		except Exception:
+			return [] , False , False
+		if not mtime:
+			return [] , False , False
+		hit = self._mods.get( key )
+		if hit and hit[ 0 ] == mtime:
+			return hit[ 1 ] , hit[ 2 ] , hit[ 3 ]
+		used , inferred , stale = [] , False , False
+		try:
+			paper = papers_db.load( self.args , key ) or {}
+			rec   = modalities_task.read( self.args , paper )
+			if rec is None:
+				# Never stamped , or stamped under an older vocabulary. Show the
+				# old answer rather than nothing , flagged so the page can say so.
+				raw   = paper.get( modalities_task.STAMP_KEY )
+				rec   = raw if isinstance( raw , dict ) else {}
+				stale = bool( rec )
+			used     = [ m for m in ( rec.get( "used" ) or [] ) if isinstance( m , str ) ]
+			inferred = bool( rec.get( "inferred" ) )
+		except Exception:
+			pass
+		self._mods[ key ] = ( mtime , used , inferred , stale )
+		return used , inferred , stale
+
+	def meta( self , keys , want_mods=False ):
+		"""What a page needs to draw a row it only knows the KEY of : the library
+		identity ( title / DOI / year ) , which links exist for it , and
+		optionally the modality stamp. Keys that aren't library papers come back
+		with in_library=false and nothing else -- the page already holds their
+		title / DOI from the search hit that added them."""
+		lib , out = self._lib_index() , {}
+		for key in ( keys or [] )[ :500 ]:
+			if not isinstance( key , str ) or not key:
+				continue
+			row   = lib.get( key ) or {}
+			entry = {
+				"in_library": bool( row ) ,
+				"title":      row.get( "title" ) or "" ,
+				"doi":        row.get( "doi" ) or "" ,
+				"year":       row.get( "year" ) ,
+				"wid":        row.get( "wid" ) or "" ,
+				"cited_by":   row.get( "cited_by" ) ,
+				"pdf":        bool( row.get( "pdf" ) ) ,
+				"montage":    row.get( "montage" ) or "" ,
+				"has_md":     bool( row.get( "has_md" ) ) ,
+				"methods":    "" ,
+			}
+			prefix = utils.doi_to_filename( key ) or ""
+			if prefix:
+				try:
+					if self.args.output.joinpath( "methods" , f"{prefix}.txt" ).exists():
+						entry[ "methods" ] = f"/methods/{quote( prefix )}.txt"
+				except Exception:
+					pass
+			if want_mods:
+				used , inferred , stale = self._modalities( key )
+				entry[ "mods" ]     = used
+				entry[ "inferred" ] = inferred
+				entry[ "stale" ]    = stale
+			out[ key ] = entry
+		return out
+
+
 # The two figure reports , by mode name ( == figure_state collection == the
 # /api/<mode>/… prefix the page fetches ). Both modules expose the same three
 # entry points -- report_path / report_is_stale / rebuild -- which is all the
@@ -484,6 +684,22 @@ def _load_md_html():
 		return MD_HTML_PATH.read_text( encoding="utf-8" )
 	except Exception as e:
 		return f"<h1>md.html not found</h1><pre>{e}</pre>"
+
+
+def _load_tiers_html():
+	"""Read the tier-list page fresh on each request. Falls back to a stub."""
+	try:
+		return TIERS_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>tiers.html not found</h1><pre>{e}</pre>"
+
+
+def _load_sort_html():
+	"""Read the sort-board page fresh on each request. Falls back to a stub."""
+	try:
+		return SORT_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>sort.html not found</h1><pre>{e}</pre>"
 
 
 # Serializes status recomputes so a flurry of /status loads can't kick off
@@ -1288,6 +1504,14 @@ class Handler( BaseHTTPRequestHandler ):
 	# which is also its figure_state collection and its /api/<mode>/… prefix , so a
 	# route only has to pull the name out of the path.
 	figstate: Dict[ str , "FigureSelectionState" ] = {}
+	# The hand-curated boards , injected at startup ; None in minimal mode.
+	#   tiers -> /tiers  ( buckets you place papers in )
+	#   sort  -> /sort   ( sections defined by the tags a paper carries )
+	# Both are the same BoardState over a different src/db store , and both draw
+	# their per-row links / modality stamps from the one shared papermeta.
+	tiers: "BoardState" = None
+	sort:  "BoardState" = None
+	papermeta: "PaperMeta" = None
 
 	def log_message( self , *_ ):
 		return
@@ -1439,6 +1663,15 @@ class Handler( BaseHTTPRequestHandler ):
 		except ( ValueError , TypeError ):
 			return default
 
+	def _board( self , path , suffix ):
+		"""'/api/sort' -> the sort BoardState , '/api/tiers/version' -> the tier
+		one , for the routes the two hand-curated boards share. None when `path`
+		isn't one of them."""
+		for name , board in ( ( "tiers" , self.tiers ) , ( "sort" , self.sort ) ):
+			if path == f"/api/{name}{suffix}":
+				return board
+		return None
+
 	def do_GET( self ):
 		path = urlparse( self.path ).path
 
@@ -1471,6 +1704,35 @@ class Handler( BaseHTTPRequestHandler ):
 
 		if path in ( "/errors" , "/errors.html" ):
 			self._send_html( 200 , _load_errors_html() )
+			return
+
+		if path in ( "/tiers" , "/tiers.html" , "/tierlist" ):
+			self._send_html( 200 , _load_tiers_html() )
+			return
+
+		if path in ( "/sort" , "/sort.html" ):
+			self._send_html( 200 , _load_sort_html() )
+			return
+
+		board = self._board( path , "" )
+		if board:
+			# The whole curated document , plus the modality vocabulary the page's
+			# autocomplete offers ( < --config >/methods.py -- the same list the
+			# figure reports' pills come from , so the two never drift ).
+			from ..utils import methods as methods_vocab
+			try:
+				vocab = list( methods_vocab.labels( self.dash.args ) )
+			except Exception:
+				vocab = []
+			self._send_json( 200 , { "ok": True , "modalities": vocab ,
+				**board.snapshot() } )
+			return
+
+		board = self._board( path , "/version" )
+		if board:
+			# Cheap "did another tab save" token , polled by the page ( same idea
+			# as the figure reports' /api/<mode>/version ).
+			self._send_json( 200 , { "rev": board.snapshot()[ "rev" ] } )
 			return
 
 		if path == "/api/errors":
@@ -1589,14 +1851,17 @@ class Handler( BaseHTTPRequestHandler ):
 			# hide_skipped defaults ON : skipped rows are filtered out unless the
 			# dashboard's "Show skipped" toggle asks for them ( hide_skipped=0 ).
 			hide = self._arg( qs , "hide_skipped" , "1" ) not in ( "0" , "false" , "no" )
+			# mode=title : fuzzy TITLE lookup instead of the boolean full-text
+			# search -- what the /sort and /tiers boards ask for.
 			self._send_json( 200 , self.dash.search(
 				self._arg( qs , "q" , "" ) ,
 				self._arg( qs , "pool" , "external" ) ,
-				self._arg( qs , "sort" , "lib_cites" ) ,
+				self._arg( qs , "sort" , "relevance" ) ,
 				self._arg_int( qs , "limit" , 100 ) ,
 				offset=self._arg_int( qs , "offset" , 0 ) ,
 				direction=self._arg( qs , "dir" , None ) ,
 				hide_skipped=hide ,
+				mode=self._arg( qs , "mode" , "text" ) ,
 			) )
 			return
 
@@ -1645,6 +1910,43 @@ class Handler( BaseHTTPRequestHandler ):
 				else:
 					st.set_skipped( ident , on )
 				self._send_json( 200 , { "ok": True , **st.snapshot() } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		board = self._board( urlparse( self.path ).path , "" )
+		if board:
+			# Save a board ( /api/tiers or /api/sort ). The page owns the document
+			# and posts it back WHOLE ( body : { "doc": { ... } } ) -- see
+			# src/db/tiers.py for why that's the right granularity here and what
+			# it does to protect the version it replaces.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				doc    = data.get( "doc" )
+				if not isinstance( doc , dict ):
+					self._send_json( 400 , { "ok": False , "error": "body needs a 'doc' object" } )
+					return
+				self._send_json( 200 , { "ok": True , **board.replace( doc ) } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		if self.path in ( "/api/paper-meta" , "/api/tiers/meta" ):
+			# Per-row lookup for the board pages : { "keys": [ ... ] , "mods": bool }.
+			# POST rather than GET because the key list is a few hundred DOIs long.
+			# ( /api/tiers/meta is the original spelling , kept working. )
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				keys   = data.get( "keys" )
+				if not isinstance( keys , list ):
+					self._send_json( 400 , { "ok": False , "error": "body needs a 'keys' list" } )
+					return
+				self._send_json( 200 , { "ok": True , "meta": self.papermeta.meta(
+					keys , want_mods=bool( data.get( "mods" ) ) ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
@@ -1763,7 +2065,10 @@ def run( args ):
 		# the minimal guards in do_GET / do_POST , so they never touch these.
 		Handler.dash     = None
 		Handler.worker   = None
-		Handler.figstate = {}
+		Handler.figstate  = {}
+		Handler.tiers     = None
+		Handler.sort      = None
+		Handler.papermeta = None
 		httpd   = ThreadingHTTPServer( ( args.host , args.port ) , Handler )
 		watched = "mtime-watched" if cache._watch_files else f"ttl={args.ttl}s"
 		base    = f"http://{args.host}:{args.port}"
@@ -1787,6 +2092,17 @@ def run( args ):
 		_st = FigureSelectionState( args , _mode )
 		_st.load()
 		Handler.figstate[ _mode ] = _st
+
+	# The hand-curated boards ( /tiers , /sort ) : one document each , loaded once
+	# and served to whatever browser opens the page , plus the shared per-row
+	# lookup they both draw links and modality stamps from.
+	from ..db import tiers as _tiers_db , sortboard as _sort_db
+	Handler.papermeta = PaperMeta( args , dash )
+	for _attr , _store , _name in ( ( "tiers" , _tiers_db , "tiers" ) ,
+	                                ( "sort"  , _sort_db  , "sort"  ) ):
+		_board = BoardState( args , _store , _name )
+		_board.load()
+		setattr( Handler , _attr , _board )
 
 	# Both figure reports are pre-built artifacts served verbatim. If the PAGE
 	# template , a report's own renderer , or ( for method-images ) the keyword list
@@ -1849,6 +2165,8 @@ def run( args ):
 	header = [
 		f"exists server  {base}/exists   (manager={args.manager}, {watched})" ,
 		f"dashboard      {base}/          ({dash_state})" ,
+		f"sort board     {base}/sort     (hand-curated , sections ARE tag sets ; CSV in / out)" ,
+		f"tier list      {base}/tiers    (hand-curated buckets ; CSV in / out)" ,
 		f"errors         {base}/errors   (pipeline problems log)" ,
 		f"status         {base}/status   (pipeline completeness ; run ` prma status `)" ,
 		f"design figures {base}/method-images  (caption-matched ; run ` prma method-images `)" ,

@@ -158,6 +158,8 @@
     <h1>prma dashboard</h1>
     <div class="counts" id="counts"></div>
     <div class="grow"></div>
+    <a class="navlink" href="/sort" title="Your hand-sorted premier references — one numbered list you drag into order, tagged fMRI / EEG / anything, with notes and CSV in / out">⬒ Sort</a>
+    <a class="navlink" href="/tiers" title="The other board: plain tier buckets you place papers in">★ Tiers</a>
     <a class="navlink" href="/status" title="How far each paper has made it through the pipeline">▦ Status</a>
     <a class="navlink" href="/method-images" title="Figures whose captions describe a model's design — architecture / pipeline diagrams">◫ Method Images</a>
     <a class="navlink" href="/images" title="Every figure the pipeline cropped — no keyword filter, with its own selection">▣ All Figures</a>
@@ -287,6 +289,13 @@ function renderTabs(){
 // you first click the column. Each carries its own cell renderer so the body
 // stays in sync with the header and columns can differ per tab.
 const PAGE = 100;
+// Search-result ranking ( src/dashboard/index.py :: _relevance ) : how much the
+// row looks like the paper you asked for -- the query as the title beats the
+// query mentioned on page 9, whatever the citation counts say. Only shown while
+// there IS a query ; click any other column to rank your own way instead.
+const COL_REL = { key:"relevance", label:"Rel.", def:"desc",
+  title:"How well this paper matches your search ( title matches rank highest )",
+  cell:r=>`<td class="num muted" title="relevance score">${r.rel!=null?r.rel:""}</td>` };
 const COLS_BASE = [
   { key:"lib_cites", label:"Conn.", title:"How many of your library papers connect to this work", def:"desc",
     cell:r=>`<td class="num">${r.lib_cites!=null?r.lib_cites:"·"}</td>` },
@@ -327,6 +336,7 @@ const COL_SKIP = { key:null, label:"",
           `${r.skipped?'Unskip':'Skip'}</button></td>` };
 function cols(){
   const c = COLS_BASE.slice();                  // [..., Year, Links]
+  if(cur.q) c.unshift(COL_REL);                 // ranking column, only while searching
   if(activeTab==="library") c.splice(c.length-1, 0, COL_ADDED); // before Links
   c.splice(c.length-1, 0, COL_SKIP);            // Skip sits just before Links
   if(activeTab==="library") c.push(COL_CODE);   // Code sits just after Links
@@ -403,6 +413,7 @@ function renderShell(){
 
 function showCountStatus(){
   $("#status").textContent =
+    (cur.fuzzy?"nothing matched exactly — closest titles · ":"")+
     `${cur.offset.toLocaleString()} of ${cur.total.toLocaleString()} `+
     `${TAB_LABEL[activeTab]||"results"}`+(cur.q?` for “${cur.q}”`:"")+
     (showSkipped?" · incl. skipped":"")+
@@ -419,7 +430,7 @@ async function loadMore(){
   try { d = await (await fetch(url)).json(); }
   catch(e){ cur.loading=false; return; }
   if(d.status!=="ready"){ cur.loading=false; return; }
-  cur.total = d.total;
+  cur.total = d.total; cur.fuzzy = !!d.fuzzy;
   const tb = $("#tb");
   if(tb && d.results.length) tb.insertAdjacentHTML("beforeend", d.results.map(rowHtml).join(""));
   cur.offset += d.results.length;
@@ -456,6 +467,10 @@ async function renderAuthors(){
 function newSearch(){
   if(!ready) return;
   cur.q = $("#q").value.trim();
+  // Untouched sort -> rank by how well each row matches the query while there
+  // IS one, and fall back to Conn. when the box is cleared. Clicking a column
+  // takes over from here ( pristine goes false ) and is never overridden.
+  if(cur.pristine) cur.sortStack = [ { key: cur.q ? "relevance" : "lib_cites", dir:"desc" } ];
   cur.offset = 0; cur.total = 0; cur.done = false; cur.loading = false;
   window.scrollTo(0,0);
   if(activeTab==="authors"){ renderAuthors(); return; }
@@ -494,7 +509,7 @@ async function refreshInPlace(){
   try { d = await (await fetch(url)).json(); }
   catch(e){ cur.loading=false; return; }
   if(d.status!=="ready"){ cur.loading=false; return; }
-  cur.total = d.total;
+  cur.total = d.total; cur.fuzzy = !!d.fuzzy;
   renderShell();
   const tb = $("#tb");
   if(tb && d.results.length) tb.insertAdjacentHTML("beforeend", d.results.map(rowHtml).join(""));

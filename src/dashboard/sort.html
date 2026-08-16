@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma sort</title>
+<!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<style>
+  :root {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38;
+    --chip:#eceff3; --visited:#CEA052; --warn:#c1670c; --row:#ffffff;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
+    --chip:#262c37; --visited:#CEA052; --warn:#e8a33d; --row:#141821;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header { position:sticky; top:0; z-index:20; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 16px; }
+  .titlebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .counts { color:var(--muted); font-size:12px; display:flex; gap:12px; flex-wrap:wrap; }
+  .counts b { color:var(--fg); font-weight:600; }
+  .grow { flex:1; }
+  button {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:6px 11px; cursor:pointer; font-size:13px;
+  }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.primary { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  button.on { border-color:var(--accent); color:var(--accent); }
+  .navlink {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:6px 11px; font-size:13px; text-decoration:none;
+  }
+  .navlink:hover { border-color:var(--accent); }
+  .savestate { font-size:12px; color:var(--muted); min-width:104px; text-align:right; }
+  .savestate.dirty { color:var(--warn); }
+
+  .toolbar { display:flex; gap:10px; align-items:flex-start; margin-top:9px; flex-wrap:wrap; }
+  .searchwrap { position:relative; flex:1; min-width:320px; }
+  input[type=search], input[type=text] {
+    width:100%; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:9px 12px; font-size:14px;
+  }
+  input[type=search]:focus, input[type=text]:focus { outline:none; border-color:var(--accent); }
+  select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 9px; font-size:13px; }
+  .results {
+    display:none; position:absolute; left:0; right:0; top:calc(100% + 5px); z-index:40;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    max-height:56vh; overflow:auto; box-shadow:0 12px 34px rgba(0,0,0,.30);
+  }
+  .results.show { display:block; }
+  .hit { display:flex; gap:10px; align-items:flex-start; padding:8px 11px; border-bottom:1px solid var(--line); cursor:grab; }
+  .hit:last-child { border-bottom:none; }
+  .hit.sel { background:var(--panel2); }
+  .hit .ht { font-weight:500; }
+  .hit .hm { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .hit .in { flex:none; color:var(--green); font-size:12px; white-space:nowrap; padding-top:3px; }
+  .rhint { padding:7px 11px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--line); }
+
+  .paintbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
+  .pblabel { color:var(--muted); font-size:12px; }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+  .chip {
+    display:inline-flex; align-items:center; gap:4px; font-size:12px; padding:2px 8px;
+    border-radius:11px; background:var(--chip); color:var(--fg); border:1px solid transparent;
+    cursor:pointer; user-select:none; white-space:nowrap;
+  }
+  .chip:hover { border-color:var(--muted); }
+  .chip.armed { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 2px rgba(62,166,255,.18); }
+  /* With rows selected the top chips become checkboxes for them : solid = every
+     selected row has it , dashed = only some do. */
+  .chip.has  { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  .chip.some { border-color:var(--accent); border-style:dashed; color:var(--accent); }
+  .chip .x { color:var(--muted); font-size:11px; cursor:pointer; }
+  .chip .x:hover { color:var(--warn); }
+  /* Tags from the modality vocabulary ( config/methods.py ) read differently
+     from the ones you invented, so a mistyped "fmri" is obvious. */
+  .chip.vocab { background:#1a2740; color:#7fb6ff; }
+  :root[data-theme="light"] .chip.vocab { background:#e4eefc; color:#1a4d8f; }
+  .chip.ghost { background:transparent; border:1px dashed var(--line); color:var(--muted); }
+  .newtag { width:120px !important; padding:3px 8px !important; font-size:12px !important; border-radius:11px !important; }
+  body.painting .row { cursor:crosshair; }
+  .paintnote { color:var(--accent); font-size:12px; }
+
+  main { padding:12px 16px 140px; }
+  .colhead, .row { display:grid; grid-template-columns:var(--grid); align-items:stretch; }
+  .colhead {
+    position:sticky; top:var(--headh,132px); z-index:9; background:var(--bg);
+    color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    border-bottom:1px solid var(--line); padding:4px 0;
+  }
+  .colhead > div { padding:2px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .colhead .colname { cursor:pointer; }
+  #board { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--panel); margin-top:2px; }
+  #board.dropinto { box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .row { border-bottom:1px solid var(--line); background:var(--row); }
+  .row:last-child { border-bottom:none; }
+  .row:hover { background:var(--panel2); }
+  .row.dragging { opacity:.4; }
+  .row.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
+  .row.drop-after  { box-shadow:inset 0 -2px 0 var(--accent); }
+  .row.selected { background:color-mix(in srgb, var(--accent) 9%, var(--row)); }
+  .row.selected .c:first-child { box-shadow:inset 3px 0 0 var(--accent); }
+  .row.selected .c { border-top:1px solid var(--accent); border-bottom:1px solid var(--accent); }
+  .row.flash { animation:flash 1.1s ease-out; }
+  @keyframes flash { from { background:color-mix(in srgb, var(--accent) 26%, transparent); } }
+  .row.hide { display:none; }
+  .c { padding:7px 8px; min-width:0; border-right:1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+  .c:last-child { border-right:none; }
+  /* The row's position : type a number in to send it there, or grab the grip
+     underneath and drag it. */
+  .numc { text-align:center; padding:7px 4px; }
+  .numin {
+    width:38px; text-align:center; background:transparent; border:1px solid transparent;
+    color:var(--fg); border-radius:6px; padding:2px 3px; font:600 13px/1.2 inherit;
+    font-variant-numeric:tabular-nums;
+  }
+  .numin:hover { border-color:var(--line); }
+  .numin:focus { outline:none; border-color:var(--accent); background:var(--panel2); }
+  .numc .grip { display:block; cursor:grab; font-size:11px; color:var(--muted); opacity:.6; user-select:none; }
+  .numc .grip:hover { opacity:1; color:var(--accent); }
+  .numc .grip:active { cursor:grabbing; }
+  .titlec .tt { font-weight:500; }
+  .titlec a.titlelink { color:var(--fg); text-decoration:none; }
+  .titlec a.titlelink:hover { color:var(--accent); }
+  .titlec a.titlelink:visited { color:var(--visited); }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .links { margin-top:3px; }
+  .links a { color:var(--accent); text-decoration:none; margin-right:8px; font-size:12px; white-space:nowrap; }
+  .links a:hover { text-decoration:underline; }
+  .loose { color:var(--warn); font-size:11px; }
+  .cellchips { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+  .chipin {
+    width:52px; min-width:52px; background:transparent; border:1px dashed var(--line);
+    color:var(--fg); border-radius:11px; padding:2px 7px; font-size:12px;
+  }
+  .chipin:focus { outline:none; width:120px; min-width:120px; border-style:solid; border-color:var(--accent); }
+  .notecell textarea {
+    width:100%; min-height:44px; resize:vertical; background:transparent; color:var(--fg);
+    border:1px solid transparent; border-radius:6px; padding:4px 6px; font:13px/1.4 inherit;
+  }
+  .notecell textarea:hover { border-color:var(--line); }
+  .notecell textarea:focus { outline:none; border-color:var(--accent); background:var(--panel2); min-height:110px; }
+  .rowtools { display:flex; gap:5px; align-items:flex-start; justify-content:flex-end; }
+  .delbtn { padding:2px 8px; font-size:13px; color:var(--muted); }
+  .delbtn:hover { color:#fff; background:#c0392b; border-color:#c0392b; }
+  .empty { color:var(--muted); padding:34px; text-align:center; }
+
+  #acpop {
+    display:none; position:absolute; z-index:80; min-width:170px; max-height:220px; overflow:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    box-shadow:0 10px 28px rgba(0,0,0,.32); padding:4px;
+  }
+  #acpop.show { display:block; }
+  .acopt { padding:5px 9px; border-radius:6px; font-size:13px; cursor:pointer; white-space:nowrap; }
+  .acopt.sel, .acopt:hover { background:var(--panel2); color:var(--accent); }
+  .acnew { color:var(--muted); font-size:11px; padding:4px 9px; }
+
+  #overlay { display:none; position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.45); align-items:center; justify-content:center; }
+  #overlay.show { display:flex; }
+  .sheet { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; max-width:580px; width:calc(100% - 40px); max-height:80vh; overflow:auto; }
+  .sheet h3 { margin:0 0 10px; font-size:15px; }
+  .sheet p { color:var(--muted); font-size:13px; margin:0 0 12px; }
+  .sheet .btns { display:flex; gap:9px; justify-content:flex-end; flex-wrap:wrap; margin-top:14px; }
+  .sheet kbd { background:var(--chip); border-radius:4px; padding:1px 5px; font-size:11px; }
+  .sheet ul { margin:0 0 12px 18px; padding:0; color:var(--muted); font-size:13px; }
+  .sheet li { margin:3px 0; }
+  #toast {
+    position:fixed; right:18px; bottom:18px; z-index:90; display:none; align-items:center; gap:12px;
+    background:var(--panel); border:1px solid var(--line); border-radius:9px;
+    padding:10px 14px; font-size:13px; box-shadow:0 6px 22px rgba(0,0,0,.28);
+  }
+  #toast.show { display:flex; }
+  #toast button { padding:3px 9px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma sort</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+    <a class="navlink" href="/tiers" title="The other board: tier buckets you place papers in">★ Tiers</a>
+    <select id="orderby" title="Reorder the whole list once — the order stays yours afterwards">
+      <option value="">⇅ Order by…</option>
+      <option value="tags">tags ( group them )</option>
+      <option value="year">year, newest first</option>
+      <option value="year_asc">year, oldest first</option>
+      <option value="cites">citations</option>
+      <option value="title">title A–Z</option>
+      <option value="added">when added</option>
+    </select>
+    <button id="automove" title="Off: tagging never moves a row. On: a row jumps to sit with the others sharing its tags.">⇥ Auto-move: off</button>
+    <button id="autotag" title="Tag every untagged row from its ` prma modalities ` stamp">⚡ Auto-tag</button>
+    <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
+    <button id="importbtn" title="Import a CSV — merge into this board or replace it">⇩ Import CSV</button>
+    <button id="exportbtn" title="Download the whole board as CSV">⇧ Export CSV</button>
+    <button id="pulltiers" title="Copy every paper from the /tiers board into this one">⇄ Pull from Tiers</button>
+    <button id="helpbtn" title="How this page works">?</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+    <div class="savestate" id="savestate">loading…</div>
+  </div>
+  <div class="toolbar">
+    <div class="searchwrap">
+      <input type="search" id="q" autocomplete="off"
+        placeholder='Type any part of a title…   ↵ or double-click a hit to add it'>
+      <div class="results" id="results"></div>
+    </div>
+    <select id="smode" title="Titles: type any part of a title, typos and all — closest first. Full text: the dashboard's boolean search over everything.">
+      <option value="title">match titles</option>
+      <option value="text">full text</option>
+    </select>
+    <select id="pool" title="Which pool to search">
+      <option value="library">In library</option>
+      <option value="external">Missing ( all )</option>
+      <option value="references">In bibliographies</option>
+      <option value="cited_by">Newer / citing</option>
+    </select>
+    <select id="addwhere" title="Where a paper you add from search lands in the list">
+      <option value="bottom">add to bottom</option>
+      <option value="top">add to top</option>
+      <option value="placed">add after last sorted</option>
+    </select>
+    <input type="text" id="filter" style="max-width:220px" placeholder="Filter the list…" autocomplete="off">
+  </div>
+  <div class="paintbar">
+    <span class="pblabel">Tags:</span>
+    <div class="chips" id="tagchips"></div>
+    <span class="paintnote" id="paintnote"></span>
+  </div>
+</header>
+<main>
+  <div class="colhead" id="colhead"></div>
+  <div id="board"></div>
+</main>
+<div id="acpop"></div>
+<div id="overlay"><div class="sheet" id="sheet"></div></div>
+<div id="toast"></div>
+<script>
+// ---------------------------------------------------------------------------
+// The sort board : ONE list, in your order, numbered 1..N. No groups -- what a
+// paper IS you say with tags, where it SITS you say by dragging it. Tagging
+// never moves a row unless you turn Auto-move on. See src/db/sortboard.py .
+// ---------------------------------------------------------------------------
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+const mdHref = k => "/md/" + encodeURIComponent(k).replace(/%2F/gi, "/");
+const fileStem = k => String(k||"").replace(/[\/\\]/g, "_");
+
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48);
+const nowISO = () => new Date().toISOString();
+const lc = s => String(s||"").toLowerCase();
+
+let DOC   = { version:1, options:{auto_move:false}, columns:[{id:"notes",label:"Notes"}], items:[], vocab:{tags:[]} };
+let REV   = 0;
+let VOCAB = [];             // modality vocabulary ( config/methods.py )
+let META  = {};             // paper key -> /api/paper-meta entry
+let armed = null;           // tag armed for click-to-tag painting
+let SEL   = new Set();      // keys of the selected rows ( outlined ) -- see selectRow
+let selAnchor = null;       // where a shift-click range starts from
+let dirty = false, saving = false, saveTimer = null;
+
+function findItem(key){
+  const i = DOC.items.findIndex(x=>x.key===key);
+  return i<0 ? null : { idx:i, it:DOC.items[i] };
+}
+// Every tag the chips offer : the modality vocabulary, the document's own tag
+// list ( which is what makes an invented tag survive a restart ), and anything
+// actually in use.
+function tagOptions(){
+  const s = new Set(VOCAB);
+  (DOC.vocab.tags||[]).forEach(t=>s.add(t.name));
+  DOC.items.forEach(it=>(it.tags||[]).forEach(t=>s.add(t)));
+  return Array.from(s);
+}
+const isVocab = t => VOCAB.some(v=>lc(v)===lc(t));
+const tagSig  = it => (it.tags||[]).map(lc).sort().join("|");
+
+// ---- load / save ----------------------------------------------------------
+function markDirty(){
+  dirty = true;
+  $("#savestate").textContent = "unsaved…";
+  $("#savestate").classList.add("dirty");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 700);
+}
+async function save(){
+  clearTimeout(saveTimer);
+  if(saving){ saveTimer = setTimeout(save, 400); return; }
+  saving = true;
+  try {
+    const r = await (await fetch("/api/sort", { method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ doc: DOC }) })).json();
+    if(r && r.ok){
+      REV = r.rev; dirty = false;
+      $("#savestate").classList.remove("dirty");
+      $("#savestate").textContent = "saved " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+    } else $("#savestate").textContent = "save failed";
+  } catch(e){ $("#savestate").textContent = "save failed ( offline? )"; }
+  saving = false;
+}
+async function loadDoc(){
+  const d = await (await fetch("/api/sort")).json();
+  DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
+  if(!DOC.options) DOC.options = { auto_move:false };
+  dirty = false;
+  $("#savestate").classList.remove("dirty");
+  $("#savestate").textContent = DOC.updated_at ? ("saved " + DOC.updated_at.replace("T"," ").slice(0,16)) : "empty board";
+  renderAll();
+  fetchMeta(DOC.items.map(it=>it.key));
+}
+async function pollRev(){
+  try {
+    const d = await (await fetch("/api/sort/version")).json();
+    if(d && d.rev !== REV && !dirty && !saving){ await loadDoc(); toast("Reloaded — the board changed in another tab"); }
+  } catch(e){}
+  setTimeout(pollRev, 6000);
+}
+async function fetchMeta(keys, wantMods){
+  keys = Array.from(new Set(keys.filter(k=>k && (wantMods || !META[k]))));
+  if(!keys.length) return {};
+  const got = {};
+  for(let i=0; i<keys.length; i+=60){
+    try {
+      const r = await (await fetch("/api/paper-meta", { method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ keys: keys.slice(i,i+60), mods: !!wantMods }) })).json();
+      Object.assign(META, r.meta || {});
+      Object.assign(got,  r.meta || {});
+    } catch(e){}
+  }
+  repaintLinks();
+  return got;
+}
+
+// ---- rendering ------------------------------------------------------------
+function gridTemplate(){
+  const n = DOC.columns.length;
+  const min = n > 3 ? "112px" : "150px";
+  return `52px minmax(${n>3?"200px":"250px"},2.2fr) minmax(170px,1.1fr) `+
+         DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ")+` 54px`;
+}
+function renderColHead(){
+  document.documentElement.style.setProperty("--grid", gridTemplate());
+  $("#colhead").innerHTML = `<div style="text-align:right">#</div><div>Paper</div><div>Tags</div>`+
+    DOC.columns.map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
+    `<div></div>`;
+}
+function rowLinks(it){
+  const m = META[it.key] || {};
+  const doi = it.doi || m.doi || "", wid = it.wid || m.wid || "";
+  const out = [];
+  if(doi){
+    out.push(`<a href="https://doi.org/${esc(doi)}" target="_blank" rel="noopener">DOI</a>`);
+    out.push(`<a href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">Proxy</a>`);
+  }
+  if(m.pdf)       out.push(`<a href="/pdf?key=${encodeURIComponent(it.key)}" target="_blank">PDF</a>`);
+  else if(it.pdf) out.push(`<a href="${esc(it.pdf)}" target="_blank" rel="noopener">PDF</a>`);
+  if(wid)       out.push(`<a href="https://openalex.org/${esc(wid)}" target="_blank" rel="noopener">OA</a>`);
+  if(m.montage) out.push(`<a href="${esc(m.montage)}" target="_blank" title="Figure montage">Figures</a>`);
+  if(m.has_md)  out.push(`<a href="${mdHref(it.key)}" class="mdlink" target="_blank" rel="noopener" title="The rendered Markdown, with figures">MD</a>`);
+  if(m.methods) out.push(`<a href="${esc(m.methods)}" target="_blank" title="The extracted Methods section">Methods</a>`);
+  return out.join(" ");
+}
+function tagsCell(it){
+  return `<div class="cellchips">`+
+    (it.tags||[]).map(v=>`<span class="chip ${isVocab(v)?'vocab':''}" data-val="${esc(v)}">${esc(v)}`+
+      `<span class="x" data-drop="${esc(v)}" title="Remove">×</span></span>`).join("")+
+    `<input class="chipin" placeholder="+" autocomplete="off"></div>`;
+}
+function rowHtml(it, n){
+  const m = META[it.key] || {};
+  const title = it.title || m.title || it.key;
+  const doi   = it.doi || m.doi || "";
+  const year  = it.year || m.year || "";
+  const inner = doi
+    ? `<a class="titlelink" href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">${esc(title)}</a>`
+    : esc(title);
+  const loose = (m.in_library === false)
+    ? ` <span class="loose" title="Not matched to a paper in your library — links other than the DOI are unavailable">not in library</span>` : "";
+  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
+    `<div class="c numc">`+
+      `<input class="numin" value="${n}" title="Type a position and press ↵ to send it there" `+
+        `inputmode="numeric" autocomplete="off">`+
+      `<span class="grip" title="Drag to move it up or down">⠿</span></div>`+
+    `<div class="c titlec">`+
+      `<div class="tt">${inner}${loose}</div>`+
+      `<div class="meta">${year?esc(year):""}${it.journal?" · "+esc(it.journal):""}<span class="mkey"> · ${esc(it.key)}</span></div>`+
+      `<div class="links" data-links="1">${rowLinks(it)}</div>`+
+    `</div>`+
+    `<div class="c" data-cell="tags">${tagsCell(it)}</div>`+
+    DOC.columns.map(c=>`<div class="c notecell"><textarea data-field="${esc(c.id)}" `+
+      `placeholder="${esc(c.label)}…" spellcheck="false">${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
+    `<div class="c rowtools">`+
+      `<button class="delbtn" data-act="remove" title="Delete this paper from the board ( undoable )">🗑</button>`+
+    `</div>`+
+  `</div>`;
+}
+// A full redraw keeps whatever you were typing in : the caret is restored to the
+// same field afterwards, so a re-render never eats a word of a note.
+function renderBoard(){
+  const a = document.activeElement;
+  let focus = null;
+  if(a && a.closest && a.closest(".row")){
+    focus = { key: a.closest(".row").dataset.key,
+              field: a.dataset ? a.dataset.field : null,
+              chip: a.classList.contains("chipin"),
+              num:  a.classList.contains("numin"),
+              start: a.selectionStart, end: a.selectionEnd, val: a.value };
+  }
+  $("#board").innerHTML = DOC.items.length
+    ? DOC.items.map((it,i)=>rowHtml(it, i+1)).join("")
+    : `<div class="empty">Nothing here yet — search above and press ↵ ( or double-click a hit ) to add papers.</div>`;
+  applyFilter();
+  if(focus){
+    const row = rowEl(focus.key);
+    if(row){
+      const el = focus.chip ? row.querySelector(".chipin")
+               : focus.num  ? row.querySelector(".numin")
+                            : row.querySelector(`[data-field="${focus.field}"]`);
+      if(el){
+        if(focus.chip && focus.val != null) el.value = focus.val;
+        el.focus();
+        try { el.setSelectionRange(focus.start, focus.end); } catch(e){}
+      }
+    }
+  }
+}
+function renderCounts(){
+  const n = DOC.items.length;
+  const tagged = DOC.items.filter(it=>(it.tags||[]).length).length;
+  $("#counts").innerHTML = `<span><b>${n}</b> papers</span><span><b>${tagged}</b> tagged</span>`+
+    `<span>${tagOptions().length} tags</span>`;
+}
+// The tag bar has two jobs. With rows SELECTED it's a row of checkboxes for
+// them : solid means every selected row carries that tag, dashed means some do,
+// and a click flips it on all of them. With nothing selected a click arms the
+// tag for painting instead ( click rows to toggle it ).
+function renderPaintbar(){
+  const sel = selectedItems();
+  $("#tagchips").innerHTML = tagOptions().map(v=>{
+    const n   = DOC.items.filter(it=>hasTag(it,v)).length;
+    const on  = sel.length && sel.every(it=>hasTag(it,v));
+    const som = !on && sel.some(it=>hasTag(it,v));
+    const how = sel.length ? `${on?"on":som?"on some of":"off"} the ${sel.length} selected row(s) — click to flip it`
+                           : `${n} paper(s) — click to paint it onto rows`;
+    return `<span class="chip ${isVocab(v)?'vocab':''} ${armed===v?'armed':''} ${on?'has':som?'some':''}" `+
+      `data-val="${esc(v)}" title="${esc(how)}">${esc(v)}<span style="opacity:.6">${n||""}</span>`+
+      `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
+  }).join("")+
+    `<input class="chipin newtag" id="newtag" placeholder="+ new tag" autocomplete="off">`;
+  $("#paintnote").textContent = sel.length
+    ? `${sel.length} row(s) selected — click a tag above to toggle it on them ( Esc clears )`
+    : armed ? `painting “${armed}” — click rows to toggle it ( Esc to stop )` : "";
+  document.body.classList.toggle("painting", !!armed);
+}
+const hasTag = (it,v) => (it.tags||[]).some(t=>lc(t)===lc(v));
+function selectedItems(){
+  return Array.from(SEL).map(k=>findItem(k)).filter(Boolean).map(f=>f.it);
+}
+// Click a row to select it ( ⌘ / ctrl adds one, shift takes the range ). A plain
+// click on the only selected row deselects it again.
+function selectRow(key, e){
+  if(e && (e.metaKey || e.ctrlKey)){
+    SEL.has(key) ? SEL.delete(key) : SEL.add(key);
+    selAnchor = key;
+  } else if(e && e.shiftKey && selAnchor){
+    const keys = DOC.items.map(it=>it.key);
+    let a = keys.indexOf(selAnchor), b = keys.indexOf(key);
+    if(a>=0 && b>=0){
+      if(a>b){ const t=a; a=b; b=t; }
+      for(let i=a;i<=b;i++) SEL.add(keys[i]);
+    }
+  } else {
+    const only = SEL.size===1 && SEL.has(key);
+    SEL = new Set(only ? [] : [key]);
+    selAnchor = only ? null : key;
+  }
+  paintSelection(); renderPaintbar();
+}
+function paintSelection(){
+  $$(".row").forEach(r=>r.classList.toggle("selected", SEL.has(r.dataset.key)));
+}
+function clearSelection(){
+  if(!SEL.size) return;
+  SEL.clear(); selAnchor = null;
+  paintSelection(); renderPaintbar();
+}
+// One tag across every selected row : off everywhere if they ALL have it,
+// otherwise on everywhere ( so a half-tagged selection fills in rather than
+// flipping each row's state independently ).
+function toggleTagOnSelection(value){
+  const items = selectedItems();
+  if(!items.length) return;
+  const all = items.every(it=>hasTag(it,value));
+  items.forEach(it=>{
+    it.tags = it.tags || [];
+    if(all)                 it.tags = it.tags.filter(t=>lc(t)!==lc(value));
+    else if(!hasTag(it,value)) it.tags.push(value);
+  });
+  rememberTag(value);
+  markDirty();
+  if(DOC.options.auto_move){ items.forEach(it=>autoMove(it.key)); renderBoard(); }
+  else items.forEach(it=>refreshTags(it.key));
+  renderPaintbar(); renderCounts();
+  toast(`${all?"Removed":"Added"} “${value}” ${all?"from":"on"} ${items.length} row(s)`);
+}
+function renderAll(){ renderColHead(); renderBoard(); renderCounts(); renderPaintbar(); }
+function repaintLinks(){
+  $$(".row").forEach(row=>{
+    const f = findItem(row.dataset.key);
+    if(!f) return;
+    const el = row.querySelector('[data-links]');
+    if(el) el.innerHTML = rowLinks(f.it);
+    const m = META[f.it.key];
+    if(m && m.in_library === false && !row.querySelector(".loose"))
+      row.querySelector(".tt").insertAdjacentHTML("beforeend",
+        ` <span class="loose" title="Not matched to a paper in your library">not in library</span>`);
+  });
+}
+function cssEsc(s){ return String(s).replace(/["\\]/g, "\\$&"); }
+function rowEl(key){ return document.querySelector(`.row[data-key="${cssEsc(key)}"]`); }
+// Only the one row's tag cell -- so tagging never disturbs anything else on the
+// page ( and never moves the row, unless Auto-move is on ).
+function refreshTags(key){
+  const f = findItem(key), row = rowEl(key);
+  if(!f || !row) return;
+  const cell = row.querySelector('[data-cell="tags"]');
+  if(cell) cell.innerHTML = tagsCell(f.it);
+}
+function toast(msg, ms, undoLabel, onUndo){
+  const t = $("#toast");
+  t.innerHTML = `<span>${esc(msg)}</span>`+(onUndo?`<button id="undobtn">${esc(undoLabel||"Undo")}</button>`:"");
+  t.classList.add("show");
+  if(onUndo) $("#undobtn").onclick = ()=>{ t.classList.remove("show"); onUndo(); };
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), ms||3200);
+}
+function syncHeadOffset(){
+  document.documentElement.style.setProperty("--headh", document.querySelector("header").offsetHeight + "px");
+}
+
+// ---- mutations ------------------------------------------------------------
+function newItem(hit){
+  return {
+    key: hit.key, title: hit.title||"", doi: hit.doi||"", wid: hit.wid||"",
+    pdf: hit.pdf_local ? "" : (hit.pdf||""),
+    year: hit.year||null, journal: hit.journal||"", tags: [],
+    fields: Object.fromEntries(DOC.columns.map(c=>[c.id,""])), added_at: nowISO(),
+  };
+}
+// Where a paper added from search lands. "placed" means : right after the last
+// row you actually put somewhere ( dragged, or typed a number into ) -- so the
+// part of the list you've already ranked stays intact and new arrivals queue up
+// directly under it instead of at the bottom of everything.
+function insertIndex(){
+  const how = DOC.options.add_where || "bottom";
+  if(how === "top") return 0;
+  if(how === "placed"){
+    let last = -1;
+    DOC.items.forEach((it,i)=>{ if(it.placed) last = i; });
+    return last + 1;
+  }
+  return DOC.items.length;
+}
+async function addPaper(hit){
+  if(findItem(hit.key)){ toast("Already on the board"); return; }
+  const it = newItem(hit);
+  const m  = META[hit.key];
+  if(m && m.mods && m.mods.length) it.tags = m.mods.slice();   // pre-tagged from the Methods stamp
+  DOC.items.splice(insertIndex(), 0, it);
+  markDirty(); renderBoard(); renderCounts(); renderPaintbar();
+  const el = rowEl(it.key);
+  if(el){ el.classList.add("flash"); el.scrollIntoView({ block:"center", behavior:"smooth" }); }
+  const got = await fetchMeta([it.key], true);
+  const gm = got[it.key];
+  if(gm && !it.tags.length && gm.mods && gm.mods.length){
+    it.tags = gm.mods.slice(); markDirty(); refreshTags(it.key); renderPaintbar(); renderCounts();
+  }
+  if(hits.length) renderResults();
+}
+function removeItem(key){
+  const f = findItem(key);
+  if(!f) return;
+  const at = f.idx;
+  const [gone] = DOC.items.splice(at, 1);
+  SEL.delete(key);
+  markDirty(); renderBoard(); renderCounts(); renderPaintbar();
+  toast(`Removed “${(gone.title||gone.key).slice(0,60)}”`, 6000, "Undo", ()=>{
+    DOC.items.splice(Math.min(at, DOC.items.length), 0, gone);
+    markDirty(); renderBoard(); renderCounts(); renderPaintbar();
+  });
+}
+// `index` is a 0-based position in the list. Moving a row by hand marks it
+// placed -- that's what "add after last sorted" keys off.
+function moveTo(key, index){
+  const f = findItem(key);
+  if(!f) return;
+  const [it] = DOC.items.splice(f.idx, 1);
+  if(f.idx < index) index--;
+  DOC.items.splice(Math.max(0, Math.min(index, DOC.items.length)), 0, it);
+  it.placed = true;
+  markDirty(); renderBoard();
+}
+// Auto-move ( off by default ) : after a tag change, slide the row down to sit
+// with the others carrying exactly the same tags.
+function autoMove(key){
+  if(!DOC.options.auto_move) return;
+  const f = findItem(key);
+  if(!f) return;
+  const sig = tagSig(f.it);
+  let last = -1;
+  DOC.items.forEach((x,i)=>{ if(i!==f.idx && tagSig(x)===sig) last = i; });
+  if(last < 0) return;
+  const [it] = DOC.items.splice(f.idx, 1);
+  DOC.items.splice(last < f.idx ? last+1 : last, 0, it);
+}
+function afterTagChange(key){
+  const moved = DOC.options.auto_move;
+  if(moved) autoMove(key);
+  markDirty();
+  if(moved) renderBoard(); else refreshTags(key);
+  renderPaintbar(); renderCounts();
+}
+function toggleTag(it, value){
+  const i = (it.tags||[]).findIndex(v=>lc(v)===lc(value));
+  if(i>=0) it.tags.splice(i,1); else it.tags.push(value);
+  rememberTag(value);
+}
+function addTag(it, value){
+  value = (value||"").trim();
+  if(!value) return false;
+  if((it.tags||[]).some(v=>lc(v)===lc(value))) return false;
+  it.tags.push(value);
+  rememberTag(value);
+  return true;
+}
+// Any tag you use or invent joins the document's own tag list, so it's still
+// offered after a restart -- even if you later take it off every paper.
+function rememberTag(value){
+  if(!(DOC.vocab.tags||[]).some(t=>lc(t.name)===lc(value))) DOC.vocab.tags.push({ name:value, color:"" });
+}
+
+// ---- search ---------------------------------------------------------------
+// Two ways to find a paper, and the default is the one you actually want here :
+//   match titles ( mode=title ) -- type any piece of a title and the closest
+//     titles come back, best first. Nothing has to match exactly, so a typo, a
+//     missing word or two words the wrong way round still lands the paper.
+//   full text   ( mode=text )  -- the dashboard's boolean search over the whole
+//     OCR'd body, for when you're hunting a phrase rather than a paper.
+// See src/dashboard/index.py :: title_search .
+let hits = [], hitIdx = 0, hitTotal = 0, hitFuzzy = false, hitMode = "title", searchTimer = null;
+async function runSearch(){
+  const q = $("#q").value.trim();
+  if(!q){ closeResults(); return; }
+  const mode = $("#smode").value;
+  let d;
+  try { d = await (await fetch(`/api/search?q=${encodeURIComponent(q)}&pool=${$("#pool").value}`+
+    `&mode=${mode}&sort=relevance&limit=25&hide_skipped=0`)).json(); }
+  catch(e){ return; }
+  if(d.status !== "ready"){
+    $("#results").innerHTML = `<div class="rhint">The search index isn't built yet — open the dashboard once to build it.</div>`;
+    $("#results").classList.add("show");
+    return;
+  }
+  hits = d.results || []; hitIdx = 0; hitTotal = d.total; hitFuzzy = !!d.fuzzy;
+  hitMode = d.mode || mode;
+  renderResults();
+  fetchMeta(hits.map(h=>h.key), true).then(()=>renderResults());
+}
+function renderResults(){
+  if(!hits.length){
+    $("#results").innerHTML = `<div class="rhint">Nothing close to that${hitMode==="title"?" in any title":""}.</div>`;
+    $("#results").classList.add("show");
+    return;
+  }
+  const hint = hitFuzzy
+    ? `<div class="rhint" style="color:var(--warn)">Nothing came close — these are the least-far-off titles</div>`
+    : hitMode === "title"
+      ? `<div class="rhint">${hits.length} closest title${hits.length===1?"":"s"} · ↵ or double-click adds ( tagged from its Methods stamp ) · or drag a hit into the list</div>`
+      : `<div class="rhint">${hits.length} of ${hitTotal} · best match first · ↵ or double-click adds · or drag a hit into the list</div>`;
+  $("#results").innerHTML = hint+
+    hits.map((h,i)=>{
+      const f = findItem(h.key);
+      const m = META[h.key] || {};
+      const mods = (m.mods||[]).map(v=>`<span class="chip vocab">${esc(v)}</span>`).join(" ");
+      return `<div class="hit ${i===hitIdx?'sel':''}" data-i="${i}" draggable="true">`+
+        `<div style="flex:1;min-width:0">`+
+          `<div class="ht">${esc(h.title||h.key)}</div>`+
+          `<div class="hm">${h.year?esc(h.year):""}${h.journal?" · "+esc(h.journal):""}`+
+            `${h.cited_by!=null?` · ${h.cited_by} cites`:""} ${mods}</div>`+
+        `</div>`+
+        (f ? `<div class="in">✓ #${f.idx+1}</div>` : `<button class="add" data-i="${i}">＋ Add</button>`)+
+      `</div>`;
+    }).join("");
+  $("#results").classList.add("show");
+}
+function closeResults(){ $("#results").classList.remove("show"); hits = []; }
+function moveHit(delta){
+  if(!hits.length) return;
+  hitIdx = Math.max(0, Math.min(hits.length-1, hitIdx+delta));
+  $$("#results .hit").forEach((el,i)=>el.classList.toggle("sel", i===hitIdx));
+  const el = $$("#results .hit")[hitIdx];
+  if(el) el.scrollIntoView({ block:"nearest" });
+}
+
+// ---- autocomplete ---------------------------------------------------------
+let AC = { input:null, opts:[], idx:0 };
+function acOptions(input){
+  const f = findItem(input.closest(".row").dataset.key);
+  const have = f ? (f.it.tags||[]).map(lc) : [];
+  const term = lc(input.value.trim());
+  return tagOptions().filter(v=>!have.includes(lc(v))).filter(v=>!term || lc(v).includes(term));
+}
+function acOpen(input){ AC.input = input; AC.idx = 0; AC.opts = acOptions(input); acRender(); }
+function acRender(){
+  const pop = $("#acpop");
+  if(!AC.input){ pop.classList.remove("show"); return; }
+  const term = AC.input.value.trim();
+  const body = AC.opts.map((v,i)=>`<div class="acopt ${i===AC.idx?'sel':''}" data-v="${esc(v)}">${esc(v)}</div>`).join("");
+  const isNew = term && !AC.opts.some(v=>lc(v)===lc(term));
+  pop.innerHTML = (body + (isNew?`<div class="acnew">↵ creates “${esc(term)}”</div>`:"")) ||
+    `<div class="acnew">type to create a new one</div>`;
+  const r = AC.input.getBoundingClientRect();
+  pop.style.left = (r.left + window.scrollX) + "px";
+  pop.style.top  = (r.bottom + window.scrollY + 4) + "px";
+  pop.classList.add("show");
+}
+function acClose(){ AC.input = null; AC.opts = []; $("#acpop").classList.remove("show"); }
+function acCommit(value){
+  const input = AC.input;
+  if(!input) return;
+  const v = (value != null ? value : input.value).trim();
+  if(!v){ acClose(); return; }
+  const f = findItem(input.closest(".row").dataset.key);
+  if(f && addTag(f.it, v)){
+    acClose();
+    afterTagChange(f.it.key);
+    const row = rowEl(f.it.key);
+    if(row) row.querySelector(".chipin").focus();
+    return;
+  }
+  input.value = "";
+  acClose();
+}
+
+// ---- drag and drop --------------------------------------------------------
+let dragKey = null, dragHit = null;
+function clearDropMarks(){
+  $$(".row").forEach(r=>r.classList.remove("drop-before","drop-after"));
+  $("#board").classList.remove("dropinto");
+}
+function dropTarget(e){
+  const board = e.target.closest("#board");
+  if(!board) return null;
+  const row = e.target.closest(".row");
+  if(!row) return { index: DOC.items.length, row:null, after:false };
+  const r = row.getBoundingClientRect();
+  const after = (e.clientY - r.top) > r.height/2;
+  const f = findItem(row.dataset.key);
+  return { index: (f ? f.idx : DOC.items.length) + (after?1:0), row, after };
+}
+document.addEventListener("dragover", e=>{
+  if(!dragKey && !dragHit) return;
+  const t = dropTarget(e);
+  if(!t) return;
+  e.preventDefault();
+  clearDropMarks();
+  if(t.row) t.row.classList.add(t.after?"drop-after":"drop-before");
+  else $("#board").classList.add("dropinto");
+});
+document.addEventListener("drop", e=>{
+  if(!dragKey && !dragHit) return;
+  const t = dropTarget(e);
+  clearDropMarks();
+  if(!t){ dragKey = dragHit = null; return; }
+  e.preventDefault();
+  if(dragKey) moveTo(dragKey, t.index);
+  else if(dragHit){
+    const hit = dragHit;
+    if(findItem(hit.key)) toast("Already on the board");
+    else {
+      const it = newItem(hit);
+      const m = META[hit.key];
+      if(m && m.mods) it.tags = m.mods.slice();
+      DOC.items.splice(Math.min(t.index, DOC.items.length), 0, it);
+      markDirty(); renderBoard(); renderCounts(); renderPaintbar();
+      fetchMeta([it.key], true);
+      if(hits.length) renderResults();
+    }
+  }
+  dragKey = dragHit = null;
+});
+document.addEventListener("dragend", ()=>{
+  clearDropMarks();
+  $$(".row.dragging").forEach(r=>r.classList.remove("dragging"));
+  $$(".row").forEach(r=>r.draggable = false);
+  dragKey = dragHit = null;
+});
+$("#board").addEventListener("mousedown", e=>{
+  const h = e.target.closest(".grip");
+  if(!h) return;
+  const row = h.closest(".row");
+  if(row) row.draggable = true;
+});
+$("#board").addEventListener("dragstart", e=>{
+  const row = e.target.closest(".row");
+  if(!row || !row.draggable){ e.preventDefault(); return; }
+  dragKey = row.dataset.key;
+  row.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  try { e.dataTransfer.setData("text/plain", dragKey); } catch(err){}
+});
+$("#results").addEventListener("dragstart", e=>{
+  const hit = e.target.closest(".hit");
+  if(!hit) return;
+  dragHit = hits[+hit.dataset.i];
+  e.dataTransfer.effectAllowed = "copy";
+  try { e.dataTransfer.setData("text/plain", dragHit.key); } catch(err){}
+});
+
+// ---- row interactions -----------------------------------------------------
+$("#board").addEventListener("click", e=>{
+  const row = e.target.closest(".row");
+  const x = e.target.closest(".cellchips .x");
+  if(x && row){
+    const f = findItem(row.dataset.key);
+    if(f){ toggleTag(f.it, x.dataset.drop); afterTagChange(f.it.key); }
+    return;
+  }
+  if(e.target.closest('[data-act="remove"]') && row){ removeItem(row.dataset.key); return; }
+  // A click on the body of a row : paints the armed tag if you're painting,
+  // otherwise selects the row ( so the tag bar can tag it ). The grip is exempt
+  // -- grabbing a row to drag it shouldn't select or tag it.
+  if(row && !e.target.closest("input,textarea,select,button,a,.chip,.grip")){
+    if(armed){
+      const f = findItem(row.dataset.key);
+      if(f){ toggleTag(f.it, armed); afterTagChange(f.it.key); }
+    } else selectRow(row.dataset.key, e);
+  }
+});
+$("#board").addEventListener("click", e=>{
+  const a = e.target.closest(".mdlink");
+  if(!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button!==0) return;
+  e.preventDefault();
+  const w = window.open(a.href, "_blank");
+  if(w){ try { w.blur(); } catch(err){} }
+  window.focus();
+});
+// Notes + custom columns : written into the document on every keystroke, and
+// again on blur ( belt and braces -- anything that ever ends up in the box ends
+// up in the file ).
+function captureField(el){
+  const row = el.closest(".row");
+  if(!row) return;
+  const f = findItem(row.dataset.key);
+  if(!f) return;
+  const was = (f.it.fields||{})[el.dataset.field];
+  if(was === el.value) return;
+  (f.it.fields = f.it.fields||{})[el.dataset.field] = el.value;
+  markDirty();
+}
+// Type a position into a row's number and press ↵ ( or tab away ) to send it
+// there. Anything out of range clamps to the ends of the list.
+function applyNumber(input){
+  const row = input.closest(".row");
+  if(!row) return;
+  const f = findItem(row.dataset.key);
+  if(!f) return;
+  const want = parseInt(String(input.value).replace(/[^0-9]/g,""), 10);
+  if(isNaN(want) || want === f.idx+1){ input.value = f.idx+1; return; }
+  const to = Math.max(0, Math.min(want-1, DOC.items.length-1));
+  moveTo(f.it.key, to > f.idx ? to+1 : to);
+  const again = rowEl(f.it.key);
+  if(again){
+    const el = again.querySelector(".numin");
+    if(el){ el.focus(); el.select(); }
+    again.classList.add("flash");
+    again.scrollIntoView({ block:"nearest" });
+  }
+}
+$("#board").addEventListener("keydown", e=>{
+  if(!e.target.matches(".numin")) return;
+  if(e.key==="Enter"){ e.preventDefault(); applyNumber(e.target); }
+  else if(e.key==="Escape"){ const f = findItem(e.target.closest(".row").dataset.key); if(f) e.target.value = f.idx+1; e.target.blur(); }
+});
+$("#board").addEventListener("focusout", e=>{ if(e.target.matches(".numin")) applyNumber(e.target); });
+$("#board").addEventListener("focusin",  e=>{ if(e.target.matches(".numin")) e.target.select(); });
+
+$("#board").addEventListener("input",  e=>{ if(e.target.matches("textarea[data-field]")) captureField(e.target); });
+$("#board").addEventListener("change", e=>{ if(e.target.matches("textarea[data-field]")) captureField(e.target); });
+$("#board").addEventListener("focusout", e=>{ if(e.target.matches("textarea[data-field]")) captureField(e.target); });
+
+// chip inputs -> autocomplete
+document.addEventListener("focusin", e=>{ if(e.target.matches(".chipin:not(#newtag)")) acOpen(e.target); });
+document.addEventListener("input", e=>{ if(e.target.matches(".chipin:not(#newtag)") && AC.input===e.target){ AC.opts = acOptions(e.target); AC.idx = 0; acRender(); } });
+document.addEventListener("keydown", e=>{
+  if(!e.target.matches(".chipin:not(#newtag)")) return;
+  if(e.key==="ArrowDown"){ e.preventDefault(); AC.idx = Math.min(AC.opts.length-1, AC.idx+1); acRender(); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); AC.idx = Math.max(0, AC.idx-1); acRender(); }
+  else if(e.key==="Enter"){
+    e.preventDefault();
+    const typed = e.target.value.trim(), pick = AC.opts[AC.idx];
+    acCommit(pick && (!typed || lc(pick).startsWith(lc(typed))) ? pick : typed);
+  }
+  else if(e.key==="Escape"){ acClose(); e.target.blur(); }
+});
+document.addEventListener("focusout", e=>{ if(e.target.matches(".chipin:not(#newtag)")) setTimeout(()=>{ if(AC.input===e.target) acClose(); }, 120); });
+$("#acpop").addEventListener("mousedown", e=>{
+  const o = e.target.closest(".acopt");
+  if(!o) return;
+  e.preventDefault();
+  acCommit(o.dataset.v);
+});
+
+// ---- tag bar --------------------------------------------------------------
+$("#tagchips").addEventListener("click", e=>{
+  const del = e.target.closest("[data-deltag]");
+  if(del){
+    const v = del.dataset.deltag;
+    const n = DOC.items.filter(it=>(it.tags||[]).some(t=>lc(t)===lc(v))).length;
+    if(!confirm(`Delete the tag “${v}”${n?` from ${n} paper(s)`:""}?`)) return;
+    DOC.vocab.tags = (DOC.vocab.tags||[]).filter(t=>lc(t.name)!==lc(v));
+    DOC.items.forEach(it=>{ it.tags = (it.tags||[]).filter(t=>lc(t)!==lc(v)); });
+    if(armed===v) armed = null;
+    markDirty(); renderBoard(); renderPaintbar(); renderCounts();
+    return;
+  }
+  const c = e.target.closest(".chip");
+  if(!c) return;
+  // Rows selected -> the chips tag them. Nothing selected -> arm for painting.
+  if(SEL.size){ toggleTagOnSelection(c.dataset.val); return; }
+  armed = (armed===c.dataset.val) ? null : c.dataset.val;
+  renderPaintbar();
+});
+$("#tagchips").addEventListener("keydown", e=>{
+  if(e.target.id!=="newtag" || e.key!=="Enter") return;
+  const v = e.target.value.trim();
+  if(!v) return;
+  rememberTag(v);          // saved with the document, so it's here after a restart
+  markDirty();
+  if(SEL.size){
+    // A brand-new tag with rows selected goes straight onto them.
+    toggleTagOnSelection(v);
+  } else {
+    armed = v;
+    renderPaintbar(); renderCounts();
+    toast(`Painting “${v}” — click papers to tag them`);
+  }
+  const nt = $("#newtag"); if(nt){ nt.value=""; nt.focus(); }
+});
+
+// columns
+$("#colhead").addEventListener("dblclick", e=>{
+  const c = e.target.closest(".colname");
+  if(!c) return;
+  const col = DOC.columns.find(x=>x.id===c.dataset.col);
+  const name = prompt("Column name", col.label);
+  if(name && name.trim()){ col.label = name.trim(); markDirty(); renderAll(); }
+});
+$("#colhead").addEventListener("click", e=>{
+  const c = e.target.closest(".colname");
+  if(!c || !e.shiftKey) return;
+  const col = DOC.columns.find(x=>x.id===c.dataset.col);
+  if(DOC.columns.length===1){ toast("Keep at least one column"); return; }
+  if(!confirm(`Delete the “${col.label}” column and everything typed in it?`)) return;
+  DOC.columns = DOC.columns.filter(x=>x.id!==col.id);
+  DOC.items.forEach(it=>{ delete it.fields[col.id]; });
+  markDirty(); renderAll();
+});
+
+// ---- toolbar --------------------------------------------------------------
+$("#q").addEventListener("input", ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 200); });
+$("#pool").addEventListener("change", runSearch);
+// The match mode is a property of THIS browser -- it's a habit, not board data.
+function labelMode(){
+  $("#q").placeholder = $("#smode").value === "title"
+    ? "Type any part of a title…   ↵ or double-click a hit to add it"
+    : 'Full text…  fMRI NOT EEG · "inner speech" OR aphasia';
+}
+$("#smode").addEventListener("change", ()=>{
+  try { localStorage.setItem("prma-search-mode", $("#smode").value); } catch(e){}
+  labelMode(); runSearch();
+});
+$("#q").addEventListener("keydown", e=>{
+  if(e.key==="ArrowDown"){ e.preventDefault(); moveHit(1); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); moveHit(-1); }
+  else if(e.key==="Enter" && hits[hitIdx]){ e.preventDefault(); addPaper(hits[hitIdx]); }
+  else if(e.key==="Escape"){ closeResults(); e.target.blur(); }
+});
+$("#results").addEventListener("click", e=>{
+  const b = e.target.closest(".add");
+  if(b){ addPaper(hits[+b.dataset.i]); return; }
+  const h = e.target.closest(".hit");
+  if(h){ hitIdx = +h.dataset.i; moveHit(0); }
+});
+$("#results").addEventListener("dblclick", e=>{
+  const h = e.target.closest(".hit");
+  if(!h) return;
+  e.preventDefault();
+  addPaper(hits[+h.dataset.i]);
+});
+document.addEventListener("click", e=>{ if(!e.target.closest(".searchwrap")) closeResults(); });
+$("#filter").addEventListener("input", applyFilter);
+function applyFilter(){
+  const q = lc($("#filter").value.trim());
+  $$(".row").forEach(row=>{
+    if(!q){ row.classList.remove("hide"); return; }
+    const f = findItem(row.dataset.key);
+    if(!f) return;
+    const hay = lc([ f.it.title, f.it.key, f.it.doi, (f.it.tags||[]).join(" "),
+      Object.values(f.it.fields||{}).join(" ") ].join(" "));
+    row.classList.toggle("hide", !hay.includes(q));
+  });
+}
+// One-shot reorder. It rewrites the list once and hands it straight back to you
+// -- nothing keeps re-sorting behind your back.
+$("#orderby").addEventListener("change", ()=>{
+  const how = $("#orderby").value;
+  $("#orderby").value = "";
+  if(!how || !DOC.items.length) return;
+  const before = DOC.items.slice();
+  const by = {
+    year:     (a,b)=>(b.year||0)-(a.year||0),
+    year_asc: (a,b)=>(a.year||9999)-(b.year||9999),
+    cites:    (a,b)=>((META[b.key]||{}).cited_by||0)-((META[a.key]||{}).cited_by||0),
+    title:    (a,b)=>lc(a.title||a.key).localeCompare(lc(b.title||b.key)),
+    added:    (a,b)=>String(a.added_at||"").localeCompare(String(b.added_at||"")),
+  }[how];
+  if(how === "tags"){
+    // Group papers carrying the same tags together, keeping each group in the
+    // order you already put it in, and groups in the order they first appear.
+    const order = [], groups = new Map();
+    DOC.items.forEach(it=>{
+      const sig = tagSig(it) || "~";     // untagged sorts last
+      if(!groups.has(sig)){ groups.set(sig, []); order.push(sig); }
+      groups.get(sig).push(it);
+    });
+    order.sort((a,b)=> (a==="~") - (b==="~") );
+    DOC.items = order.flatMap(sig=>groups.get(sig));
+  } else DOC.items.sort(by);
+  markDirty(); renderBoard();
+  toast(`Reordered by ${how.replace("_"," ")}`, 5000, "Undo", ()=>{
+    DOC.items = before; markDirty(); renderBoard();
+  });
+});
+function labelAutoMove(){
+  const on = !!DOC.options.auto_move;
+  $("#automove").textContent = `⇥ Auto-move: ${on?"on":"off"}`;
+  $("#automove").classList.toggle("on", on);
+}
+// The add position is a property of the BOARD, not of this browser, so it's the
+// same wherever you open it.
+$("#addwhere").addEventListener("change", ()=>{
+  DOC.options.add_where = $("#addwhere").value;
+  markDirty();
+  toast(DOC.options.add_where === "placed"
+    ? "New papers will land right after the last row you placed by hand"
+    : `New papers will be added to the ${DOC.options.add_where}`);
+});
+$("#automove").addEventListener("click", ()=>{
+  DOC.options.auto_move = !DOC.options.auto_move;
+  labelAutoMove(); markDirty();
+  toast(DOC.options.auto_move
+    ? "Auto-move on — tagging a paper slides it next to the others with the same tags"
+    : "Auto-move off — tagging never moves a row");
+});
+$("#addcol").addEventListener("click", ()=>{
+  const label = prompt("New column name ( e.g. Decoding_Method )");
+  if(!label || !label.trim()) return;
+  let id = slug(label, "col");
+  while(DOC.columns.some(c=>c.id===id)) id += "-2";
+  DOC.columns.push({ id, label: label.trim() });
+  DOC.items.forEach(it=>{ it.fields[id] = ""; });
+  markDirty(); renderAll();
+});
+$("#autotag").addEventListener("click", async ()=>{
+  const btn = $("#autotag"); btn.disabled = true; btn.textContent = "⚡ Auto-tagging…";
+  const todo = DOC.items.filter(it=>!(it.tags||[]).length).map(it=>it.key);
+  if(!todo.length){ toast("Every paper already carries at least one tag"); btn.disabled=false; btn.textContent="⚡ Auto-tag"; return; }
+  const got = await fetchMeta(todo, true);
+  let n = 0;
+  todo.forEach(k=>{
+    const m = got[k] || META[k], f = findItem(k);
+    if(f && m && m.mods && m.mods.length){ f.it.tags = m.mods.slice(); m.mods.forEach(rememberTag); n++; }
+  });
+  if(n) markDirty();
+  renderBoard(); renderPaintbar(); renderCounts();
+  btn.disabled = false; btn.textContent = "⚡ Auto-tag";
+  toast(n ? `Tagged ${n} paper(s) from their Methods stamp`
+          : `No modality stamps found — run \` prma modalities \` to tag the library`, 4200);
+});
+$("#pulltiers").addEventListener("click", async ()=>{
+  let d;
+  try { d = await (await fetch("/api/tiers")).json(); } catch(e){ toast("Could not read the tier list"); return; }
+  const rows = (d.doc.tiers||[]).flatMap(t=>(t.items||[]).map(it=>({ it, tier:t })));
+  if(!rows.length){ toast("The tier list is empty"); return; }
+  const cols = d.doc.columns || [];
+  sheet(`
+    <h3>Pull ${rows.length} paper(s) from the tier list</h3>
+    <p>Each paper arrives with its modalities and tags merged into one tag list, its tier name
+       in a <kbd>Tier</kbd> column, and its notes columns merged by name. Papers already here
+       are left alone.</p>
+    <div class="btns"><button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="pull">Pull them in</button></div>`, act=>{
+    if(act!=="pull") return;
+    cols.forEach(c=>{ if(!DOC.columns.some(x=>x.id===c.id)) DOC.columns.push({ id:c.id, label:c.label }); });
+    if(!DOC.columns.some(c=>c.id==="tier")) DOC.columns.push({ id:"tier", label:"Tier" });
+    let n = 0;
+    rows.forEach(({ it, tier })=>{
+      if(findItem(it.key)) return;
+      const tags = Array.from(new Set([].concat(it.mods||[], it.tags||[])));
+      tags.forEach(rememberTag);
+      const fields = Object.assign({}, it.fields||{}, { tier: tier.label||"" });
+      DOC.columns.forEach(c=>{ if(fields[c.id]==null) fields[c.id] = ""; });
+      DOC.items.push({ key:it.key, title:it.title||"", doi:it.doi||"", wid:it.wid||"",
+        pdf:it.pdf||"", year:it.year||null, journal:it.journal||"", tags, fields,
+        added_at: it.added_at || nowISO() });
+      n++;
+    });
+    markDirty(); renderAll();
+    fetchMeta(DOC.items.map(it=>it.key));
+    toast(`Pulled ${n} paper(s) from the tier list`);
+  });
+});
+$("#toggleTheme").addEventListener("click", ()=>{
+  const next = document.documentElement.dataset.theme==="dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("prma-theme", next); } catch(e){}
+  labelTheme();
+});
+function labelTheme(){ $("#toggleTheme").textContent = document.documentElement.dataset.theme==="dark" ? "☀ Light" : "🌙 Dark"; }
+
+document.addEventListener("keydown", e=>{
+  if(e.key==="Escape"){
+    if(armed){ armed = null; renderPaintbar(); }
+    else clearSelection();
+  }
+  if(e.key==="/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){
+    e.preventDefault(); $("#q").focus(); $("#q").select();
+  }
+  if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); }
+});
+window.addEventListener("beforeunload", e=>{ if(dirty){ e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("resize", syncHeadOffset);
+
+// ---- CSV ------------------------------------------------------------------
+// #, DOI_or_Key, Title, Year, Tags, <columns…>, MD_File. Anything else in an
+// imported file becomes its own free-text column, so the hand-made sheets ( and
+// the tier page's exports, Tier column and all ) come in without losing
+// anything ; Modalities / Section_Tags columns merge into the tag list.
+const csvCell = v => {
+  const s = (v==null ? "" : String(v));
+  return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+};
+function toCSV(){
+  const head = [ "#","DOI_or_Key","Title","Year","Tags" ]
+    .concat(DOC.columns.map(c=>c.label)).concat([ "MD_File" ]);
+  const lines = [ head.map(csvCell).join(",") ];
+  DOC.items.forEach((it,i)=>{
+    const m = META[it.key] || {};
+    lines.push([ i+1, it.key, it.title||m.title||"", it.year||m.year||"", (it.tags||[]).join("; ") ]
+      .concat(DOC.columns.map(c=>(it.fields||{})[c.id]||""))
+      .concat([ m.has_md ? fileStem(it.key)+".md" : "" ])
+      .map(csvCell).join(","));
+  });
+  return lines.join("\n");
+}
+$("#exportbtn").addEventListener("click", ()=>{
+  const blob = new Blob([ toCSV() ], { type:"text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `prma-sort-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+});
+function parseCSV(text){
+  const rows = []; let row = [], field = "", q = false, i = 0;
+  text = text.replace(/^\uFEFF/, "").replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+  while(i < text.length){
+    const c = text[i];
+    if(q){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i += 2; continue; }
+        q = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if(c === '"'){ q = true; i++; continue; }
+    if(c === ','){ row.push(field); field = ""; i++; continue; }
+    if(c === '\n'){ row.push(field); field = ""; rows.push(row); row = []; i++; continue; }
+    field += c; i++;
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r=>r.some(c=>String(c).trim().length));
+}
+const H_NUM   = /^#$|^no\.?$|^rank$/i;
+const H_KEY   = /^(doi[_ ]?or[_ ]?key|key)$/i, H_DOI = /^doi$/i;
+const H_TITLE = /^title$/i, H_YEAR = /^year$/i;
+const H_TAGS  = /^(tags?|modalit\w*|section[_ ]?tags?)$/i, H_MD = /^md[_ ]?file$/i;
+const splitList = s => String(s||"").split(/[;,|]/).map(x=>x.trim()).filter(Boolean);
+function docFromCSV(rows, merge){
+  const head = rows[0].map(h=>String(h||"").trim());
+  const idx = { key:-1, doi:-1, title:-1, year:-1 };
+  const tagCols = [], extra = [];
+  head.forEach((h,i)=>{
+    if(H_KEY.test(h)) idx.key = i;
+    else if(H_DOI.test(h)) idx.doi = i;
+    else if(H_TITLE.test(h)) idx.title = i;
+    else if(H_YEAR.test(h)) idx.year = i;
+    else if(H_TAGS.test(h)) tagCols.push(i);
+    else if(H_MD.test(h) || H_NUM.test(h)) { /* derived — not stored */ }
+    else if(h) extra.push({ i, id: slug(h,"col"), label: h });
+  });
+  const doc = merge
+    ? JSON.parse(JSON.stringify(DOC))
+    : { version:1, updated_at:"", options:{ auto_move: !!DOC.options.auto_move }, columns:[], items:[],
+        vocab:{ tags: JSON.parse(JSON.stringify(DOC.vocab.tags||[])) } };
+  extra.forEach(x=>{ if(!doc.columns.some(c=>c.id===x.id)) doc.columns.push({ id:x.id, label:x.label }); });
+  if(!doc.columns.length) doc.columns.push({ id:"notes", label:"Notes" });
+  let added = 0, updated = 0;
+  rows.slice(1).forEach(r=>{
+    const cell = i => (i>=0 && i<r.length) ? String(r[i]).trim() : "";
+    const title = cell(idx.title);
+    const key   = cell(idx.key) || cell(idx.doi) || ("loose-" + (slug(title,"row") || Math.random().toString(36).slice(2,9)));
+    let tags = [];
+    tagCols.forEach(i=>{ tags = tags.concat(splitList(cell(i))); });
+    const fields = {};
+    extra.forEach(x=>{ fields[x.id] = cell(x.i); });
+    const year = parseInt(cell(idx.year), 10);
+    const existing = doc.items.find(x=>x.key===key);
+    if(existing){
+      if(title) existing.title = title;
+      if(!isNaN(year)) existing.year = year;
+      if(tags.length) existing.tags = Array.from(new Set(existing.tags.concat(tags)));
+      existing.fields = Object.assign(existing.fields||{}, fields);
+      updated++;
+    } else {
+      doc.items.push({ key, title, doi: cell(idx.doi) || (/^10\./.test(key) ? key : ""), wid:"",
+        pdf:"", year: isNaN(year) ? null : year, journal:"", tags, fields, added_at: nowISO() });
+      added++;
+    }
+  });
+  doc.items.forEach(it=>it.tags.forEach(tag=>{
+    if(!doc.vocab.tags.some(x=>lc(x.name)===lc(tag))) doc.vocab.tags.push({ name:tag, color:"" });
+  }));
+  return { doc, added, updated };
+}
+$("#importbtn").addEventListener("click", ()=>{
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".csv,text/csv";
+  inp.onchange = async ()=>{
+    const file = inp.files && inp.files[0];
+    if(!file) return;
+    let rows;
+    try { rows = parseCSV(await file.text()); }
+    catch(e){ toast("Could not read that file"); return; }
+    if(rows.length < 2){ toast("That CSV has no rows"); return; }
+    sheet(`
+      <h3>Import ${rows.length-1} row(s) from ${esc(file.name)}</h3>
+      <p>Columns found: ${rows[0].filter(Boolean).map(h=>`<kbd>${esc(h)}</kbd>`).join(" ")}</p>
+      <p><b>Tags</b> / <b>Modalities</b> columns merge into each paper's tag list; everything else
+         becomes its own free-text column. Rows already on the board are updated in place, and the
+         file's row order becomes the list order.</p>
+      <div class="btns">
+        <button data-act="cancel">Cancel</button>
+        <button data-act="merge">Merge into this board</button>
+        <button data-act="replace">Replace everything</button>
+      </div>`, act=>{
+      if(act==="cancel" || !act) return;
+      const r = docFromCSV(rows, act==="merge");
+      DOC = r.doc;
+      markDirty(); renderAll();
+      fetchMeta(DOC.items.map(it=>it.key), true).then(()=>{
+        let n = 0;
+        DOC.items.forEach(it=>{
+          const m = META[it.key];
+          if(!it.tags.length && m && m.mods && m.mods.length){ it.tags = m.mods.slice(); m.mods.forEach(rememberTag); n++; }
+        });
+        if(n){ markDirty(); renderAll(); }
+        toast(`Imported — ${r.added} added, ${r.updated} updated${n?`, ${n} auto-tagged`:""}`, 4200);
+      });
+    });
+  };
+  inp.click();
+});
+
+// ---- overlay + help -------------------------------------------------------
+function sheet(html, onAct){
+  $("#sheet").innerHTML = html;
+  $("#overlay").classList.add("show");
+  $("#sheet").onclick = e=>{
+    const b = e.target.closest("button[data-act]");
+    if(!b) return;
+    $("#overlay").classList.remove("show");
+    if(onAct) onAct(b.dataset.act);
+  };
+}
+$("#overlay").addEventListener("click", e=>{ if(e.target.id==="overlay") $("#overlay").classList.remove("show"); });
+$("#helpbtn").addEventListener("click", ()=>sheet(`
+  <h3>How this page works</h3>
+  <ul>
+    <li><b>One list, in your order</b>, numbered as you see it. Grab a row's <kbd>⠿</kbd> to drag it,
+        or <b>type a number</b> into its box and press <kbd>↵</kbd> to send it straight to that
+        position. Everything renumbers itself.</li>
+    <li><b>Search</b> ( <kbd>/</kbd> ) <b>matches titles</b>: type any piece of a title and the
+        closest titles come back, best first — nothing has to match exactly, so a typo, a missing
+        word or two words the wrong way round still land the paper ( pasting a DOI works too ).
+        Switch the dropdown to <kbd>full text</kbd> for the dashboard's boolean search over whole
+        papers. <kbd>↵</kbd> or a <b>double-click</b> adds the highlighted hit, already tagged from
+        its <code>prma modalities</code> stamp. Drag a hit in to drop it at an exact position.</li>
+    <li><b>Where adds land</b> is the dropdown next to the search box: the bottom, the top, or
+        <i>after last sorted</i> — right below the last row you placed by hand, so the part you've
+        already ranked stays put and new papers queue under it.</li>
+    <li><b>Tags</b> say what a paper is — <kbd>fMRI</kbd>, <kbd>EEG</kbd>, both, or anything you invent.
+        Three ways to put one on: type into a row's <kbd>+</kbd> box ( it autocompletes ) ;
+        <b>click a row to select it</b> ( <kbd>⌘</kbd>-click adds another, <kbd>⇧</kbd>-click takes the
+        range ) and then click tags at the top to flip them on and off the whole selection ;
+        or, with nothing selected, click a tag to <b>paint</b> it and click rows to toggle it.
+        <kbd>Esc</kbd> clears. Tags you make are saved with the board and are still here after a
+        restart.</li>
+    <li><b>Tagging never moves a row.</b> <kbd>⇥ Auto-move</kbd> ( off by default ) changes that: with it
+        on, a re-tagged row slides down to sit with the others carrying the same tags.</li>
+    <li><b>⇅ Order by…</b> reorders the whole list once — by tags, year, citations, title or when you
+        added it — and the toast undoes it. After that the order is yours again.</li>
+    <li><b>Delete</b> a paper with <kbd>🗑</kbd> — the toast will undo it.</li>
+    <li><b>Columns</b>: <kbd>＋ Column</kbd> adds a free-text column, double-click a name to rename,
+        shift-click to delete. Everything you type is saved a moment later ( <kbd>⌘S</kbd> forces it ).</li>
+    <li>Lives in <code>output/cache/sort.json</code>, with every replaced version kept in
+        <code>output/cache/sort-history/</code>.</li>
+  </ul>
+  <div class="btns"><button data-act="ok">Got it</button></div>`));
+
+labelTheme();
+syncHeadOffset();
+try { $("#smode").value = localStorage.getItem("prma-search-mode") || "title"; } catch(e){}
+labelMode();
+loadDoc().then(()=>{
+  labelAutoMove();
+  $("#addwhere").value = DOC.options.add_where || "bottom";
+  syncHeadOffset(); pollRev();
+});
+</script>
+</body>
+</html>
