@@ -10,12 +10,12 @@
   :root {
     --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
     --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38;
-    --chip:#eceff3; --visited:#CEA052; --warn:#c1670c; --row:#ffffff;
+    --chip:#eceff3; --warn:#c1670c; --row:#ffffff;
   }
   :root[data-theme="dark"] {
     --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
     --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
-    --chip:#262c37; --visited:#CEA052; --warn:#e8a33d; --row:#141821;
+    --chip:#262c37; --warn:#e8a33d; --row:#141821;
   }
   * { box-sizing:border-box; }
   body {
@@ -74,20 +74,31 @@
     border-radius:11px; background:var(--chip); color:var(--fg); border:1px solid transparent;
     cursor:pointer; user-select:none; white-space:nowrap;
   }
-  .chip:hover { border-color:var(--muted); }
-  .chip.armed { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 2px rgba(62,166,255,.18); }
-  /* With rows selected the top chips become checkboxes for them : solid = every
-     selected row has it , dashed = only some do. */
-  .chip.has  { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
-  .chip.some { border-color:var(--accent); border-style:dashed; color:var(--accent); }
-  .chip .x { color:var(--muted); font-size:11px; cursor:pointer; }
-  .chip .x:hover { color:var(--warn); }
-  .chip.mod { background:#1a2740; color:#7fb6ff; }
-  :root[data-theme="light"] .chip.mod { background:#e4eefc; color:#1a4d8f; }
+  .chip:hover { filter:brightness(.96); }
+  /* Every chip is drawn in ITS OWN colour ( see colorOf ) , so a row's
+     modalities read as a pattern rather than as words you have to parse. The
+     states below are outlines, not fills, so the colour survives them :
+       .on   armed for painting · every selected row has it · in the filter
+       .half only some of the selected rows have it */
+  .chip.on   { outline:2px solid var(--accent); outline-offset:1px; font-weight:600; }
+  .chip.half { outline:2px dashed var(--accent); outline-offset:1px; }
+  .chip .x { color:inherit; opacity:.5; font-size:11px; cursor:pointer; }
+  .chip .x:hover { opacity:1; color:#8b1a1a; }
+  .chip .n { opacity:.55; font-size:11px; }
   .chip.ghost { background:transparent; border:1px dashed var(--line); color:var(--muted); }
   .newtag { width:118px !important; padding:3px 8px !important; font-size:12px !important; border-radius:11px !important; }
   body.painting .rows .row { cursor:crosshair; }
   .paintnote { color:var(--accent); font-size:12px; }
+  .pbtn { padding:3px 9px; font-size:12px; line-height:1.35; }
+  .pbtn.on { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  /* the colour editor ( 🎨 Colors ) */
+  .tagrow { display:flex; align-items:center; gap:9px; padding:4px 0; border-bottom:1px solid var(--line); }
+  .tagrow:last-child { border-bottom:none; }
+  .tagrow input[type=color] { width:30px; height:24px; padding:0; border:1px solid var(--line); border-radius:5px; background:none; cursor:pointer; }
+  .tagrow .grow { flex:1; }
+  .tagrow .cnt { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .tagrow button { padding:2px 7px; font-size:11px; }
+  .sheet h4 { margin:14px 0 4px; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
 
   /* ---- board ---- */
   main { padding:12px 16px 120px; }
@@ -148,9 +159,10 @@
   .handle:hover { opacity:1; color:var(--accent); }
   .handle:active { cursor:grabbing; }
   .titlec .tt { font-weight:500; }
-  .titlec a.titlelink { color:var(--fg); text-decoration:none; }
-  .titlec a.titlelink:hover { color:var(--accent); }
-  .titlec a.titlelink:visited { color:var(--visited); }
+  /* The title is TEXT, not a link : as a link it took the browser's visited
+     colour the moment you opened the paper from any other prma page, so half
+     the board turned gold for reasons that had nothing to do with the board.
+     The link strip underneath is how you open it. */
   .meta { color:var(--muted); font-size:12px; margin-top:2px; }
   .links { margin-top:3px; }
   .links a { color:var(--accent); text-decoration:none; margin-right:8px; font-size:12px; white-space:nowrap; }
@@ -239,7 +251,9 @@
     <input type="text" id="filter" style="max-width:220px" placeholder="Filter the board…" autocomplete="off">
   </div>
   <div class="paintbar">
-    <span class="pblabel">Paint:</span>
+    <button class="pbtn" id="tagfilter" title="Turn the chips into a filter: click them to show only the papers carrying them">🔎 Filter</button>
+    <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen chips · all = it needs every one">any</button>
+    <button class="pbtn" id="tagedit" title="Pick the colour every modality / tag is drawn in">🎨 Colors</button>
     <div class="chips" id="modchips"></div>
     <span class="pblabel">·</span>
     <div class="chips" id="tagchips"></div>
@@ -274,15 +288,62 @@ const nowISO = () => new Date().toISOString();
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-let DOC   = { version:1, columns:[{id:"notes",label:"Notes"}], vocab:{tags:[]}, tiers:[] };
+let DOC   = { version:1, columns:[{id:"notes",label:"Notes"}], vocab:{tags:[],mods:[]}, tiers:[] };
 let REV   = 0;              // server revision we are in sync with
 let VOCAB = [];             // modality vocabulary ( config/methods.py )
 let META  = {};             // paper key -> /api/tiers/meta entry
 let armed = null;           // { kind:"mod"|"tag", value } -- click-to-tag paint mode
 let SEL   = new Set();      // keys of the selected rows ( outlined ) -- see selectRow
 let selAnchor = null;       // where a shift-click range starts from
+let TAGF  = new Set();      // "mod:fMRI" / "tag:premier" the board is filtered to
+let filtering = false;      // the chips are a filter right now, not a brush
+let filterAll = false;      // ... and a row needs ALL of TAGF, not just one
 let addTier = localStorage.getItem("prma-tier-target") || STAGING;
 let dirty = false, saving = false, saveTimer = null;
+
+// ---- chip colours ---------------------------------------------------------
+// A pastel wheel. Every modality and every tag gets one, so a row's chips are a
+// pattern you can read at a glance instead of five words you have to. Dark ink
+// reads on all of them, in either theme. A new one takes the next colour nothing
+// else is using ; anything without a stored colour falls back to a stable one
+// picked from its name, so the board is never a wall of grey. Colours live in
+// the DOCUMENT ( vocab.mods / vocab.tags ) , so they follow the board.
+const PALETTE = [
+  "#bfd8f7","#c6e8e2","#c9e9c0","#e3eeb4","#f6e7ab","#fbd9b4","#f9c9c0",
+  "#f4c3ce","#e9c6e8","#d3ccf3","#c6d2f0","#bfe4f2","#e0dac6","#dfe2e8" ];
+const TAGFG = "#20242c";
+const lc = s => String(s||"").toLowerCase();
+const isHex = c => /^#[0-9a-f]{6}$/i.test(String(c||""));
+function hashIdx(s){ let h = 0; for(let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0; return h % PALETTE.length; }
+function vocabList(kind){
+  DOC.vocab = DOC.vocab || {};
+  const key = kind==="mod" ? "mods" : "tags";
+  if(!Array.isArray(DOC.vocab[key])) DOC.vocab[key] = [];
+  return DOC.vocab[key];
+}
+function vocabEntry(kind, name){ return vocabList(kind).find(t=>lc(t.name)===lc(name)); }
+function colorOf(kind, name){
+  const e = vocabEntry(kind, name);
+  return (e && isHex(e.color)) ? e.color : PALETTE[hashIdx(lc(name))];
+}
+function nextColor(kind){
+  const list = vocabList(kind);
+  const used = new Set(list.map(t=>lc(t.color)).filter(Boolean));
+  return PALETTE.find(c=>!used.has(lc(c))) || PALETTE[list.length % PALETTE.length];
+}
+const chipStyle = (kind,v) => `style="background:${colorOf(kind,v)};color:${TAGFG};border-color:transparent"`;
+// Anything you use joins its vocabulary list , which is what gives it a colour
+// that survives a restart ( and , for tags , keeps offering it in the chips ).
+function rememberValue(kind, value){
+  if(!vocabEntry(kind, value)) vocabList(kind).push({ name:value, color:nextColor(kind) });
+}
+// A row's chips are kept alphabetical, always : the order you happened to add
+// them in isn't information, and a list that shuffles is one you re-read.
+const byName = (a,b) => lc(a).localeCompare(lc(b));
+function sortVals(it){
+  if(it && it.mods) it.mods.sort(byName);
+  if(it && it.tags) it.tags.sort(byName);
+}
 
 function itemsOf(tid){ const t = DOC.tiers.find(t=>t.id===tid); return t ? t.items : null; }
 function allItems(){ return DOC.tiers.flatMap(t=>t.items.map(it=>({ it, tier:t }))); }
@@ -334,6 +395,7 @@ async function loadDoc(){
   const d = await (await fetch("/api/tiers")).json();
   DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
   if(!DOC.tiers.some(t=>t.id===addTier)) addTier = STAGING;
+  allItems().forEach(({it})=>sortVals(it));   // the server stores them sorted ; older files may not be
   dirty = false;
   $("#savestate").classList.remove("dirty");
   $("#savestate").textContent = DOC.updated_at ? ("saved " + DOC.updated_at.replace("T"," ").slice(0,16)) : "empty list";
@@ -409,18 +471,15 @@ function rowLinks(it){
 function chipsCell(it, kind){
   const vals = (kind==="mod" ? it.mods : it.tags) || [];
   return `<div class="cellchips">`+
-    vals.map(v=>`<span class="chip ${kind==='mod'?'mod':''}" data-val="${esc(v)}">${esc(v)}`+
+    vals.map(v=>`<span class="chip" ${chipStyle(kind,v)} data-val="${esc(v)}">${esc(v)}`+
       `<span class="x" data-drop="${esc(v)}" data-kind="${kind}" title="Remove">×</span></span>`).join("")+
     `<input class="chipin" data-kind="${kind}" placeholder="+" autocomplete="off"></div>`;
 }
 function rowHtml(it, n){
   const m = META[it.key] || {};
   const title = it.title || m.title || it.key;
-  const doi   = it.doi || m.doi || "";
   const year  = it.year || m.year || "";
-  const inner = doi
-    ? `<a class="titlelink" href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">${esc(title)}</a>`
-    : esc(title);
+  const inner = esc(title);          // plain text -- open it from the link strip
   const loose = (m.in_library === false) ? ` <span class="loose" title="Not matched to a paper in your library — links other than the DOI are unavailable">not in library</span>` : "";
   const tierOpts = DOC.tiers.map(t=>`<option value="${esc(t.id)}">${esc(t.label)}</option>`).join("");
   return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
@@ -475,35 +534,52 @@ function renderCounts(){
   $("#counts").innerHTML = `<span><b>${n}</b> papers</span><span><b>${ranked}</b> ranked</span>`+
     `<span>${DOC.tiers.length} tiers</span>`;
 }
-// The paint bar has two jobs. With rows SELECTED it's a row of checkboxes for
-// them : solid means every selected row carries that value, dashed means some
-// do, and a click flips it on all of them. With nothing selected a click arms
-// the value for painting instead ( click rows to toggle it ).
+// The paint bar has three jobs, in this order of precedence :
+//   FILTERING ( 🔎 on )  -- a click puts the chip in / out of the filter, and
+//                           the board shows only the papers carrying it.
+//   rows SELECTED        -- the chips are checkboxes for those rows : solid
+//                           outline = every one has it, dashed = some do, and a
+//                           click flips it on all of them.
+//   otherwise            -- a click arms it for painting ( click rows ).
 function renderPaintbar(){
-  const sel = selectedItems();
-  const state = (v, kind)=>{
+  const sel = filtering ? [] : selectedItems();
+  const chip = (v, kind, extra)=>{
+    const inF = filtering && TAGF.has(kind+":"+v);
     const on  = sel.length && sel.every(it=>hasValue(it, kind, v));
     const som = !on && sel.some(it=>hasValue(it, kind, v));
-    return { cls: on ? "has" : som ? "some" : "",
-      title: sel.length ? `${on?"on":som?"on some of":"off"} the ${sel.length} selected row(s) — click to flip it`
-                        : "click to paint it onto rows" };
+    const n   = allItems().filter(({it})=>hasValue(it, kind, v)).length;
+    const arm = armed && armed.kind===kind && armed.value===v;
+    const title = filtering  ? `${inF?"in":"not in"} the filter — click to ${inF?"drop":"add"} it ( ${n} paper(s) )`
+                : sel.length ? `${on?"on":som?"on some of":"off"} the ${sel.length} selected row(s) — click to flip it`
+                             : `${n} paper(s) — click to paint it onto rows`;
+    return `<span class="chip ${(inF||arm||on)?'on':som?'half':''}" ${chipStyle(kind,v)} `+
+      `data-kind="${kind}" data-val="${esc(v)}" title="${esc(title)}">${esc(v)}`+
+      `<span class="n">${n||""}</span>${extra||""}</span>`;
   };
-  $("#modchips").innerHTML = modOptions().map(v=>{
-    const s = state(v, "mod");
-    return `<span class="chip mod ${armed&&armed.kind==='mod'&&armed.value===v?'armed':''} ${s.cls}" `+
-      `data-kind="mod" data-val="${esc(v)}" title="${esc(s.title)}">${esc(v)}</span>`;
-  }).join("");
-  $("#tagchips").innerHTML = tagOptions().map(v=>{
-    const s = state(v, "tag");
-    return `<span class="chip ${armed&&armed.kind==='tag'&&armed.value===v?'armed':''} ${s.cls}" `+
-      `data-kind="tag" data-val="${esc(v)}" title="${esc(s.title)}">${esc(v)}`+
-      `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
-  }).join("")+
+  $("#modchips").innerHTML = modOptions().map(v=>chip(v,"mod")).join("");
+  $("#tagchips").innerHTML = tagOptions().map(v=>chip(v,"tag",
+      `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span>`)).join("")+
     `<input class="chipin newtag" id="newtag" placeholder="+ new tag" autocomplete="off">`;
-  $("#paintnote").textContent = sel.length
-    ? `${sel.length} row(s) selected — click a chip above to toggle it on them ( Esc clears )`
-    : armed ? `painting “${armed.value}” — click rows to toggle it ( Esc to stop )` : "";
-  document.body.classList.toggle("painting", !!armed);
+  renderNote();
+  document.body.classList.toggle("painting", !!armed && !filtering);
+}
+// One line after the chips, saying whichever of these is true : what the board
+// is filtered to, what's selected, what you're painting.
+function renderNote(shown){
+  const bits = [];
+  if(TAGF.size || $("#filter").value.trim()){
+    if(shown == null) shown = $$(".row:not(.hide)").length;
+    bits.push(`showing ${shown} of ${allItems().length}`+
+      (TAGF.size ? ` · ${filterAll?"all of":"any of"} ${Array.from(TAGF).map(s=>s.split(":").slice(1).join(":")).join(", ")}` : ""));
+  } else if(filtering){
+    bits.push("click chips to show only the papers carrying them");
+  }
+  if(!filtering){
+    const sel = selectedItems();
+    if(sel.length) bits.push(`${sel.length} row(s) selected — click a chip above to toggle it on them ( Esc clears )`);
+    else if(armed) bits.push(`painting “${armed.value}” — click rows to toggle it ( Esc to stop )`);
+  }
+  $("#paintnote").textContent = bits.join("   ·   ");
 }
 const hasValue = (it, kind, v) =>
   ((kind==="mod" ? it.mods : it.tags) || []).some(x=>x.toLowerCase()===v.toLowerCase());
@@ -550,9 +626,9 @@ function toggleOnSelection(kind, value){
     const i = list.findIndex(x=>x.toLowerCase()===value.toLowerCase());
     if(all){ if(i>=0) list.splice(i,1); }
     else if(i<0) list.push(value);
+    sortVals(it);
   });
-  if(kind==="tag" && !(DOC.vocab.tags||[]).some(t=>t.name.toLowerCase()===value.toLowerCase()))
-    DOC.vocab.tags.push({ name:value, color:"" });
+  rememberValue(kind, value);
   markDirty();
   items.forEach(it=>refreshCell(it.key, kind));
   renderPaintbar();
@@ -611,7 +687,7 @@ async function addPaper(hit, tierId){
   // Pre-fill the modalities ` prma modalities ` already worked out for this paper.
   if(!it.mods.length){
     const m = META[hit.key];
-    if(m && m.mods) it.mods = m.mods.slice();
+    if(m && m.mods){ it.mods = m.mods.slice(); sortVals(it); }
   }
   t.items.unshift(it);
   markDirty(); renderAll();
@@ -620,7 +696,7 @@ async function addPaper(hit, tierId){
   const got = await fetchMeta([it.key], true);
   const m = got[it.key];
   if(m && !it.mods.length && m.mods && m.mods.length){
-    it.mods = m.mods.slice(); markDirty(); refreshCell(it.key, "mod"); renderPaintbar();
+    it.mods = m.mods.slice(); sortVals(it); markDirty(); refreshCell(it.key, "mod"); renderPaintbar();
   }
   renderCounts();
   // The hit list stays open for the next add -- re-render it so this one now
@@ -654,6 +730,8 @@ function toggleValue(it, kind, value){
   const list = kind==="mod" ? it.mods : it.tags;
   const i = list.findIndex(v=>v.toLowerCase()===value.toLowerCase());
   if(i>=0) list.splice(i,1); else list.push(value);
+  sortVals(it);
+  rememberValue(kind, value);
   markDirty();
 }
 function addValue(it, kind, value){
@@ -662,8 +740,8 @@ function addValue(it, kind, value){
   const list = kind==="mod" ? it.mods : it.tags;
   if(list.some(v=>v.toLowerCase()===value.toLowerCase())) return false;
   list.push(value);
-  if(kind==="tag" && !(DOC.vocab.tags||[]).some(t=>t.name.toLowerCase()===value.toLowerCase()))
-    DOC.vocab.tags.push({ name:value, color:"" });
+  sortVals(it);
+  rememberValue(kind, value);
   markDirty();
   return true;
 }
@@ -714,7 +792,7 @@ function renderResults(){
     hits.map((h,i)=>{
       const on = findItem(h.key);
       const m  = META[h.key] || {};
-      const mods = (m.mods||[]).map(v=>`<span class="chip mod">${esc(v)}</span>`).join(" ");
+      const mods = (m.mods||[]).map(v=>`<span class="chip" ${chipStyle("mod",v)}>${esc(v)}</span>`).join(" ");
       return `<div class="hit ${i===hitIdx?'sel':''}" data-i="${i}" draggable="true">`+
         `<div style="flex:1;min-width:0">`+
           `<div class="ht">${esc(h.title||h.key)}</div>`+
@@ -835,7 +913,7 @@ document.addEventListener("drop", async e=>{
     if(!findItem(hit.key)){
       const it = newItem(hit);
       const m  = META[hit.key];
-      if(m && m.mods) it.mods = m.mods.slice();
+      if(m && m.mods){ it.mods = m.mods.slice(); sortVals(it); }
       const list = itemsOf(t.tier);
       if(list){ list.splice(Math.min(t.index, list.length), 0, it); markDirty(); renderAll(); renderCounts();
         fetchMeta([it.key], true); }
@@ -1020,13 +1098,22 @@ $("#acpop").addEventListener("mousedown", e=>{
 });
 
 // Paint chips : arm / disarm, create, delete
+// Filtering -> in / out of the filter. Rows selected -> tag them. Otherwise ->
+// arm for painting. Both chip bars route through here.
+function chipClicked(kind, v){
+  if(filtering){
+    const k = kind+":"+v;
+    TAGF.has(k) ? TAGF.delete(k) : TAGF.add(k);
+    applyFilter(); renderPaintbar();
+    return;
+  }
+  if(SEL.size){ toggleOnSelection(kind, v); return; }
+  armed = (armed && armed.kind===kind && armed.value===v) ? null : { kind, value:v };
+  renderPaintbar();
+}
 $("#modchips").addEventListener("click", e=>{
   const c = e.target.closest(".chip");
-  if(!c) return;
-  // Rows selected -> the chips tag them. Nothing selected -> arm for painting.
-  if(SEL.size){ toggleOnSelection("mod", c.dataset.val); return; }
-  armed = (armed && armed.kind==="mod" && armed.value===c.dataset.val) ? null : { kind:"mod", value:c.dataset.val };
-  renderPaintbar();
+  if(c) chipClicked("mod", c.dataset.val);
 });
 $("#tagchips").addEventListener("click", e=>{
   const del = e.target.closest("[data-deltag]");
@@ -1041,16 +1128,13 @@ $("#tagchips").addEventListener("click", e=>{
     return;
   }
   const c = e.target.closest(".chip");
-  if(!c) return;
-  if(SEL.size){ toggleOnSelection("tag", c.dataset.val); return; }
-  armed = (armed && armed.kind==="tag" && armed.value===c.dataset.val) ? null : { kind:"tag", value:c.dataset.val };
-  renderPaintbar();
+  if(c) chipClicked("tag", c.dataset.val);
 });
 $("#tagchips").addEventListener("keydown", e=>{
   if(e.target.id!=="newtag" || e.key!=="Enter") return;
   const v = e.target.value.trim();
   if(!v) return;
-  if(!(DOC.vocab.tags||[]).some(t=>t.name.toLowerCase()===v.toLowerCase())) DOC.vocab.tags.push({ name:v, color:"" });
+  rememberValue("tag", v);
   markDirty();
   if(SEL.size){
     // A brand-new tag with rows selected goes straight onto them.
@@ -1120,17 +1204,90 @@ document.addEventListener("click", e=>{
   if(!e.target.closest(".searchwrap")) closeResults();
 });
 $("#filter").addEventListener("input", applyFilter);
+// Two filters, ANDed : the text box, and the set of chips picked in the paint
+// bar ( 🔎 Filter ). A row hidden by either drops out of the selection too, so
+// the chips never tag a paper you can't see.
+function matchesChips(it){
+  if(!TAGF.size) return true;
+  const have = new Set([].concat((it.mods||[]).map(v=>"mod:"+lc(v)),
+                                 (it.tags||[]).map(v=>"tag:"+lc(v))));
+  const want = Array.from(TAGF).map(s=>{ const i = s.indexOf(":"); return s.slice(0,i+1) + lc(s.slice(i+1)); });
+  return filterAll ? want.every(w=>have.has(w)) : want.some(w=>have.has(w));
+}
 function applyFilter(){
   const q = $("#filter").value.trim().toLowerCase();
+  let shown = 0, pruned = false;
   $$(".row").forEach(row=>{
-    if(!q){ row.classList.remove("hide"); return; }
     const f = findItem(row.dataset.key);
     if(!f) return;
-    const hay = [ f.it.title, f.it.key, f.it.doi, (f.it.mods||[]).join(" "), (f.it.tags||[]).join(" "),
-      Object.values(f.it.fields||{}).join(" ") ].join(" ").toLowerCase();
-    row.classList.toggle("hide", !hay.includes(q));
+    const hay = q ? [ f.it.title, f.it.key, f.it.doi, (f.it.mods||[]).join(" "), (f.it.tags||[]).join(" "),
+      Object.values(f.it.fields||{}).join(" ") ].join(" ").toLowerCase() : "";
+    const hide = (q && !hay.includes(q)) || !matchesChips(f.it);
+    row.classList.toggle("hide", hide);
+    if(hide){ if(SEL.delete(row.dataset.key)) pruned = true; }
+    else shown++;
   });
+  if(pruned) paintSelection();
+  renderNote(shown);
 }
+// 🔎 : the chips stop being a brush and become a filter. Turning it off clears
+// the filter -- a hidden row you've forgotten about is worse than none.
+$("#tagfilter").addEventListener("click", ()=>{
+  filtering = !filtering;
+  if(!filtering) TAGF.clear();
+  else armed = null;
+  $("#tagfilter").classList.toggle("on", filtering);
+  $("#tagfilter").textContent = filtering ? "🔎 Filtering" : "🔎 Filter";
+  $("#tagfilterany").style.display = filtering ? "" : "none";
+  applyFilter(); renderPaintbar(); syncHeadOffset();
+});
+$("#tagfilterany").addEventListener("click", ()=>{
+  filterAll = !filterAll;
+  $("#tagfilterany").textContent = filterAll ? "all" : "any";
+  $("#tagfilterany").classList.toggle("on", filterAll);
+  applyFilter(); renderPaintbar();
+});
+
+// ---- chip colours ( 🎨 ) --------------------------------------------------
+// Every modality and tag, its colour, and how many papers carry it. The swatch
+// writes into the DOCUMENT, so the colour follows the list to every browser.
+function colourRow(kind, v){
+  const n = allItems().filter(({it})=>hasValue(it, kind, v)).length;
+  return `<div class="tagrow">`+
+    `<input type="color" data-ckind="${kind}" data-cname="${esc(v)}" value="${esc(colorOf(kind,v))}" title="Pick a colour">`+
+    `<span class="chip" ${chipStyle(kind,v)}>${esc(v)}</span>`+
+    `<span class="grow"></span><span class="cnt">${n} paper${n===1?"":"s"}</span>`+
+    `<button data-tagact="auto" data-ckind="${kind}" data-cname="${esc(v)}" title="Back to the colour picked from its name">auto</button>`+
+  `</div>`;
+}
+function tagEditor(){
+  const mods = modOptions().sort(byName).map(v=>colourRow("mod",v)).join("");
+  const tags = tagOptions().sort(byName).map(v=>colourRow("tag",v)).join("");
+  sheet(`<h3>Chip colours</h3>
+    <p>Modalities and tags are drawn in these colours everywhere on the list. A new one
+       takes the next unused colour by itself — this is only for when you want a different one.</p>
+    <h4>Modalities</h4>${mods || `<p>None yet.</p>`}
+    <h4>Tags</h4>${tags || `<p>None yet.</p>`}
+    <div class="btns"><button data-act="ok">Done</button></div>`);
+}
+function setChipColor(kind, name, color){
+  const e = vocabEntry(kind, name);
+  if(e) e.color = color;
+  else vocabList(kind).push({ name, color });
+  markDirty(); renderBoard(); renderPaintbar();
+}
+$("#tagedit").addEventListener("click", tagEditor);
+$("#sheet").addEventListener("input", e=>{
+  const c = e.target.closest("input[data-cname]");
+  if(c) setChipColor(c.dataset.ckind, c.dataset.cname, c.value);
+});
+$("#sheet").addEventListener("click", e=>{
+  const b = e.target.closest("[data-tagact]");
+  if(!b || b.dataset.tagact !== "auto") return;
+  const ent = vocabEntry(b.dataset.ckind, b.dataset.cname);
+  if(ent) ent.color = "";
+  markDirty(); renderBoard(); renderPaintbar(); tagEditor();
+});
 $("#addtier").addEventListener("click", ()=>{
   const label = prompt("Tier name", "New");
   if(!label) return;
@@ -1159,7 +1316,7 @@ $("#autotag").addEventListener("click", async ()=>{
   todo.forEach(k=>{
     const m = got[k] || META[k];
     const f = findItem(k);
-    if(f && m && m.mods && m.mods.length){ f.it.mods = m.mods.slice(); n++; }
+    if(f && m && m.mods && m.mods.length){ f.it.mods = m.mods.slice(); sortVals(f.it); n++; }
   });
   if(n) markDirty();
   renderBoard(); renderPaintbar();
@@ -1268,7 +1425,9 @@ function docFromCSV(rows, merge){
   });
   const doc = merge
     ? JSON.parse(JSON.stringify(DOC))
-    : { version:1, updated_at:"", columns:[], vocab:{ tags: JSON.parse(JSON.stringify(DOC.vocab.tags||[])) },
+    : { version:1, updated_at:"", columns:[],
+        vocab:{ tags: JSON.parse(JSON.stringify(DOC.vocab.tags||[])) ,
+                mods: JSON.parse(JSON.stringify(DOC.vocab.mods||[])) },
         tiers:[ { id:STAGING, label:"Unranked", desc:"Added but not ranked yet", color:"#8b94a3", locked:true, items:[] } ] };
   // Every unrecognised header becomes a free-text column ( Notes included : it
   // is just the column that ships by default ).
@@ -1307,24 +1466,30 @@ function docFromCSV(rows, merge){
       if(title) existing.title = title;
       if(!isNaN(year)) existing.year = year;
       const mods = splitList(cell(idx.mods)), tags = splitList(cell(idx.tags));
-      if(mods.length) existing.mods = mods;
-      if(tags.length) existing.tags = Array.from(new Set((existing.tags||[]).concat(tags)));
+      if(mods.length) existing.mods = mods.sort(byName);
+      if(tags.length) existing.tags = Array.from(new Set((existing.tags||[]).concat(tags))).sort(byName);
       existing.fields = Object.assign(existing.fields||{}, fields);
       updated++;
     } else {
       t.items.push({
         key, title, doi: cell(idx.doi) || (/^10\./.test(key) ? key : ""), wid:"",
         year: isNaN(year) ? null : year, journal:"",
-        mods: splitList(cell(idx.mods)), tags: splitList(cell(idx.tags)),
+        mods: splitList(cell(idx.mods)).sort(byName), tags: splitList(cell(idx.tags)).sort(byName),
         fields, added_at: nowISO(),
       });
       added++;
     }
   });
-  // Any tag the file introduced joins the vocabulary, so it paints like the rest.
-  doc.tiers.forEach(t=>t.items.forEach(it=>it.tags.forEach(tag=>{
-    if(!doc.vocab.tags.some(x=>x.name.toLowerCase()===tag.toLowerCase())) doc.vocab.tags.push({ name:tag, color:"" });
-  })));
+  // Any tag / modality the file introduced joins its vocabulary, so it gets a
+  // colour of its own and paints like the rest.
+  doc.tiers.forEach(t=>t.items.forEach(it=>{
+    [ [ "tags" , doc.vocab.tags ] , [ "mods" , doc.vocab.mods ] ].forEach(([field, list])=>{
+      (it[field]||[]).forEach(name=>{
+        if(!list.some(x=>x.name.toLowerCase()===name.toLowerCase()))
+          list.push({ name, color: PALETTE[list.length % PALETTE.length] });
+      });
+    });
+  }));
   return { doc, added, updated };
 }
 $("#importbtn").addEventListener("click", ()=>{
@@ -1357,7 +1522,7 @@ $("#importbtn").addEventListener("click", ()=>{
         let n = 0;
         allItems().forEach(({it})=>{
           const m = META[it.key];
-          if(!it.mods.length && m && m.mods && m.mods.length){ it.mods = m.mods.slice(); n++; }
+          if(!it.mods.length && m && m.mods && m.mods.length){ it.mods = m.mods.slice(); sortVals(it); n++; }
         });
         if(n){ markDirty(); renderBoard(); renderPaintbar(); }
         toast(`Imported — ${r.added} added, ${r.updated} updated${n?`, ${n} auto-tagged`:""}`, 4200);
@@ -1400,7 +1565,15 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         <b>click a row to select it</b> ( <kbd>⌘</kbd>-click adds another, <kbd>⇧</kbd>-click takes the
         range ) and click chips at the top to flip them on and off the whole selection ; or, with
         nothing selected, click a chip to <b>paint</b> it and click rows to toggle it. <kbd>Esc</kbd>
-        clears.</li>
+        clears. A row's chips are always shown alphabetically, so a paper reads the same way every
+        time.</li>
+    <li><b>Only show some of them</b>: <kbd>🔎 Filter</kbd> turns the chips into a filter — click
+        modalities / tags and the board narrows to the papers carrying them ( <kbd>any</kbd> /
+        <kbd>all</kbd> switches whether one is enough ). The text box narrows further, on anything
+        typed anywhere in a row. Press <kbd>🔎</kbd> again to see everything.</li>
+    <li><b>Colours</b>: every modality and tag gets its own pastel, so a row's chips are a pattern
+        you can read at a glance. A new one takes the next unused colour by itself ;
+        <kbd>🎨 Colours</kbd> is where you change them, and they're saved with the list.</li>
     <li><b>Columns</b>: <kbd>＋ Column</kbd> adds another free-text column, double-click a column name to
         rename it, shift-click to delete it.</li>
     <li><b>Delete</b> a paper with <kbd>🗑</kbd> — the toast that pops up will undo it.</li>

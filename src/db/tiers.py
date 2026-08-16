@@ -15,7 +15,8 @@ Shape ( output/cache/tiers.json ) :
     "version": 1 ,
     "updated_at": "2026-08-15T12:00:00+00:00" ,
     "columns": [ { "id": "notes" , "label": "Notes" } , ... ] ,
-    "vocab":   { "tags": [ { "name": "premier" , "color": "#e5484d" } , ... ] } ,
+    "vocab":   { "tags": [ { "name": "premier" , "color": "#e5484d" } , ... ] ,
+                 "mods": [ { "name": "fMRI"    , "color": "#cfe0fb" } , ... ] } ,
     "tiers":   [
       { "id": "a" , "label": "A" , "desc": "fMRI decodes covert speech" ,
         "color": "#e5484d" , "locked": false ,
@@ -100,7 +101,7 @@ def default_doc():
 		"version":    VERSION ,
 		"updated_at": "" ,
 		"columns":    [ { "id": "notes" , "label": "Notes" } ] ,
-		"vocab":      { "tags": [] } ,
+		"vocab":      { "tags": [] , "mods": [] } ,
 		"tiers":      tiers ,
 	}
 
@@ -121,7 +122,10 @@ def _clean_str( v , limit=None ):
 
 
 def _clean_list( v , limit=64 ):
-	"""A list of short , non-empty , de-duped strings ( modality / tag lists )."""
+	"""A list of short , non-empty , de-duped strings ( modality / tag lists ) ,
+	ALPHABETICAL. A row's chips read the same way every time you look at it --
+	the order you happened to add them in isn't information , and a list that
+	shuffles itself is one you have to re-read on every row."""
 	seen , out = set() , []
 	for item in ( v or [] ):
 		s = _clean_str( item , 120 ).strip()
@@ -131,7 +135,7 @@ def _clean_list( v , limit=64 ):
 		out.append( s )
 		if len( out ) >= limit:
 			break
-	return out
+	return sorted( out , key=str.lower )
 
 
 def _clean_item( raw , col_ids , seen_keys ):
@@ -236,9 +240,25 @@ def normalize( doc ):
 		return default_doc()
 	columns = _clean_columns( doc.get( "columns" ) )
 	col_ids = [ c[ "id" ] for c in columns ]
-	tags    = []
-	seen    = set()
-	for t in ( ( doc.get( "vocab" ) or {} ).get( "tags" ) or [] ):
+	vocab   = doc.get( "vocab" ) or {}
+	return {
+		"version":    VERSION ,
+		"updated_at": _clean_str( doc.get( "updated_at" ) , 40 ) ,
+		"columns":    columns ,
+		# Two named lists , same shape : the tags you invent , and the modality
+		# labels ( config/methods.py ) . Only their COLOURS live here -- the
+		# modality names themselves come from the config , this just remembers
+		# what colour you painted each chip.
+		"vocab":      { "tags": _clean_vocab( vocab.get( "tags" ) , 200 ) ,
+		                "mods": _clean_vocab( vocab.get( "mods" ) , 200 ) } ,
+		"tiers":      _clean_tiers( doc.get( "tiers" ) , col_ids ) ,
+	}
+
+
+def _clean_vocab( raw , limit ):
+	"""A { name , color } list : de-duped by name , plain strings accepted."""
+	out , seen = [] , set()
+	for t in ( raw or [] ):
 		if isinstance( t , str ):
 			t = { "name": t }
 		if not isinstance( t , dict ):
@@ -247,14 +267,10 @@ def normalize( doc ):
 		if not name or name.lower() in seen:
 			continue
 		seen.add( name.lower() )
-		tags.append( { "name": name , "color": _clean_str( t.get( "color" ) , 32 ) } )
-	return {
-		"version":    VERSION ,
-		"updated_at": _clean_str( doc.get( "updated_at" ) , 40 ) ,
-		"columns":    columns ,
-		"vocab":      { "tags": tags[ :200 ] } ,
-		"tiers":      _clean_tiers( doc.get( "tiers" ) , col_ids ) ,
-	}
+		out.append( { "name": name , "color": _clean_str( t.get( "color" ) , 32 ) } )
+		if len( out ) >= limit:
+			break
+	return out
 
 
 def item_count( doc ):

@@ -20,13 +20,17 @@ Shape ( output/cache/sort.json ) :
                     "wid": "W..." , "pdf": "" , "year": 2023 , "journal": "" ,
                     "tags": [ "fMRI" , "EEG" ] , "fields": { "notes": "..." } ,
                     "added_at": "..." } , ... ] ,
-    "vocab":    { "tags": [ { "name": "premier" , "color": "" } , ... ] }
+    "vocab":    { "tags": [ { "name": "premier" , "color": "#cfe0fb" } , ... ] }
   }
 
-`vocab.tags` is the tag list the page's chips and autocomplete offer. It is part
-of the DOCUMENT , not of any one browser , so a tag invented mid-session is
-still there after a restart -- including one you invented and haven't put on a
-paper yet.
+`vocab.tags` is the tag list the page's chips and autocomplete offer , each with
+the colour its chips are drawn in. It is part of the DOCUMENT , not of any one
+browser , so a tag invented mid-session is still there after a restart --
+including one you invented and haven't put on a paper yet , and in the same
+colour on every machine you open the board on.
+
+A row's `tags` are stored ALPHABETICAL ( see tiers._clean_list ) , so a paper's
+chips read the same way every time you look at it.
 
 Keys , columns , history and the write-whole contract are all exactly as
 src/db/tiers.py describes them -- read that docstring first.
@@ -89,17 +93,8 @@ def normalize( doc ):
 			row[ "tags" ] = tiers_db._clean_list( ( row.get( "tags" ) or [] ) + ( row.get( "mods" ) or [] ) )
 			row.pop( "mods" , None )
 			items.append( row )
-	tags , seen = [] , set()
-	for t in ( ( doc.get( "vocab" ) or {} ).get( "tags" ) or [] ):
-		if isinstance( t , str ):
-			t = { "name": t }
-		if not isinstance( t , dict ):
-			continue
-		name = tiers_db._clean_str( t.get( "name" ) , 60 ).strip()
-		if not name or name.lower() in seen:
-			continue
-		seen.add( name.lower() )
-		tags.append( { "name": name , "color": tiers_db._clean_str( t.get( "color" ) , 32 ) } )
+	tags = tiers_db._clean_vocab( ( doc.get( "vocab" ) or {} ).get( "tags" ) , 400 )
+	seen = { t[ "name" ].lower() for t in tags }
 	# Every tag actually in use joins the vocabulary , so one that arrived on an
 	# imported row is offered by the chips and survives the next restart too.
 	for it in items:
