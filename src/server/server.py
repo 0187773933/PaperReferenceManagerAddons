@@ -1488,6 +1488,96 @@ def lookup( cache: SnapshotCache , queries: List[ Dict ] ) -> List[ Dict ]:
 	return results
 
 
+def _refs_payload( dash , text ):
+	"""Somebody else's bibliography , resolved against this library.
+
+	src/db/refparse.py does the READING -- a numbered AMA list , an APA one , a
+	.docx paragraph per reference -- and this is the half that needs the index :
+	every parsed reference is looked up in the library , then in the
+	missing-paper pools , so the row that reaches a board carries the same KEY
+	the rest of prma uses for that paper. That key is what makes its DOI / PDF /
+	MD / Methods links work , and what lets the page tell "already on the board"
+	from "new" by identity instead of by spelling.
+
+	Matching follows the same policy as /exists , for the same reason : a DOI
+	settles it outright , and a title is only fuzzy-matched when there is no DOI
+	to go on -- a reference whose DOI we don't have is a paper we don't have ,
+	and letting a near-enough title overrule that would staple it to the wrong
+	paper silently.
+
+	Never a partial answer : a reference that matches nothing still comes back ,
+	flagged in_library=false with whatever the parse got , because the staging
+	shelf is exactly where a row you have to fix by hand belongs."""
+	from ..db import refparse
+
+	refs = refparse.parse( text )
+	if not refs:
+		return { "ok": True , "refs": [] }
+
+	def index( rows ):
+		by_doi , by_title , titles = {} , {} , []
+		for r in ( rows or [] ):
+			d = utils.normalize_doi( r.get( "doi" ) or "" )
+			if d:
+				by_doi.setdefault( d , r )
+			t = utils.normalize_title( r.get( "title" ) or "" )
+			if t and t not in by_title:
+				by_title[ t ] = r
+				titles.append( t )
+		return by_doi , by_title , titles
+
+	def match( doi , title , idx ):
+		by_doi , by_title , titles = idx
+		if doi:
+			return ( by_doi[ doi ] , "doi" ) if doi in by_doi else ( None , "" )
+		if not title:
+			return None , ""
+		if title in by_title:
+			return by_title[ title ] , "title"
+		hit = process.extractOne( title , titles , scorer=fuzz.token_sort_ratio ,
+			score_cutoff=TITLE_THRESHOLD )
+		return ( by_title[ hit[ 0 ] ] , "fuzzy" ) if hit else ( None , "" )
+
+	lib_idx = index( getattr( dash , "library" , None ) )
+	# Everything you DON'T have but know about : a cited work carries a WID and ,
+	# often , an open-access pdf url -- so even an unmatched reference can arrive
+	# with working links.
+	ext_idx = index( ( getattr( dash , "references" , None ) or [] ) +
+	                 ( getattr( dash , "cited_by"   , None ) or [] ) )
+
+	out = []
+	for r in refs:
+		doi   = utils.normalize_doi( r.get( "doi" ) or "" ) or ""
+		ntit  = utils.normalize_title( r.get( "title" ) or "" )
+		row , how = match( doi , ntit , lib_idx )
+		in_lib    = bool( row )
+		if not row:
+			row , how = match( doi , ntit , ext_idx )
+		row = row or {}
+		entry = {
+			"n":       r.get( "n" ) ,
+			"raw":     r.get( "raw" ) ,
+			"authors": r.get( "authors" ) or "" ,
+			# The library's title when we matched one : that's the canonical
+			# spelling , and seeing it is how you check a fuzzy match was right.
+			"title":   row.get( "title" ) or r.get( "title" ) or "" ,
+			"doi":     doi or ( row.get( "doi" ) or "" ) ,
+			"year":    r.get( "year" ) or row.get( "year" ) ,
+			"journal": r.get( "journal" ) or row.get( "journal" ) or "" ,
+			"url":     r.get( "url" ) or "" ,
+			"wid":     row.get( "wid" ) or "" ,
+			# A library row's `pdf` is a LOCAL path the page must ask /pdf?key=
+			# for , so it never travels ; an external row's is a url , so it does.
+			"pdf":     "" if in_lib else ( row.get( "pdf" ) or "" ) ,
+			"in_library": in_lib ,
+			"matched":    how ,
+		}
+		entry[ "key" ] = ( row.get( "key" ) or entry[ "doi" ] or entry[ "wid" ]
+			or refparse.synth_key( entry[ "title" ] or entry[ "raw" ] ) )
+		out.append( entry )
+	return { "ok": True , "refs": out }
+
+
 class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
 	daemon_threads = True
 
@@ -1947,6 +2037,27 @@ class Handler( BaseHTTPRequestHandler ):
 					return
 				self._send_json( 200 , { "ok": True , "meta": self.papermeta.meta(
 					keys , want_mods=bool( data.get( "mods" ) ) ) } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		if self.path == "/api/refs/parse":
+			# Somebody else's reference list -> rows the boards can stage. The
+			# body is either the FILE the page picked ( a .docx , which is a zip ,
+			# or a .txt ) posted as its own bytes , or { "text": "<pasted>" } --
+			# one route for both because they arrive as the same block of text
+			# ( refparse.text_from_upload sorts out which it got ) and neither is
+			# worth a multipart parser.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b""
+				from ..db import refparse
+				self._send_json( 200 , _refs_payload(
+					self.dash , refparse.text_from_upload( body ) ) )
+			except ValueError as e:
+				# The user dropped the wrong kind of file. refparse raises these
+				# already phrased for a person , so pass it straight through.
+				self._send_json( 400 , { "ok": False , "error": str( e ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return

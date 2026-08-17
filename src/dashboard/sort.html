@@ -88,6 +88,12 @@
   .chip.ghost { background:transparent; border:1px dashed var(--line); color:var(--muted); }
   .pbtn { padding:3px 9px; font-size:12px; line-height:1.35; }
   .pbtn.on { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  /* Dragging a chip along the bar reorders the bar ( see reorderTags ) : the
+     order is the document's, so a group you build here is there tomorrow. */
+  .chips .chip[draggable="true"] { cursor:grab; }
+  .chips .chip.tdrag { opacity:.35; }
+  .chips .chip.dropL { box-shadow:-3px 0 0 var(--accent); }
+  .chips .chip.dropR { box-shadow:3px 0 0 var(--accent); }
   /* the colour editor ( 🎨 Colors ) */
   .tagrow { display:flex; align-items:center; gap:9px; padding:4px 0; border-bottom:1px solid var(--line); }
   .tagrow:last-child { border-bottom:none; }
@@ -174,9 +180,42 @@
   .acopt.sel, .acopt:hover { background:var(--panel2); color:var(--accent); }
   .acnew { color:var(--muted); font-size:11px; padding:4px 9px; }
 
+  /* ---- the staging shelf : imported references, not on the list yet ---- */
+  #stage { display:none; margin-bottom:13px; border:1px solid var(--line); border-radius:10px; background:var(--panel); overflow:hidden; }
+  #stage.show { display:block; }
+  .stagehead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 11px; background:var(--panel2); border-bottom:1px solid var(--line); }
+  .stagehead b { font-size:13px; }
+  .stagehead .hint { color:var(--muted); font-size:12px; }
+  .stagehead button { padding:3px 9px; font-size:12px; }
+  .stagetagin { width:118px !important; padding:3px 9px !important; font-size:12px !important; border-radius:11px !important; }
+  .srows { max-height:54vh; overflow:auto; }
+  .srow { display:grid; grid-template-columns:24px minmax(240px,2.3fr) minmax(160px,1fr) 118px; gap:9px; align-items:start; padding:7px 11px; border-bottom:1px solid var(--line); }
+  .srow:last-child { border-bottom:none; }
+  .srow:hover { background:var(--panel2); }
+  .srow .pick { margin-top:7px; }
+  .stitle { width:100%; background:transparent; border:1px solid transparent; border-radius:6px; color:var(--fg); font:500 14px/1.4 inherit; padding:3px 5px; }
+  .stitle:hover { border-color:var(--line); }
+  .stitle:focus { outline:none; border-color:var(--accent); background:var(--panel2); }
+  .sauth { color:var(--muted); font-size:12px; padding:1px 6px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .srow .links { padding-left:6px; }
+  .stools { display:flex; gap:5px; justify-content:flex-end; }
+  .stools button { padding:2px 8px; font-size:12px; }
+  .badge { font-size:11px; border-radius:9px; padding:1px 7px; background:var(--chip); color:var(--muted); white-space:nowrap; }
+  .badge.have { color:var(--green); font-weight:600; }
+  .badge.fuzzy { color:var(--warn); }
+
   #overlay { display:none; position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.45); align-items:center; justify-content:center; }
   #overlay.show { display:flex; }
   .sheet { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; max-width:580px; width:calc(100% - 40px); max-height:80vh; overflow:auto; }
+  .sheet.wide { max-width:860px; }
+  .sheet textarea {
+    width:100%; min-height:200px; resize:vertical; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:9px 11px;
+    font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  .sheet textarea:focus { outline:none; border-color:var(--accent); }
+  .drop { border:1px dashed var(--line); border-radius:8px; padding:11px; text-align:center; color:var(--muted); font-size:12px; margin-top:10px; }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
   .sheet h3 { margin:0 0 10px; font-size:15px; }
   .sheet p { color:var(--muted); font-size:13px; margin:0 0 12px; }
   .sheet .btns { display:flex; gap:9px; justify-content:flex-end; flex-wrap:wrap; margin-top:14px; }
@@ -212,6 +251,7 @@
     <button id="automove" title="Off: tagging never moves a row. On: a row jumps to sit with the others sharing its tags.">⇥ Auto-move: off</button>
     <button id="autotag" title="Tag every untagged row from its ` prma modalities ` stamp">⚡ Auto-tag</button>
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
+    <button id="refsbtn" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
     <button id="importbtn" title="Import a CSV — merge into this board or replace it">⇩ Import CSV</button>
     <button id="exportbtn" title="Download the whole board as CSV">⇧ Export CSV</button>
     <button id="pulltiers" title="Copy every paper from the /tiers board into this one">⇄ Pull from Tiers</button>
@@ -243,7 +283,7 @@
     <input type="text" id="filter" style="max-width:220px" placeholder="Filter the list…" autocomplete="off">
   </div>
   <div class="paintbar">
-    <span class="pblabel">Tags:</span>
+    <span class="pblabel" title="Drag a tag along this bar to move it — the order is the board's, so groups you build here stay built">Tags:</span>
     <button class="pbtn" id="tagfilter" title="Turn the tag bar into a filter: click tags to show only the papers carrying them">🔎 Filter</button>
     <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen tags · all = it needs every one">any</button>
     <button class="pbtn" id="tagedit" title="Pick the colour every tag's chips are drawn in">🎨 Colors</button>
@@ -252,6 +292,7 @@
   </div>
 </header>
 <main>
+  <section id="stage"></section>
   <div class="colhead" id="colhead"></div>
   <div id="board"></div>
 </main>
@@ -276,7 +317,7 @@ const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace
 const nowISO = () => new Date().toISOString();
 const lc = s => String(s||"").toLowerCase();
 
-let DOC   = { version:1, options:{auto_move:false}, columns:[{id:"notes",label:"Notes"}], items:[], vocab:{tags:[]} };
+let DOC   = { version:1, options:{auto_move:false}, columns:[{id:"notes",label:"Notes"}], items:[], staging:[], vocab:{tags:[]} };
 let REV   = 0;
 let VOCAB = [];             // modality vocabulary ( config/methods.py )
 let META  = {};             // paper key -> /api/paper-meta entry
@@ -286,6 +327,11 @@ let selAnchor = null;       // where a shift-click range starts from
 let TAGF  = new Set();      // tags the board is filtered down to ( see applyFilter )
 let filtering = false;      // the tag bar is a filter right now, not a brush
 let filterAll = false;      // ... and a row needs ALL of TAGF, not just one
+let SOFF  = new Set();      // staged keys whose checkbox is OFF ( this browser only )
+// How each staged row was matched to the library ( "doi" / "title" / "fuzzy" ).
+// Deliberately NOT part of the document : it's a fact about the import you just
+// ran, worth a badge while you review it and meaningless a day later.
+let STAGEHOW = {};
 let dirty = false, saving = false, saveTimer = null;
 
 // ---- tag colours ----------------------------------------------------------
@@ -319,14 +365,38 @@ function findItem(key){
   const i = DOC.items.findIndex(x=>x.key===key);
   return i<0 ? null : { idx:i, it:DOC.items[i] };
 }
-// Every tag the chips offer : the modality vocabulary, the document's own tag
-// list ( which is what makes an invented tag survive a restart ), and anything
-// actually in use.
+// Every tag the chips offer : the document's own tag list ( which is what makes
+// an invented tag survive a restart ), the modality vocabulary, and anything
+// actually in use on a row or on the staging shelf.
+//
+// IN THAT ORDER, and the order matters : vocab.tags is the order you dragged
+// the bar into ( see reorderTags ), so it comes first and everything the
+// document hasn't got a place for yet trails after it.
 function tagOptions(){
-  const s = new Set(VOCAB);
-  (DOC.vocab.tags||[]).forEach(t=>s.add(t.name));
-  DOC.items.forEach(it=>(it.tags||[]).forEach(t=>s.add(t)));
-  return Array.from(s);
+  const out = [], seen = new Set();
+  const push = v => { if(v && !seen.has(lc(v))){ seen.add(lc(v)); out.push(v); } };
+  (DOC.vocab.tags||[]).forEach(t=>push(t.name));
+  VOCAB.forEach(push);
+  DOC.items.forEach(it=>(it.tags||[]).forEach(push));
+  staged().forEach(it=>(it.tags||[]).forEach(push));
+  return out;
+}
+// Dragging a chip along the bar puts it somewhere else in the bar. The order is
+// the DOCUMENT's ( vocab.tags ) , not this browser's : grouping related tags
+// side by side is a judgement about the tags, same as their colours, so it
+// follows the board everywhere. Anything the bar was showing WITHOUT a place in
+// the vocabulary gets one here -- otherwise a modality you dragged would snap
+// back the next time the bar redrew.
+function reorderTags(what, onto, before){
+  const order = tagOptions();
+  const from = order.findIndex(v=>lc(v)===lc(what));
+  if(from < 0) return;
+  const [v] = order.splice(from, 1);
+  let to = onto ? order.findIndex(x=>lc(x)===lc(onto)) : -1;
+  if(to < 0) to = order.length; else if(!before) to += 1;
+  order.splice(to, 0, v);
+  DOC.vocab.tags = order.map(name=>{ const e = vocabEntry(name); return { name, color: e ? e.color : "" }; });
+  markDirty(); renderPaintbar();
 }
 const isVocab = t => VOCAB.some(v=>lc(v)===lc(t));
 const tagSig  = it => (it.tags||[]).map(lc).sort().join("|");
@@ -359,12 +429,14 @@ async function loadDoc(){
   const d = await (await fetch("/api/sort")).json();
   DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
   if(!DOC.options) DOC.options = { auto_move:false };
+  if(!Array.isArray(DOC.staging)) DOC.staging = [];
   DOC.items.forEach(sortTags);      // the server stores them sorted ; older files may not be
+  DOC.staging.forEach(sortTags);
   dirty = false;
   $("#savestate").classList.remove("dirty");
   $("#savestate").textContent = DOC.updated_at ? ("saved " + DOC.updated_at.replace("T"," ").slice(0,16)) : "empty board";
   renderAll();
-  fetchMeta(DOC.items.map(it=>it.key));
+  fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
 }
 async function pollRev(){
   try {
@@ -483,7 +555,9 @@ function renderBoard(){
 function renderCounts(){
   const n = DOC.items.length;
   const tagged = DOC.items.filter(it=>(it.tags||[]).length).length;
+  const st = staged().length;
   $("#counts").innerHTML = `<span><b>${n}</b> papers</span><span><b>${tagged}</b> tagged</span>`+
+    (st ? `<span><b>${st}</b> staged</span>` : "")+
     `<span>${tagOptions().length} tags</span>`;
 }
 // The tag bar has three jobs, in this order of precedence :
@@ -503,8 +577,8 @@ function renderPaintbar(){
     const how = filtering  ? `${inF?"in":"not in"} the filter — click to ${inF?"drop":"add"} it ( ${n} paper(s) )`
               : sel.length ? `${on?"on":som?"on some of":"off"} the ${sel.length} selected row(s) — click to flip it`
                            : `${n} paper(s) — click to paint it onto rows`;
-    return `<span class="chip ${(inF||armed===v||on)?'on':som?'half':''}" ${chipStyle(v)} `+
-      `data-val="${esc(v)}" title="${esc(how)}">${esc(v)}<span class="n">${n||""}</span>`+
+    return `<span class="chip ${(inF||armed===v||on)?'on':som?'half':''}" ${chipStyle(v)} draggable="true" `+
+      `data-val="${esc(v)}" title="${esc(how)} — drag it to move it along the bar">${esc(v)}<span class="n">${n||""}</span>`+
       `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
   }).join("")+
     `<input class="chipin newtag" id="newtag" placeholder="+ new tag" autocomplete="off">`;
@@ -581,7 +655,7 @@ function toggleTagOnSelection(value){
   renderPaintbar(); renderCounts();
   toast(`${all?"Removed":"Added"} “${value}” ${all?"from":"on"} ${items.length} row(s)`);
 }
-function renderAll(){ renderColHead(); renderBoard(); renderCounts(); renderPaintbar(); }
+function renderAll(){ renderColHead(); renderBoard(); renderStage(); renderCounts(); renderPaintbar(); }
 function repaintLinks(){
   $$(".row").forEach(row=>{
     const f = findItem(row.dataset.key);
@@ -592,6 +666,17 @@ function repaintLinks(){
     if(m && m.in_library === false && !row.querySelector(".loose"))
       row.querySelector(".tt").insertAdjacentHTML("beforeend",
         ` <span class="loose" title="Not matched to a paper in your library">not in library</span>`);
+  });
+  // The shelf's rows hang off the same meta ( "in library", and which links
+  // exist ), and it lands after they're first drawn. Only those two strips are
+  // touched -- a title you're editing up there is left alone.
+  $$(".srow").forEach(row=>{
+    const it = findStage(row.dataset.key);
+    if(!it) return;
+    const links = row.querySelector("[data-links]");
+    if(links) links.innerHTML = rowLinks(it);
+    const badge = row.querySelector("[data-sbadge]");
+    if(badge) badge.innerHTML = sbadgeHtml(it);
   });
 }
 function cssEsc(s){ return String(s).replace(/["\\]/g, "\\$&"); }
@@ -614,6 +699,260 @@ function toast(msg, ms, undoLabel, onUndo){
 function syncHeadOffset(){
   document.documentElement.style.setProperty("--headh", document.querySelector("header").offsetHeight + "px");
 }
+
+// ---- the staging shelf ----------------------------------------------------
+// Where an imported reference list lands ( 📋 Import refs ) : the same rows as
+// the board, OFF the list, so a bibliography can be read, corrected and TAGGED
+// before any of it is given a position. Nothing here is in the sort -- the
+// numbers below don't know it exists -- until you press Add.
+//
+// It lives in the DOCUMENT ( DOC.staging , see src/db/sortboard.py ) rather
+// than in this browser : a pasted bibliography is a session of work, and a
+// reload losing it would be the same kind of loss the board is written whole to
+// avoid.
+const staged = () => (DOC.staging = DOC.staging || []);
+function findStage(key){ return staged().find(x=>x.key===key) || null; }
+const picked = () => staged().filter(it=>!SOFF.has(it.key));
+// Matches utils.normalize_title -- the same folding the server matched with.
+const ntitle = s => String(s||"").normalize("NFKD").toLowerCase()
+  .replace(/[^a-z0-9]+/g," ").trim();
+
+const WHERE_LABEL = { bottom:"the bottom", top:"the top", placed:"after the last sorted row" };
+const whereLabel = () => WHERE_LABEL[DOC.options.add_where || "bottom"] || "the bottom";
+
+function stageHeadHtml(){
+  const n = picked().length, all = n === staged().length;
+  return `<div class="stagehead">`+
+    `<b>Staging</b>`+
+    `<span class="hint">${staged().length} imported reference(s) — not on the list yet</span>`+
+    `<div class="grow"></div>`+
+    `<input class="chipin stagetagin" id="stagetag" placeholder="+ tag checked" autocomplete="off" `+
+      `title="Type a tag and press ↵ to put it on every checked row">`+
+    `<button id="stageall" title="Check or uncheck every row">${all?"none":"all"}</button>`+
+    `<button id="stagedrop" ${n?"":"disabled"} title="Throw the checked rows away ( undoable )">🗑</button>`+
+    `<button class="primary" id="stageadd" ${n?"":"disabled"} `+
+      `title="Move them onto the list — where the “add to…” dropdown says">＋ Add ${n} to ${whereLabel()}</button>`+
+  `</div>`;
+}
+// Only the header, for a checkbox tick : re-rendering the whole shelf on every
+// tick would throw away a note you were half-way through typing.
+function refreshStageHead(){
+  const head = $("#stage .stagehead");
+  if(head) head.outerHTML = stageHeadHtml();
+}
+// year · journal · whether the library turned out to have it. The last part
+// only becomes true once /api/paper-meta lands, so repaintLinks redraws it.
+function sbadgeHtml(it){
+  const m = META[it.key] || {};
+  const bits = [ it.year || "", it.journal || "" ].filter(Boolean).map(esc).join(" · ");
+  const badge = m.in_library
+    ? `<span class="badge have" title="Matched a paper already in your library — it arrives with all its links">in library</span>`
+    : `<span class="badge" title="Nothing in your library matched this one">new</span>`;
+  const fuzzy = STAGEHOW[it.key] === "fuzzy"
+    ? `<span class="badge fuzzy" title="Matched on the title alone, with no DOI to confirm it — worth a look before you add it">fuzzy</span>` : "";
+  return `${bits}${bits?" · ":""}${badge}${fuzzy}`;
+}
+function srowHtml(it){
+  return `<div class="srow" data-key="${esc(it.key)}">`+
+    `<input type="checkbox" class="pick" ${SOFF.has(it.key)?"":"checked"} title="Include this one when you add">`+
+    `<div>`+
+      `<input class="stitle" value="${esc(it.title)}" title="A parsed title isn't always the right one — fix it here">`+
+      (it.authors ? `<div class="sauth">${esc(it.authors)}</div>` : "")+
+      `<div class="sauth" data-sbadge="1">${sbadgeHtml(it)}</div>`+
+      `<div class="links" data-links="1">${rowLinks(it)}</div>`+
+    `</div>`+
+    `<div data-cell="tags">${tagsCell(it)}</div>`+
+    `<div class="stools">`+
+      `<button data-act="sadd" title="Add just this one">＋ Add</button>`+
+      `<button class="delbtn" data-act="sdrop" title="Throw this one away ( undoable )">🗑</button>`+
+    `</div>`+
+  `</div>`;
+}
+function renderStage(){
+  const box = $("#stage");
+  box.classList.toggle("show", staged().length > 0);
+  box.innerHTML = staged().length
+    ? stageHeadHtml() + `<div class="srows">` + staged().map(srowHtml).join("") + `</div>`
+    : "";
+}
+function srowEl(key){ return document.querySelector(`.srow[data-key="${cssEsc(key)}"]`); }
+// Onto the list, at whatever the "add to…" dropdown says -- the same place a
+// paper added from search would land, which is the bottom unless you changed it.
+function addStaged(keys){
+  const want  = new Set(keys.filter(k=>!findItem(k)));
+  const moving = staged().filter(it=>want.has(it.key));
+  if(!moving.length) return;
+  DOC.staging = staged().filter(it=>!want.has(it.key));
+  moving.forEach(it=>{ SOFF.delete(it.key); (it.tags||[]).forEach(rememberTag); });
+  DOC.items.splice(insertIndex(), 0, ...moving);
+  markDirty(); renderStage(); renderBoard(); renderCounts(); renderPaintbar();
+  const first = rowEl(moving[0].key);
+  if(first){ first.classList.add("flash"); first.scrollIntoView({ block:"center", behavior:"smooth" }); }
+  toast(`Added ${moving.length} paper(s) to ${whereLabel()}`, 6000, "Undo", ()=>{
+    DOC.items   = DOC.items.filter(it=>moving.indexOf(it) < 0);
+    DOC.staging = moving.concat(staged());
+    markDirty(); renderStage(); renderBoard(); renderCounts(); renderPaintbar();
+  });
+}
+function dropStaged(keys){
+  const gone = new Set(keys);
+  const before = staged().slice();
+  DOC.staging = staged().filter(it=>!gone.has(it.key));
+  if(DOC.staging.length === before.length) return;
+  keys.forEach(k=>SOFF.delete(k));
+  markDirty(); renderStage(); renderCounts(); renderPaintbar();
+  toast(`Dropped ${before.length - DOC.staging.length} staged row(s)`, 6000, "Undo", ()=>{
+    DOC.staging = before; markDirty(); renderStage(); renderCounts(); renderPaintbar();
+  });
+}
+// Every way this board already knows a paper : its key, its DOI, its title. A
+// reference list is somebody else's spelling of papers you may well already
+// have, so "do we have it" has to be all three -- the server resolves what it
+// can to a library key first ( server._refs_payload ), and the title is the
+// backstop for what it couldn't.
+function haveIndex(){
+  const seen = new Map();
+  const add = (it, where)=>{
+    if(it.key) seen.set(lc(it.key), where);
+    if(it.doi) seen.set("doi:"+lc(it.doi), where);
+    const t = ntitle(it.title);
+    if(t) seen.set("t:"+t, where);
+  };
+  DOC.items.forEach(it=>add(it, "list"));
+  staged().forEach(it=>add(it, "shelf"));
+  return seen;
+}
+function stageRefs(refs, label){
+  const seen = haveIndex();
+  const fresh = [];
+  let onList = 0, onShelf = 0;
+  refs.forEach(r=>{
+    const where = seen.get(lc(r.key)) || (r.doi && seen.get("doi:"+lc(r.doi)))
+      || seen.get("t:"+ntitle(r.title)) || "";
+    if(where === "list"){  onList++;  return; }
+    if(where === "shelf"){ onShelf++; return; }
+    const it = {
+      key: r.key, title: r.title||"", authors: r.authors||"", doi: r.doi||"", wid: r.wid||"",
+      pdf: r.pdf||"", year: r.year||null, journal: r.journal||"", tags: [],
+      fields: Object.fromEntries(DOC.columns.map(c=>[c.id,""])), added_at: nowISO(),
+    };
+    STAGEHOW[it.key] = r.matched || "";
+    // Two references in one file can still collide with each other.
+    if(it.key) seen.set(lc(it.key), "shelf");
+    const t = ntitle(it.title);
+    if(t) seen.set("t:"+t, "shelf");
+    fresh.push(it);
+  });
+  if(fresh.length){
+    DOC.staging = staged().concat(fresh);
+    markDirty();
+  }
+  renderStage(); renderCounts(); renderPaintbar();
+  const skipped = [ onList ? `${onList} already on the list` : "",
+                    onShelf ? `${onShelf} already staged` : "" ].filter(Boolean).join(", ");
+  toast(`${label}: ${refs.length} read · ${fresh.length} staged`+(skipped?` · ${skipped}`:""), 6000);
+  if(!fresh.length) return;
+  // Same courtesy the board gives a paper added from search : one that turns out
+  // to be in the library arrives pre-tagged from its ` prma modalities ` stamp.
+  fetchMeta(fresh.map(it=>it.key), true).then(()=>{
+    let n = 0;
+    fresh.forEach(it=>{
+      const m = META[it.key];
+      if(!it.tags.length && m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); m.mods.forEach(rememberTag); n++; }
+    });
+    if(n) markDirty();
+    renderStage(); renderPaintbar();
+  });
+}
+
+$("#stage").addEventListener("click", e=>{
+  const row = e.target.closest(".srow");
+  const x   = e.target.closest(".cellchips .x");
+  if(x && row){
+    const it = findStage(row.dataset.key);
+    if(it){ toggleTag(it, x.dataset.drop); markDirty(); renderStage(); renderPaintbar(); }
+    return;
+  }
+  if(row && e.target.closest('[data-act="sadd"]')){  addStaged([ row.dataset.key ]);  return; }
+  if(row && e.target.closest('[data-act="sdrop"]')){ dropStaged([ row.dataset.key ]); return; }
+  if(e.target.id === "stageadd"){  addStaged(picked().map(it=>it.key));  return; }
+  if(e.target.id === "stagedrop"){ dropStaged(picked().map(it=>it.key)); return; }
+  if(e.target.id === "stageall"){
+    SOFF = new Set(picked().length === staged().length ? staged().map(it=>it.key) : []);
+    renderStage();
+  }
+});
+$("#stage").addEventListener("change", e=>{
+  const row = e.target.closest(".srow");
+  if(!row || !e.target.matches(".pick")) return;
+  if(e.target.checked) SOFF.delete(row.dataset.key); else SOFF.add(row.dataset.key);
+  refreshStageHead();
+});
+$("#stage").addEventListener("input", e=>{
+  const row = e.target.closest(".srow");
+  if(!row || !e.target.matches(".stitle")) return;
+  const it = findStage(row.dataset.key);
+  if(it && it.title !== e.target.value){ it.title = e.target.value; markDirty(); }
+});
+
+// ---- importing a reference list -------------------------------------------
+// A bibliography -- the list at the end of a review, a .docx a collaborator
+// sent, a block pasted straight off a PDF -- read by src/db/refparse.py and
+// staged. Papers this board already has are counted and skipped, so re-pasting
+// a list you've grown only brings in what's new.
+async function parseRefs(body, type, label){
+  toast(`Reading ${label}…`, 20000);
+  let d;
+  try {
+    d = await (await fetch("/api/refs/parse", { method:"POST",
+      headers:{ "Content-Type": type }, body })).json();
+  } catch(e){ toast("Could not read that ( offline? )", 4000); return; }
+  if(!d || !d.ok){ toast(`Could not read that — ${esc((d&&d.error)||"no answer from the server")}`, 6000); return; }
+  if(!(d.refs||[]).length){ toast(`No references found in ${label}`, 4000); return; }
+  stageRefs(d.refs, label);
+}
+function refFile(f){
+  $("#overlay").classList.remove("show");
+  parseRefs(f, "application/octet-stream", f.name);
+}
+$("#refsbtn").addEventListener("click", ()=>{
+  sheet(`
+    <h3>Import a reference list</h3>
+    <p>Paste references below — numbered or not, AMA / APA / IEEE, whatever your source uses — or
+       drop a <kbd>.docx</kbd> / <kbd>.txt</kbd> on the box under it. Everything lands on the
+       <b>staging shelf</b> above the list, where you fix titles and tag them before adding.
+       Anything already on the board is skipped.</p>
+    <textarea id="reftext" spellcheck="false" placeholder="33.&#9;Comte A, Gabriel D, Pazart L, et al. On the difficulty to communicate with fMRI-based protocols used to identify covert awareness. Neuroscience. 2015;300:448-459. doi:10.1016/j.neuroscience.2015.05.059"></textarea>
+    <div class="drop" id="refdrop">or drop a <b>.docx</b> / <b>.txt</b> here, or <a href="#" id="refpick">choose a file</a></div>
+    <div class="btns">
+      <button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="parse">Read them</button>
+    </div>`, act=>{
+    if(act !== "parse") return;
+    const text = (($("#reftext")||{}).value || "").trim();
+    if(!text){ toast("Nothing pasted"); return; }
+    parseRefs(JSON.stringify({ text }), "application/json", "the pasted text");
+  }, true);
+  const pick = $("#refpick"), drop = $("#refdrop"), ta = $("#reftext");
+  pick.onclick = ev=>{
+    ev.preventDefault();
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".docx,.txt,.md,.text,text/plain";
+    inp.onchange = ()=>{ const f = inp.files && inp.files[0]; if(f) refFile(f); };
+    inp.click();
+  };
+  // The page's own row / hit dragging bails on anything it didn't start ( it
+  // checks dragKey / dragHit ), so a file dropped here only has the browser's
+  // "navigate to it" default to beat.
+  drop.ondragover  = ev=>{ ev.preventDefault(); ev.stopPropagation(); drop.classList.add("over"); };
+  drop.ondragleave = ()=> drop.classList.remove("over");
+  drop.ondrop = ev=>{
+    ev.preventDefault(); ev.stopPropagation(); drop.classList.remove("over");
+    const f = ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if(f) refFile(f);
+  };
+  if(ta) ta.focus();
+});
 
 // ---- mutations ------------------------------------------------------------
 function newItem(hit){
@@ -784,9 +1123,23 @@ function moveHit(delta){
 
 // ---- autocomplete ---------------------------------------------------------
 let AC = { input:null, opts:[], idx:0 };
+// The rows a chip input types onto : one board row, one staged row, or -- from
+// the shelf's own "+ tag checked" box -- every checked staged row at once. One
+// function so the autocomplete, and everything below it, is written once.
+function acTargets(input){
+  if(input.id === "stagetag") return picked();
+  const s = input.closest(".srow");
+  if(s){ const it = findStage(s.dataset.key); return it ? [ it ] : []; }
+  const r = input.closest(".row");
+  if(r){ const f = findItem(r.dataset.key); return f ? [ f.it ] : []; }
+  return [];
+}
 function acOptions(input){
-  const f = findItem(input.closest(".row").dataset.key);
-  const have = f ? (f.it.tags||[]).map(lc) : [];
+  const targets = acTargets(input);
+  // Offer what at least one target hasn't got : with several rows picked, a tag
+  // some of them are missing is exactly the one you're reaching for.
+  const have = targets.length
+    ? tagOptions().filter(v=>targets.every(it=>hasTag(it,v))).map(lc) : [];
   const term = lc(input.value.trim());
   return tagOptions().filter(v=>!have.includes(lc(v))).filter(v=>!term || lc(v).includes(term));
 }
@@ -810,16 +1163,24 @@ function acCommit(value){
   if(!input) return;
   const v = (value != null ? value : input.value).trim();
   if(!v){ acClose(); return; }
-  const f = findItem(input.closest(".row").dataset.key);
-  if(f && addTag(f.it, v)){
-    acClose();
-    afterTagChange(f.it.key);
-    const row = rowEl(f.it.key);
+  const board = input.closest(".row");
+  const srow  = input.closest(".srow");
+  const n = acTargets(input).filter(it=>addTag(it, v)).length;
+  if(!n){ input.value = ""; acClose(); return; }
+  acClose();
+  if(board){
+    afterTagChange(board.dataset.key);
+    const row = rowEl(board.dataset.key);
     if(row) row.querySelector(".chipin").focus();
     return;
   }
-  input.value = "";
-  acClose();
+  // The shelf : redraw it, then put the caret back where it was so a run of
+  // tags is one uninterrupted stretch of typing.
+  markDirty(); renderStage(); renderPaintbar(); renderCounts();
+  const el = srow ? ( srowEl(srow.dataset.key) || document ).querySelector(".chipin")
+                  : $("#stagetag");
+  if(el) el.focus();
+  if(!srow) toast(`Tagged ${n} staged row(s) “${v}”`);
 }
 
 // ---- drag and drop --------------------------------------------------------
@@ -1018,6 +1379,50 @@ $("#tagchips").addEventListener("click", e=>{
   armed = (armed===v) ? null : v;
   renderPaintbar();
 });
+// ---- rearranging the tag bar ----------------------------------------------
+// Drag a chip along the bar and it stays where you put it : the bar's order is
+// DOC.vocab.tags ( see tagOptions / reorderTags ), so tags you want read
+// together -- the modalities, then your own judgements -- can be grouped, and
+// the grouping is the board's rather than this browser's.
+//
+// A drag that never moves isn't a drag : the browser fires no dragstart, the
+// click lands as usual, and a chip still arms / filters / tags exactly as before.
+let dragTag = null;
+function clearTagMarks(){ $$("#tagchips .chip").forEach(c=>c.classList.remove("dropL","dropR","tdrag")); }
+$("#tagchips").addEventListener("dragstart", e=>{
+  const c = e.target.closest(".chip");
+  if(!c){ return; }
+  dragTag = c.dataset.val;
+  c.classList.add("tdrag");
+  e.dataTransfer.effectAllowed = "move";
+  try { e.dataTransfer.setData("text/plain", dragTag); } catch(err){}
+});
+$("#tagchips").addEventListener("dragover", e=>{
+  if(dragTag == null) return;
+  e.preventDefault(); e.stopPropagation();
+  $$("#tagchips .chip").forEach(c=>c.classList.remove("dropL","dropR"));
+  const c = e.target.closest(".chip");
+  if(!c || lc(c.dataset.val) === lc(dragTag)) return;
+  const r = c.getBoundingClientRect();
+  c.classList.add((e.clientX - r.left) > r.width/2 ? "dropR" : "dropL");
+});
+$("#tagchips").addEventListener("drop", e=>{
+  if(dragTag == null) return;
+  e.preventDefault(); e.stopPropagation();
+  const c = e.target.closest(".chip");
+  let onto = null, before = false;
+  if(c && lc(c.dataset.val) !== lc(dragTag)){
+    const r = c.getBoundingClientRect();
+    onto = c.dataset.val;
+    before = (e.clientX - r.left) <= r.width/2;
+  }
+  const what = dragTag;
+  dragTag = null;
+  clearTagMarks();
+  reorderTags(what, onto, before);        // no target -> the end of the bar
+});
+document.addEventListener("dragend", ()=>{ dragTag = null; clearTagMarks(); });
+
 $("#tagchips").addEventListener("keydown", e=>{
   if(e.target.id!=="newtag" || e.key!=="Enter") return;
   const v = e.target.value.trim();
@@ -1372,6 +1777,10 @@ function docFromCSV(rows, merge){
   const doc = merge
     ? JSON.parse(JSON.stringify(DOC))
     : { version:1, updated_at:"", options:{ auto_move: !!DOC.options.auto_move }, columns:[], items:[],
+        // "Replace everything" replaces the LIST. The staging shelf is not the
+        // list -- it is references you haven't triaged yet -- so it survives ,
+        // the same way the tag vocabulary below does.
+        staging: JSON.parse(JSON.stringify(DOC.staging||[])) ,
         vocab:{ tags: JSON.parse(JSON.stringify(DOC.vocab.tags||[])) } };
   extra.forEach(x=>{ if(!doc.columns.some(c=>c.id===x.id)) doc.columns.push({ id:x.id, label:x.label }); });
   if(!doc.columns.length) doc.columns.push({ id:"notes", label:"Notes" });
@@ -1445,8 +1854,9 @@ $("#importbtn").addEventListener("click", ()=>{
 });
 
 // ---- overlay + help -------------------------------------------------------
-function sheet(html, onAct){
+function sheet(html, onAct, wide){
   $("#sheet").innerHTML = html;
+  $("#sheet").classList.toggle("wide", !!wide);
   $("#overlay").classList.add("show");
   $("#sheet").onclick = e=>{
     const b = e.target.closest("button[data-act]");
@@ -1479,6 +1889,21 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         <kbd>Esc</kbd> clears. A row's tags are always shown alphabetically, so a paper reads the
         same way every time. Tags you make are saved with the board and are still here after a
         restart.</li>
+    <li><b>Rearrange the tag bar</b> by dragging a chip along it — put the modalities together,
+        your own judgements next to each other, whatever grouping you think in. The order is
+        saved with the board, so it's the same in every browser you open it in. A plain click
+        still does what it always did.</li>
+    <li><b>📋 Import refs</b> takes somebody else's bibliography — <b>paste</b> it in, or drop a
+        <kbd>.docx</kbd> / <kbd>.txt</kbd> — numbered or not, AMA / APA / IEEE. Every reference
+        that isn't already here lands on the <b>staging shelf</b> above the list: <i>not</i> in
+        the sort, nothing renumbered, nothing to undo if the parse was wrong. There you fix a
+        title, tag rows one at a time or check several and use <kbd>+ tag checked</kbd>, then
+        press <kbd>＋ Add</kbd> to move them onto the list — to the bottom, unless the
+        <b>add to…</b> dropdown says otherwise. A reference that turns out to be a paper you
+        already have is matched to it ( <kbd>in library</kbd> ), arrives with all its links and
+        is pre-tagged from its Methods stamp; one matched on the title alone is flagged
+        <kbd>fuzzy</kbd> so you can check it. The shelf is saved with the board, so a reload
+        doesn't lose it.</li>
     <li><b>Only show some of them</b>: <kbd>🔎 Filter</kbd> turns the tag bar into a filter — click
         tags and the board narrows to the papers carrying them ( <kbd>any</kbd> / <kbd>all</kbd>
         switches whether one is enough ). The text box next to the search narrows further, on

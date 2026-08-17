@@ -20,14 +20,22 @@ Shape ( output/cache/sort.json ) :
                     "wid": "W..." , "pdf": "" , "year": 2023 , "journal": "" ,
                     "tags": [ "fMRI" , "EEG" ] , "fields": { "notes": "..." } ,
                     "added_at": "..." } , ... ] ,
+    "staging":  [ ... same rows , not in the list yet ... ] ,
     "vocab":    { "tags": [ { "name": "premier" , "color": "#cfe0fb" } , ... ] }
   }
+
+`staging` is the shelf a reference list imported from a .docx / a paste lands on
+( src/db/refparse.py ) : the same rows , OFF the list , so a bibliography can be
+read and tagged before any of it is given a position. See src/db/tiers.py for
+why it lives in the document rather than in the browser.
 
 `vocab.tags` is the tag list the page's chips and autocomplete offer , each with
 the colour its chips are drawn in. It is part of the DOCUMENT , not of any one
 browser , so a tag invented mid-session is still there after a restart --
 including one you invented and haven't put on a paper yet , and in the same
-colour on every machine you open the board on.
+colour on every machine you open the board on. Its ORDER is the order the chip
+bar draws them in and the order you dragged them into , for the same reason :
+grouping related tags side by side is a judgement about the tags.
 
 A row's `tags` are stored ALPHABETICAL ( see tiers._clean_list ) , so a paper's
 chips read the same way every time you look at it.
@@ -72,8 +80,18 @@ def default_doc():
 		"options":    { "auto_move": False , "add_where": "bottom" } ,
 		"columns":    [ { "id": "notes" , "label": "Notes" } ] ,
 		"items":      [] ,
+		"staging":    [] ,
 		"vocab":      { "tags": [] } ,
 	}
+
+
+def _one_namespace( row ):
+	"""ONE tag namespace here , so a document that came through the tier page
+	( which keeps modalities in their own list ) keeps everything it was tagged
+	with."""
+	row[ "tags" ] = tiers_db._clean_list( ( row.get( "tags" ) or [] ) + ( row.get( "mods" ) or [] ) )
+	row.pop( "mods" , None )
+	return row
 
 
 def normalize( doc ):
@@ -83,21 +101,20 @@ def normalize( doc ):
 		return default_doc()
 	columns = tiers_db._clean_columns( doc.get( "columns" ) )
 	col_ids = [ c[ "id" ] for c in columns ]
+	# One key namespace across the list AND the shelf , so a staged row can never
+	# shadow a placed one. The list is cleaned first : it wins.
 	items , seen_keys = [] , set()
 	for raw in ( doc.get( "items" ) or [] ):
 		row = tiers_db._clean_item( raw , col_ids , seen_keys )
 		if row:
-			# ONE tag namespace here , so a document that came through the tier
-			# page ( which keeps modalities in their own list ) keeps everything
-			# it was tagged with.
-			row[ "tags" ] = tiers_db._clean_list( ( row.get( "tags" ) or [] ) + ( row.get( "mods" ) or [] ) )
-			row.pop( "mods" , None )
-			items.append( row )
+			items.append( _one_namespace( row ) )
+	staging = [ _one_namespace( r ) for r in
+		tiers_db._clean_staging( doc.get( "staging" ) , col_ids , seen_keys ) ]
 	tags = tiers_db._clean_vocab( ( doc.get( "vocab" ) or {} ).get( "tags" ) , 400 )
 	seen = { t[ "name" ].lower() for t in tags }
 	# Every tag actually in use joins the vocabulary , so one that arrived on an
 	# imported row is offered by the chips and survives the next restart too.
-	for it in items:
+	for it in items + staging:
 		for t in it[ "tags" ]:
 			if t.lower() not in seen:
 				seen.add( t.lower() )
@@ -115,6 +132,7 @@ def normalize( doc ):
 		} ,
 		"columns":    columns ,
 		"items":      items ,
+		"staging":    staging ,
 		"vocab":      { "tags": tags[ :400 ] } ,
 	}
 

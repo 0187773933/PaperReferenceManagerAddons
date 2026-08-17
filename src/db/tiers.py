@@ -42,6 +42,14 @@ so normalize() drops any repeat of a key it has already seen ( first tier wins )
 "notes" is always present so a fresh document has somewhere to type. Both the
 column set and the tag vocabulary are part of the document because a CSV import
 can introduce either.
+
+`staging` is a list of the same rows , OFF the board : where a reference list
+imported from a .docx / a paste lands ( src/db/refparse.py ) so it can be read
+and tagged before it is ranked. It is part of the document rather than of the
+browser because a bibliography is worth a session of work , and losing it to a
+reload would be the same kind of loss the tier list itself is written whole to
+avoid. The one-key-one-row rule spans it too : a paper that made it onto the
+board is no longer staged.
 """
 
 import re
@@ -71,6 +79,11 @@ DEFAULT_TIERS = (
 # How many past versions to keep in output/cache/tiers-history/ . Each is a few
 # KB , and they are the undo of last resort for a hand-typed document.
 HISTORY_KEEP = 40
+
+# How many rows the staging shelf will hold. A pasted bibliography is a few
+# hundred entries ; past this the shelf has stopped being something you can read
+# through , which is the only thing it is for.
+MAX_STAGED = 600
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +116,7 @@ def default_doc():
 		"columns":    [ { "id": "notes" , "label": "Notes" } ] ,
 		"vocab":      { "tags": [] , "mods": [] } ,
 		"tiers":      tiers ,
+		"staging":    [] ,
 	}
 
 
@@ -159,6 +173,10 @@ def _clean_item( raw , col_ids , seen_keys ):
 	return {
 		"key":      key ,
 		"title":    _clean_str( raw.get( "title" ) , 1000 ) ,
+		# Only ever set by a reference import ( src/db/refparse.py ) , and kept
+		# because it is the half of a pasted reference the library can't give
+		# back : an unmatched row's authors are the only way to recognize it.
+		"authors":  _clean_str( raw.get( "authors" ) , 600 ) ,
 		"doi":      _clean_str( raw.get( "doi" ) , 400 ) ,
 		"wid":      _clean_str( raw.get( "wid" ) , 60 ) ,
 		# Only set for a paper that ISN'T in the library : the open-access PDF url
@@ -197,9 +215,11 @@ def _clean_columns( raw ):
 	return out[ :16 ]
 
 
-def _clean_tiers( raw , col_ids ):
-	"""Every tier , in order , with the staging tier guaranteed present and last."""
-	out , seen_ids , seen_keys = [] , set() , set()
+def _clean_tiers( raw , col_ids , seen_keys ):
+	"""Every tier , in order , with the staging tier guaranteed present and last.
+	`seen_keys` is the caller's -- it is shared with the staging shelf , so one
+	paper can't be in both places at once."""
+	out , seen_ids = [] , set()
 	for t in ( raw or [] ):
 		if not isinstance( t , dict ):
 			continue
@@ -232,6 +252,21 @@ def _clean_tiers( raw , col_ids ):
 	return out + staging
 
 
+def _clean_staging( raw , col_ids , seen_keys , limit=MAX_STAGED ):
+	"""The staging shelf : imported-but-not-placed papers , in the order they
+	arrived. Same rows as the board and the same one-key-one-row rule -- the
+	`seen_keys` handed in already holds every key on the board , so a paper that
+	has been placed is silently dropped from here."""
+	out = []
+	for r in ( raw or [] ):
+		row = _clean_item( r , col_ids , seen_keys )
+		if row:
+			out.append( row )
+		if len( out ) >= limit:
+			break
+	return out
+
+
 def normalize( doc ):
 	"""Coerce anything POSTed at us into the documented shape. Never raises :
 	a malformed field is dropped or defaulted , not an error , because the
@@ -241,6 +276,10 @@ def normalize( doc ):
 	columns = _clean_columns( doc.get( "columns" ) )
 	col_ids = [ c[ "id" ] for c in columns ]
 	vocab   = doc.get( "vocab" ) or {}
+	# One key namespace across the board AND the shelf , so a staged row can
+	# never shadow a placed one. The board is cleaned first : it wins.
+	seen_keys = set()
+	tiers     = _clean_tiers( doc.get( "tiers" ) , col_ids , seen_keys )
 	return {
 		"version":    VERSION ,
 		"updated_at": _clean_str( doc.get( "updated_at" ) , 40 ) ,
@@ -249,9 +288,15 @@ def normalize( doc ):
 		# labels ( config/methods.py ) . Only their COLOURS live here -- the
 		# modality names themselves come from the config , this just remembers
 		# what colour you painted each chip.
+		#
+		# Their ORDER is the order the page's chip bar draws them in , and it is
+		# the order you dragged them into : grouping related tags side by side is
+		# a judgement about the tags , so it belongs to the document rather than
+		# to one browser ( same argument as the colours ).
 		"vocab":      { "tags": _clean_vocab( vocab.get( "tags" ) , 200 ) ,
 		                "mods": _clean_vocab( vocab.get( "mods" ) , 200 ) } ,
-		"tiers":      _clean_tiers( doc.get( "tiers" ) , col_ids ) ,
+		"tiers":      tiers ,
+		"staging":    _clean_staging( doc.get( "staging" ) , col_ids , seen_keys ) ,
 	}
 
 
