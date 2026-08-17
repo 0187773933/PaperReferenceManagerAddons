@@ -1,7 +1,9 @@
+import os
 import re
 import yaml
 import json
 import pickle
+import threading
 import base64
 import unicodedata
 from tqdm import tqdm
@@ -23,8 +25,31 @@ def read_yaml( file_path ):
 		return yaml.safe_load( f )
 
 def write_json( file_path , python_object ):
-	with open( file_path , "w" , encoding="utf-8" ) as f:
-		json.dump( python_object , f , ensure_ascii=False , indent=4 )
+	"""Write the whole file or none of it.
+
+	The bytes go to a sibling temp file first and are only then renamed over the
+	target ( os.replace is atomic on every platform we run on ) , so a process
+	killed mid-write -- a ^C , a crash , a laptop lid -- leaves the PREVIOUS file
+	intact rather than a half-written one. That matters most for the hand-typed
+	documents next door ( src/db/tiers.py , src/db/sortboard.py ) : those cannot
+	be rebuilt from anything , and a truncated one used to read back as an empty
+	board."""
+	file_path = str( file_path )
+	# pid + thread : the server is threaded , and two writers must never share a
+	# temp name even when they are writing the same file.
+	tmp = f"{file_path}.tmp-{os.getpid()}-{threading.get_ident()}"
+	try:
+		with open( tmp , "w" , encoding="utf-8" ) as f:
+			json.dump( python_object , f , ensure_ascii=False , indent=4 )
+			f.flush()
+			os.fsync( f.fileno() )
+		os.replace( tmp , file_path )
+	finally:
+		if os.path.exists( tmp ):
+			try:
+				os.remove( tmp )
+			except OSError:
+				pass
 
 def read_json( file_path ):
 	with open( file_path , encoding="utf-8" ) as f:

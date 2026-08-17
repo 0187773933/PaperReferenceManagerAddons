@@ -80,10 +80,13 @@ DEFAULT_TIERS = (
 # KB , and they are the undo of last resort for a hand-typed document.
 HISTORY_KEEP = 40
 
-# How many rows the staging shelf will hold. A pasted bibliography is a few
-# hundred entries ; past this the shelf has stopped being something you can read
-# through , which is the only thing it is for.
-MAX_STAGED = 600
+# How many rows the staging shelf will hold. This is a guard against a runaway
+# paste , not a curation limit : anything past it is DROPPED on the way in , so
+# it sits well above the few hundred entries a real bibliography runs to -- a
+# review with a thousand references , or a morning of pasting several , must not
+# quietly lose its tail. ( The page says so too when the server keeps fewer rows
+# than it sent. )
+MAX_STAGED = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -329,15 +332,38 @@ def item_count( doc ):
 
 def load( args ):
 	"""The stored document , normalized -- or a seeded empty one when there is
-	no file yet ( or it is unreadable , in which case the unreadable file is
-	left alone rather than overwritten )."""
+	no file yet.
+
+	An unreadable file is NOT quietly treated as an empty list : the page would
+	load that emptiness , the next keystroke would save it back , and a document
+	that only exists because it was typed in by hand would be gone. So a file
+	that won't parse falls back to the newest snapshot in tiers-history/ that
+	will , and the damaged file is left where it is for you to look at."""
 	p = tiers_path( args )
 	if not p.exists():
 		return default_doc()
 	try:
 		return normalize( utils.read_json( p ) )
+	except Exception as e:
+		print( f"tiers :: {p.name} could not be read ( {e} ) -- looking for the newest snapshot" )
+		return _recover( args ) or default_doc()
+
+
+def _recover( args ):
+	"""The newest history snapshot that still parses , normalized. None when
+	there is no history , or none of it is readable either."""
+	try:
+		snaps = sorted( history_dir( args ).glob( "tiers-*.json" ) , reverse=True )
 	except Exception:
-		return default_doc()
+		return None
+	for snap in snaps:
+		try:
+			doc = normalize( utils.read_json( snap ) )
+		except Exception:
+			continue
+		print( f"tiers :: recovered from {snap.name}" )
+		return doc
+	return None
 
 
 def save( args , doc ):

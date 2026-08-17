@@ -189,7 +189,10 @@
   .stagehead button { padding:3px 9px; font-size:12px; }
   .stagetagin { width:118px !important; padding:3px 9px !important; font-size:12px !important; border-radius:11px !important; }
   .srows { max-height:54vh; overflow:auto; }
-  .srow { display:grid; grid-template-columns:24px minmax(240px,2.3fr) minmax(160px,1fr) 118px; gap:9px; align-items:start; padding:7px 11px; border-bottom:1px solid var(--line); }
+  /* Same shape as a board row -- checkbox, paper, tags, one cell per free-text
+     column, tools -- so a staged row is the row it is about to become, notes
+     and all ( --sgrid , set by renderStage ). */
+  .srow { display:grid; grid-template-columns:var(--sgrid); gap:9px; align-items:start; padding:7px 11px; border-bottom:1px solid var(--line); }
   .srow:last-child { border-bottom:none; }
   .srow:hover { background:var(--panel2); }
   .srow .pick { margin-top:7px; }
@@ -406,6 +409,7 @@ function markDirty(){
   dirty = true;
   $("#savestate").textContent = "unsaved…";
   $("#savestate").classList.add("dirty");
+  queueDraft();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, 700);
 }
@@ -419,12 +423,23 @@ async function save(){
       body: JSON.stringify({ doc: DOC }) })).json();
     if(r && r.ok){
       REV = r.rev; dirty = false;
+      clearDraft();
       $("#savestate").classList.remove("dirty");
       $("#savestate").textContent = "saved " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
-    } else $("#savestate").textContent = "save failed";
-  } catch(e){ $("#savestate").textContent = "save failed ( offline? )"; }
+      // The server caps the shelf ( tiers.MAX_STAGED ). If it ever keeps fewer
+      // rows than we sent, you hear about it rather than finding out on the next
+      // reload.
+      const kept = r.doc && r.doc.staging ? r.doc.staging.length : staged().length;
+      if(kept < staged().length)
+        toast(`The server kept ${kept} of ${staged().length} staged rows — the shelf is full`, 9000);
+    } else { $("#savestate").textContent = "save failed — retrying"; retrySave(); }
+  } catch(e){ $("#savestate").textContent = "save failed ( offline? ) — retrying"; retrySave(); }
   saving = false;
 }
+// A save that didn't land is not a save you have to remember to redo : the draft
+// below is already in this browser and we keep trying, so a server that comes
+// back -- or a laptop that wakes up -- picks the work up by itself.
+function retrySave(){ clearTimeout(saveTimer); saveTimer = setTimeout(save, 5000); }
 async function loadDoc(){
   const d = await (await fetch("/api/sort")).json();
   DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
@@ -435,9 +450,109 @@ async function loadDoc(){
   dirty = false;
   $("#savestate").classList.remove("dirty");
   $("#savestate").textContent = DOC.updated_at ? ("saved " + DOC.updated_at.replace("T"," ").slice(0,16)) : "empty board";
+  STAGEHOW = Object.assign(readHow(), STAGEHOW);
   renderAll();
+  pruneHow();
   fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
 }
+
+// ---- the draft in this browser --------------------------------------------
+// The document is written to localStorage on every change and thrown away the
+// moment the server confirms a save. It covers the one loss the server's own
+// history cannot : work that never REACHED the server -- a reload two keystrokes
+// after an import, a server killed mid-session, a laptop that slept and woke up
+// somewhere else. On the next load an unsaved draft is offered back ( see
+// offerDraft ), so an imported bibliography is always resumable.
+const DRAFT_KEY = "prma-sort-draft";
+const HOW_KEY   = "prma-sort-how";
+let draftTimer = null;
+function writeDraft(){
+  clearTimeout(draftTimer); draftTimer = null;
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ rev:REV, at:Date.now(), doc:DOC })); } catch(e){}
+  writeHow();
+}
+function queueDraft(){ if(!draftTimer) draftTimer = setTimeout(writeDraft, 250); }
+function clearDraft(){
+  clearTimeout(draftTimer); draftTimer = null;
+  try { localStorage.removeItem(DRAFT_KEY); } catch(e){}
+}
+function readDraft(){ try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch(e){ return null; } }
+// How each staged row was matched ( STAGEHOW ) is a fact about the import rather
+// than about the document, so it is NOT saved with the board -- but it is worth
+// keeping for as long as the rows are on the shelf, which means keeping it here.
+function writeHow(){ try { localStorage.setItem(HOW_KEY, JSON.stringify(STAGEHOW)); } catch(e){} }
+function readHow(){ try { return JSON.parse(localStorage.getItem(HOW_KEY) || "{}") || {}; } catch(e){ return {}; } }
+function pruneHow(){
+  const live = new Set(staged().map(it=>it.key));
+  let cut = false;
+  Object.keys(STAGEHOW).forEach(k=>{ if(!live.has(k)){ delete STAGEHOW[k]; cut = true; } });
+  if(cut) writeHow();
+}
+// What a draft and the stored document have to agree on for the draft to be
+// nothing new. Deliberately NOT a JSON compare : the server normalizes on the
+// way in ( sorts tags, coerces years, fills the vocabulary in from what's in
+// use ), so a byte compare would call every draft different and ask about it
+// forever. This is the part you would actually mourn -- the list, the shelf,
+// and what is typed on them.
+function docSig(d){
+  const rows = list => (list||[]).map(it=>[
+    it.key , it.title||"" , String(it.year||"") ,
+    (it.tags||[]).map(lc).sort().join("\u0001") ,
+    Object.keys(it.fields||{}).sort().filter(k=>it.fields[k])
+      .map(k=>k+"="+it.fields[k]).join("\u0001") ,
+  ].join("\u0002")).join("\u0003");
+  return rows(d.items)+"\u0004"+rows(d.staging)+"\u0004"+
+    (d.columns||[]).map(c=>c.id+":"+c.label).join(",");
+}
+// Called once, after the first load. A draft that matches what came back was
+// saved after all ( the beacon below landed ) and is dropped without a word.
+function offerDraft(){
+  const d = readDraft();
+  if(!d || !d.doc || !d.doc.items){ return; }
+  if(docSig(d.doc) === docSig(DOC)){ clearDraft(); return; }
+  const when = new Date(d.at || Date.now()).toLocaleString();
+  sheet(`
+    <h3>Unsaved work found in this browser</h3>
+    <p>A copy of this board from <b>${esc(when)}</b> never reached the server — the page went away,
+       or the server did, before it could be written. It holds
+       <b>${(d.doc.items||[]).length}</b> paper(s) on the list and
+       <b>${(d.doc.staging||[]).length}</b> on the staging shelf ; what is on the server right now
+       holds ${DOC.items.length} and ${staged().length}.</p>
+    <p><b>Restore</b> puts that copy back on screen and saves it. <b>Discard</b> throws it away and
+       keeps the server's. Either way the server's own history is still in
+       <code>output/cache/sort-history/</code>.</p>
+    <div class="btns">
+      <button data-act="discard">Discard it</button>
+      <button class="primary" data-act="restore">Restore it</button>
+    </div>`, act=>{
+    if(act !== "restore"){ if(act === "discard") clearDraft(); return; }
+    DOC = d.doc;
+    if(!DOC.options) DOC.options = { auto_move:false };
+    if(!Array.isArray(DOC.staging)) DOC.staging = [];
+    DOC.items.forEach(sortTags);
+    DOC.staging.forEach(sortTags);
+    renderAll(); markDirty();
+    fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
+    toast("Restored — saving it to the server now", 5000);
+  });
+}
+// Leaving with work in flight : write the draft synchronously, then push the
+// document out with a beacon, which survives the page going away in a way
+// fetch() does not. The browser's own "are you sure" is the fallback for when
+// the beacon can't even be queued.
+window.addEventListener("beforeunload", e=>{
+  if(!dirty) return;
+  writeDraft();
+  let sent = false;
+  try {
+    sent = navigator.sendBeacon("/api/sort",
+      new Blob([ JSON.stringify({ doc: DOC }) ], { type:"application/json" }));
+  } catch(err){}
+  if(!sent){ e.preventDefault(); e.returnValue = ""; }
+});
+// Switching tabs / minimizing is the last moment anything is guaranteed to run
+// on a phone or a sleeping laptop, so flush there too.
+document.addEventListener("visibilitychange", ()=>{ if(document.hidden && dirty) save(); });
 async function pollRev(){
   try {
     const d = await (await fetch("/api/sort/version")).json();
@@ -752,6 +867,14 @@ function sbadgeHtml(it){
     ? `<span class="badge fuzzy" title="Matched on the title alone, with no DOI to confirm it — worth a look before you add it">fuzzy</span>` : "";
   return `${bits}${bits?" · ":""}${badge}${fuzzy}`;
 }
+// The shelf's own grid, built the same way the board's is ( gridTemplate ) so
+// the two line up column for column.
+function stageGridTemplate(){
+  const n = DOC.columns.length;
+  const min = n > 3 ? "112px" : "150px";
+  return `24px minmax(${n>3?"200px":"240px"},2.3fr) minmax(160px,1fr) `+
+         DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ")+` 118px`;
+}
 function srowHtml(it){
   return `<div class="srow" data-key="${esc(it.key)}">`+
     `<input type="checkbox" class="pick" ${SOFF.has(it.key)?"":"checked"} title="Include this one when you add">`+
@@ -762,18 +885,44 @@ function srowHtml(it){
       `<div class="links" data-links="1">${rowLinks(it)}</div>`+
     `</div>`+
     `<div data-cell="tags">${tagsCell(it)}</div>`+
+    // The notes columns, exactly as the board draws them : reading a reference
+    // is when you have something to say about it, and a note typed here rides
+    // onto the list with the row ( it is the same row -- same `fields` ).
+    DOC.columns.map(c=>`<div class="notecell"><textarea data-field="${esc(c.id)}" `+
+      `placeholder="${esc(c.label)}…" spellcheck="false">${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
     `<div class="stools">`+
       `<button data-act="sadd" title="Add just this one">＋ Add</button>`+
       `<button class="delbtn" data-act="sdrop" title="Throw this one away ( undoable )">🗑</button>`+
     `</div>`+
   `</div>`;
 }
+// A full redraw of the shelf puts the caret back where it was afterwards -- the
+// same courtesy renderBoard pays the list, and it matters here for the same
+// reason : a title you are half-way through fixing, or a note you are half-way
+// through typing, must survive the shelf redrawing under you.
 function renderStage(){
   const box = $("#stage");
+  const a = document.activeElement;
+  let focus = null;
+  if(a && a.closest && a.closest(".srow"))
+    focus = { key: a.closest(".srow").dataset.key,
+              field: a.dataset ? a.dataset.field : null,
+              title: a.classList.contains("stitle"),
+              start: a.selectionStart, end: a.selectionEnd };
+  document.documentElement.style.setProperty("--sgrid", stageGridTemplate());
   box.classList.toggle("show", staged().length > 0);
   box.innerHTML = staged().length
     ? stageHeadHtml() + `<div class="srows">` + staged().map(srowHtml).join("") + `</div>`
     : "";
+  if(focus && (focus.title || focus.field)){
+    const row = srowEl(focus.key);
+    const el  = row && (focus.title ? row.querySelector(".stitle")
+                                    : row.querySelector(`[data-field="${focus.field}"]`));
+    if(el){
+      el.focus();
+      try { el.setSelectionRange(focus.start, focus.end); } catch(e){}
+    }
+  }
 }
 function srowEl(key){ return document.querySelector(`.srow[data-key="${cssEsc(key)}"]`); }
 // Onto the list, at whatever the "add to…" dropdown says -- the same place a
@@ -785,9 +934,19 @@ function addStaged(keys){
   DOC.staging = staged().filter(it=>!want.has(it.key));
   moving.forEach(it=>{ SOFF.delete(it.key); (it.tags||[]).forEach(rememberTag); });
   DOC.items.splice(insertIndex(), 0, ...moving);
+  const y = window.scrollY;
   markDirty(); renderStage(); renderBoard(); renderCounts(); renderPaintbar();
+  // You stay where you were : working through an imported list is a pass down
+  // the shelf, and chasing each row to wherever it landed on the board -- the
+  // bottom, a hundred rows away -- meant scrolling back for every single one.
+  // The row still flashes where it went, and the toast still undoes it. Only
+  // the LAST one out scrolls, because by then there is no shelf left to be in.
+  window.scrollTo(0, y);
   const first = rowEl(moving[0].key);
-  if(first){ first.classList.add("flash"); first.scrollIntoView({ block:"center", behavior:"smooth" }); }
+  if(first){
+    first.classList.add("flash");
+    if(!staged().length) first.scrollIntoView({ block:"center", behavior:"smooth" });
+  }
   toast(`Added ${moving.length} paper(s) to ${whereLabel()}`, 6000, "Undo", ()=>{
     DOC.items   = DOC.items.filter(it=>moving.indexOf(it) < 0);
     DOC.staging = moving.concat(staged());
@@ -800,7 +959,9 @@ function dropStaged(keys){
   DOC.staging = staged().filter(it=>!gone.has(it.key));
   if(DOC.staging.length === before.length) return;
   keys.forEach(k=>SOFF.delete(k));
+  const y = window.scrollY;
   markDirty(); renderStage(); renderCounts(); renderPaintbar();
+  window.scrollTo(0, y);
   toast(`Dropped ${before.length - DOC.staging.length} staged row(s)`, 6000, "Undo", ()=>{
     DOC.staging = before; markDirty(); renderStage(); renderCounts(); renderPaintbar();
   });
@@ -882,18 +1043,33 @@ $("#stage").addEventListener("click", e=>{
     renderStage();
   }
 });
+// A staged row's notes, written into the document on every keystroke and again
+// on blur -- the same belt and braces the board's own cells get ( captureField ),
+// so a note survives the shelf redrawing under it.
+function captureStageField(el){
+  const row = el.closest(".srow");
+  const it  = row && findStage(row.dataset.key);
+  if(!it) return;
+  const was = (it.fields||{})[el.dataset.field];
+  if(was === el.value) return;
+  (it.fields = it.fields||{})[el.dataset.field] = el.value;
+  markDirty();
+}
 $("#stage").addEventListener("change", e=>{
+  if(e.target.matches("textarea[data-field]")){ captureStageField(e.target); return; }
   const row = e.target.closest(".srow");
   if(!row || !e.target.matches(".pick")) return;
   if(e.target.checked) SOFF.delete(row.dataset.key); else SOFF.add(row.dataset.key);
   refreshStageHead();
 });
 $("#stage").addEventListener("input", e=>{
+  if(e.target.matches("textarea[data-field]")){ captureStageField(e.target); return; }
   const row = e.target.closest(".srow");
   if(!row || !e.target.matches(".stitle")) return;
   const it = findStage(row.dataset.key);
   if(it && it.title !== e.target.value){ it.title = e.target.value; markDirty(); }
 });
+$("#stage").addEventListener("focusout", e=>{ if(e.target.matches("textarea[data-field]")) captureStageField(e.target); });
 
 // ---- importing a reference list -------------------------------------------
 // A bibliography -- the list at the end of a review, a .docx a collaborator
@@ -1497,6 +1673,7 @@ $("#colhead").addEventListener("click", e=>{
   if(!confirm(`Delete the “${col.label}” column and everything typed in it?`)) return;
   DOC.columns = DOC.columns.filter(x=>x.id!==col.id);
   DOC.items.forEach(it=>{ delete it.fields[col.id]; });
+  staged().forEach(it=>{ if(it.fields) delete it.fields[col.id]; });
   markDirty(); renderAll();
 });
 
@@ -1634,6 +1811,7 @@ $("#addcol").addEventListener("click", ()=>{
   while(DOC.columns.some(c=>c.id===id)) id += "-2";
   DOC.columns.push({ id, label: label.trim() });
   DOC.items.forEach(it=>{ it.fields[id] = ""; });
+  staged().forEach(it=>{ (it.fields = it.fields||{})[id] = ""; });   // the shelf has the columns too
   markDirty(); renderAll();
 });
 $("#autotag").addEventListener("click", async ()=>{
@@ -1896,10 +2074,14 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
     <li><b>📋 Import refs</b> takes somebody else's bibliography — <b>paste</b> it in, or drop a
         <kbd>.docx</kbd> / <kbd>.txt</kbd> — numbered or not, AMA / APA / IEEE. Every reference
         that isn't already here lands on the <b>staging shelf</b> above the list: <i>not</i> in
-        the sort, nothing renumbered, nothing to undo if the parse was wrong. There you fix a
-        title, tag rows one at a time or check several and use <kbd>+ tag checked</kbd>, then
-        press <kbd>＋ Add</kbd> to move them onto the list — to the bottom, unless the
-        <b>add to…</b> dropdown says otherwise. A reference that turns out to be a paper you
+        the sort, nothing renumbered, nothing to undo if the parse was wrong. A staged row is
+        the row it is about to become — the same tags <i>and the same notes columns</i>, so
+        anything you have to say about a reference while you're reading it is typed once and
+        rides onto the list with it. Fix a title, tag rows one at a time or check several and
+        use <kbd>+ tag checked</kbd>, then press <kbd>＋ Add</kbd> to move them onto the list —
+        to the bottom, unless the <b>add to…</b> dropdown says otherwise. <b>Adding leaves you on
+        the shelf</b>: the row flashes wherever it landed but the page doesn't chase it, so a pass
+        down an imported list is one pass. A reference that turns out to be a paper you
         already have is matched to it ( <kbd>in library</kbd> ), arrives with all its links and
         is pre-tagged from its Methods stamp; one matched on the title alone is flagged
         <kbd>fuzzy</kbd> so you can check it. The shelf is saved with the board, so a reload
@@ -1917,9 +2099,16 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         added it — and the toast undoes it. After that the order is yours again.</li>
     <li><b>Delete</b> a paper with <kbd>🗑</kbd> — the toast will undo it.</li>
     <li><b>Columns</b>: <kbd>＋ Column</kbd> adds a free-text column, double-click a name to rename,
-        shift-click to delete. Everything you type is saved a moment later ( <kbd>⌘S</kbd> forces it ).</li>
+        shift-click to delete. Everything you type is saved a moment later ( <kbd>⌘S</kbd> forces it ),
+        on the shelf as well as on the list.</li>
+    <li><b>Nothing typed here is lost.</b> Every change is also written into this browser and only
+        thrown away once the server confirms the save, so a reload a keystroke after an import, a
+        server that dies mid-session, or a tab closed by accident all leave the work intact:
+        the next time you open the page it offers to <b>restore</b> it. A save that fails keeps
+        retrying by itself, and closing the tab pushes one last copy out on the way through.</li>
     <li>Lives in <code>output/cache/sort.json</code>, with every replaced version kept in
-        <code>output/cache/sort-history/</code>.</li>
+        <code>output/cache/sort-history/</code> — which is also where a file damaged by a crash
+        is recovered from, automatically, on the next start.</li>
   </ul>
   <div class="btns"><button data-act="ok">Got it</button></div>`));
 
@@ -1927,11 +2116,22 @@ labelTheme();
 syncHeadOffset();
 try { $("#smode").value = localStorage.getItem("prma-search-mode") || "title"; } catch(e){}
 labelMode();
-loadDoc().then(()=>{
-  labelAutoMove();
-  $("#addwhere").value = DOC.options.add_where || "bottom";
-  syncHeadOffset(); pollRev();
-});
+// A server that isn't there yet -- still starting, or restarting after a crash
+// -- is not a dead page : say so and keep trying, so a board left open through a
+// restart comes back by itself, and whatever draft this browser is holding is
+// offered as soon as it does.
+function boot(){
+  loadDoc().then(()=>{
+    labelAutoMove();
+    $("#addwhere").value = DOC.options.add_where || "bottom";
+    syncHeadOffset(); pollRev();
+    offerDraft();     // anything the last session couldn't get to the server
+  }).catch(()=>{
+    $("#savestate").textContent = "server not answering — retrying";
+    setTimeout(boot, 3000);
+  });
+}
+boot();
 </script>
 </body>
 </html>

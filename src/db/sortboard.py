@@ -147,14 +147,35 @@ def item_count( doc ):
 # ---------------------------------------------------------------------------
 
 def load( args ):
-	"""The stored board , normalized -- or an empty one when there is no file."""
+	"""The stored board , normalized -- or an empty one when there is no file.
+
+	Same recovery as the tier list ( tiers.load ) : a file that won't parse falls
+	back to the newest readable snapshot in sort-history/ rather than reading
+	back as an empty board that the next keystroke would then save over."""
 	p = sort_path( args )
 	if not p.exists():
 		return default_doc()
 	try:
 		return normalize( utils.read_json( p ) )
+	except Exception as e:
+		print( f"sort :: {p.name} could not be read ( {e} ) -- looking for the newest snapshot" )
+		return _recover( args ) or default_doc()
+
+
+def _recover( args ):
+	"""The newest history snapshot that still parses , normalized."""
+	try:
+		snaps = sorted( history_dir( args ).glob( "sort-*.json" ) , reverse=True )
 	except Exception:
-		return default_doc()
+		return None
+	for snap in snaps:
+		try:
+			doc = normalize( utils.read_json( snap ) )
+		except Exception:
+			continue
+		print( f"sort :: recovered from {snap.name}" )
+		return doc
+	return None
 
 
 def save( args , doc ):
