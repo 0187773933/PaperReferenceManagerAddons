@@ -6,15 +6,23 @@
 <title>prma · md</title>
 <!-- Apply the saved theme BEFORE first paint so there's no flash. Same key the
      dashboard writes ( "prma-theme" ) , so a tab opened from it matches. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
 <style>
   /* Palette copied from dashboard.html so the reader tab looks like the page it
      was opened from -- light by default , dark opt-in via [data-theme="dark"]. */
   :root {
+    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
+    --fg:#101820; --muted:#5a6560; --accent:#046a38; --chip:#e9eee6;
+  }
+  :root[data-theme="dark"] {
+    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
+    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --chip:#232f2a;
+  }
+  :root[data-skin="pastel"] {
     --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
     --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --chip:#eceff3;
   }
-  :root[data-theme="dark"] {
+  :root[data-skin="pastel"][data-theme="dark"] {
     --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
     --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --chip:#262c37;
   }

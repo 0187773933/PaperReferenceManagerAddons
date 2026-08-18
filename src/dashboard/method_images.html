@@ -47,27 +47,46 @@ isn't exactly 1 , so a mistake here fails loudly instead of shipping.
 
 Everything else -- style , layout , behaviour -- is here. Edit it here.
 -->
+<script>try{if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){}</script>
 <style>
 :root {
+	--bg: #f4f6f2; --card: #ffffff; --ink: #101820; --muted: #5a6560;
+	--line: #d8e0d4; --accent: #046a38; --accent-ink: #ffffff;
+	--mark: #f8e08e; --tag: #e6efe8; --tag-ink: #00482b;
+	--ok: #046a38; --ok-ink: #ffffff;
+	--mod-line: #cba052; --mod-ink: #8a6420;
+	/* Cross-report marker : on /images , a figure already picked over on
+	   /method-images. Its own hue so it never reads as this page's selection
+	   ( green ) or as a modality ( amber ). */
+	/*--xref: #7c3aed; --xref-ink: #ffffff;*/
+	--xref: #719949; --xref-ink: #101820;
+}
+@media ( prefers-color-scheme: dark ) {
+	:root {
+		--bg: #101820; --card: #182028; --ink: #e8ece7; --muted: #8fa096;
+		--line: #2c3a36; --accent: #cba052; --accent-ink: #101820;
+		--mark: #6b5a24; --tag: #1f2a26; --tag-ink: #dcd59a;
+		--ok: #719949; --ok-ink: #0b120c;
+		--mod-line: #5a4a2a; --mod-ink: #e7d9a8;
+		/*--xref: #a78bfa; --xref-ink: #140b28;*/
+		--xref: #719949; --xref-ink: #101820;
+	}
+}
+:root[ data-skin="pastel" ] {
 	--bg: #f6f7f9; --card: #ffffff; --ink: #1c2330; --muted: #66707f;
 	--line: #e2e6ec; --accent: #2563eb; --accent-ink: #ffffff;
 	--mark: #fde68a; --tag: #eef2ff; --tag-ink: #3730a3;
 	--ok: #16a34a; --ok-ink: #ffffff;
 	--mod-line: #c4b5a0; --mod-ink: #7c5e2a;
-	/* Cross-report marker : on /images , a figure already picked over on
-	   /method-images. Its own hue so it never reads as this page's selection
-	   ( green ) or as a modality ( amber ). */
-	/*--xref: #7c3aed; --xref-ink: #ffffff;*/
 	--xref: #16a34a; --xref-ink: #140b28;
 }
 @media ( prefers-color-scheme: dark ) {
-	:root {
+	:root[ data-skin="pastel" ] {
 		--bg: #12151a; --card: #1a1f27; --ink: #e6e9ee; --muted: #98a2b3;
 		--line: #2a3140; --accent: #60a5fa; --accent-ink: #0b1220;
 		--mark: #6b5d1f; --tag: #23283b; --tag-ink: #b6c2ff;
 		--ok: #22c55e; --ok-ink: #08140c;
 		--mod-line: #5a4a33; --mod-ink: #d9b98a;
-		/*--xref: #a78bfa; --xref-ink: #140b28;*/
 		--xref: #22c55e; --xref-ink: #140b28;
 	}
 }

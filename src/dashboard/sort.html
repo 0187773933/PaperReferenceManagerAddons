@@ -5,16 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma sort</title>
 <!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
 <style>
   :root {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38;
-    --chip:#eceff3; --warn:#c1670c; --row:#ffffff;
+    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
+    --fg:#101820; --muted:#5a6560; --accent:#046a38; --accent-ink:#ffffff; --green:#046a38;
+    --chip:#e9eee6; --warn:#8a6420; --row:#ffffff;
   }
   :root[data-theme="dark"] {
+    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
+    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --accent-ink:#101820; --green:#719949;
+    --chip:#232f2a; --warn:#f8e08e; --row:#141c22;
+  }
+  :root[data-skin="pastel"] {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --accent-ink:#04121f; --green:#046A38;
+    --chip:#eceff3; --warn:#c1670c; --row:#ffffff;
+  }
+  :root[data-skin="pastel"][data-theme="dark"] {
     --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --accent-ink:#04121f; --green:#046A38;
     --chip:#262c37; --warn:#e8a33d; --row:#141821;
   }
   * { box-sizing:border-box; }
@@ -34,7 +44,7 @@
   }
   button:hover { border-color:var(--accent); }
   button:disabled { opacity:.5; cursor:default; }
-  button.primary { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
   button.on { border-color:var(--accent); color:var(--accent); }
   .navlink {
     background:var(--panel2); color:var(--fg); border:1px solid var(--line);
@@ -343,20 +353,30 @@ let dirty = false, saving = false, saveTimer = null;
 // them, in either theme. A new tag takes the next colour nothing else is using ;
 // anything without a stored colour falls back to a stable one picked from its
 // name, so the board is never a wall of grey.
-const PALETTE = [
-  "#bfd8f7","#c6e8e2","#c9e9c0","#e3eeb4","#f6e7ab","#fbd9b4","#f9c9c0",
-  "#f4c3ce","#e9c6e8","#d3ccf3","#c6d2f0","#bfe4f2","#e0dac6","#dfe2e8" ];
+const PALETTES = {
+  wsu: [
+    "#a8cfbb","#f8e08e","#8fb98f","#cba052","#c3dca2","#e7e3c6","#719949",
+    "#dcd59a","#6fae91","#ae8643","#a6d2d2","#eccf7f","#9fbf7a","#cfd8cd" ],
+  pastel: [
+    "#bfd8f7","#c6e8e2","#c9e9c0","#e3eeb4","#f6e7ab","#fbd9b4","#f9c9c0",
+    "#f4c3ce","#e9c6e8","#d3ccf3","#c6d2f0","#bfe4f2","#e0dac6","#dfe2e8" ] };
+let SKIN = document.documentElement.dataset.skin === "pastel" ? "pastel" : "wsu";
+let PALETTE = PALETTES[SKIN];
+function reskin(c){
+  const i = PALETTES[SKIN === "wsu" ? "pastel" : "wsu"].indexOf(lc(c));
+  return i < 0 ? c : PALETTE[i];
+}
 const TAGFG = "#20242c";
 const isHex = c => /^#[0-9a-f]{6}$/i.test(String(c||""));
 function hashIdx(s){ let h = 0; for(let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0; return h % PALETTE.length; }
 function vocabEntry(name){ return (DOC.vocab.tags||[]).find(t=>lc(t.name)===lc(name)); }
 function colorOf(name){
   const e = vocabEntry(name);
-  return (e && isHex(e.color)) ? e.color : PALETTE[hashIdx(lc(name))];
+  return (e && isHex(e.color)) ? reskin(e.color) : PALETTE[hashIdx(lc(name))];
 }
 function nextColor(){
-  const used = new Set((DOC.vocab.tags||[]).map(t=>lc(t.color)).filter(Boolean));
-  return PALETTE.find(c=>!used.has(lc(c))) || PALETTE[(DOC.vocab.tags||[]).length % PALETTE.length];
+  const used = new Set((DOC.vocab.tags||[]).map(t=>reskin(lc(t.color))).filter(Boolean));
+  return PALETTE.find(c=>!used.has(c)) || PALETTE[(DOC.vocab.tags||[]).length % PALETTE.length];
 }
 const chipStyle = v => `style="background:${colorOf(v)};color:${TAGFG};border-color:transparent"`;
 // A row's tags are kept alphabetical, always : the order you happened to add
@@ -1642,7 +1662,22 @@ function setTagColor(name, color){
   else DOC.vocab.tags.push({ name, color });
   markDirty(); renderBoard(); renderPaintbar();
 }
-$("#tagedit").addEventListener("click", tagEditor);
+let skinHeld = false;
+document.addEventListener("keydown", e=>{ if(e.key === "y" || e.key === "Y") skinHeld = true; }, true);
+document.addEventListener("keyup",   e=>{ if(e.key === "y" || e.key === "Y") skinHeld = false; }, true);
+window.addEventListener("blur", ()=>{ skinHeld = false; });
+function setSkin(next){
+  SKIN = next;
+  PALETTE = PALETTES[SKIN];
+  if(SKIN === "pastel") document.documentElement.dataset.skin = "pastel";
+  else delete document.documentElement.dataset.skin;
+  try { localStorage.setItem("prma-skin", SKIN); } catch(e){}
+  renderBoard(); renderPaintbar();
+}
+$("#tagedit").addEventListener("click", ()=>{
+  if(skinHeld){ skinHeld = false; setSkin(SKIN === "pastel" ? "wsu" : "pastel"); return; }
+  tagEditor();
+});
 $("#sheet").addEventListener("input", e=>{
   const c = e.target.closest("input[data-tagcolor]");
   if(c) setTagColor(c.dataset.tagcolor, c.value);

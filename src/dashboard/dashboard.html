@@ -5,20 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma dashboard</title>
 <!-- Apply the saved theme BEFORE first paint so there's no flash. Default light. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
 <style>
   /* Light theme is the default ; dark is opt-in via [data-theme="dark"] on
      <html> ( set from localStorage before paint -- see the inline <head> script
      -- and toggled by the header ☀/🌙 button ). Every colour is a variable so
      the swap is just these two blocks. */
   :root {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38;
-    --chip:#eceff3; --visited:#CEA052;
+    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
+    --fg:#101820; --muted:#5a6560; --accent:#046a38; --accent-ink:#ffffff; --green:#046a38;
+    --chip:#e9eee6; --visited:#8a6420;
   }
   :root[data-theme="dark"] {
+    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
+    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --accent-ink:#101820; --green:#719949;
+    --chip:#232f2a; --visited:#cba052;
+  }
+  :root[data-skin="pastel"] {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --accent-ink:#04121f; --green:#046A38;
+    --chip:#eceff3; --visited:#CEA052;
+  }
+  :root[data-skin="pastel"][data-theme="dark"] {
     --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#046A38;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --accent-ink:#04121f; --green:#046A38;
     --chip:#262c37; --visited:#CEA052;
   }
   * { box-sizing:border-box; }
@@ -41,7 +51,7 @@
   }
   button:hover { border-color:var(--accent); }
   button:disabled { opacity:.5; cursor:default; }
-  button.primary { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
   .navlink {
     background:var(--panel2); color:var(--fg); border:1px solid var(--line);
     border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
@@ -119,9 +129,9 @@
     display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px;
     background:var(--chip); color:var(--muted); margin-left:6px;
   }
-  .pill.lib { background:#13301f; color:#5fd99a; }
-  .pill.ref { background:#1a2740; color:#7fb6ff; }
-  .pill.cb  { background:#2e2440; color:#c79bff; }
+  .pill.lib { background:#00482b; color:#c3dca2; }
+  .pill.ref { background:#2b2413; color:#f8e08e; }
+  .pill.cb  { background:#1e2a2e; color:#a8cfbb; }
   .empty { color:var(--muted); padding:40px; text-align:center; }
   /* In-Library "Read" accordion */
   tr.readrow td { background:var(--panel); padding:10px 14px 16px; }
