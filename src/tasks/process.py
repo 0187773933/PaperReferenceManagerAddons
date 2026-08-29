@@ -22,9 +22,17 @@ Run order mirrors the standalone commands :
 The same run_suite() is what the server's live --watch worker calls per
 newly-added paper, so single-shot CLI use and real-time processing share one
 code path.
+
+--force ( ` prma process <doi> --force ` , or its force-by-default twin
+` prma reprocess <doi> ` ) wipes the paper's derived artifacts before the suite
+runs, which is what you want when
+the PDF changed underneath a paper you already have -- a new release version
+replacing the manuscript. Nothing else notices that: the DOI is unchanged, so
+every stage sees its old output and skips. See wipe_derived below.
 """
 
 import importlib
+import re
 from pathlib import Path
 
 from ..db    import papers as papers_db
@@ -190,6 +198,112 @@ def _stamp_processed( args , keys ):
 			print( f"process :: could not stamp {key} processed ( {e} )" )
 
 
+# ---------------------------------------------------------------------------
+# Forced redo : throw away everything the suite DERIVED for one paper
+# ---------------------------------------------------------------------------
+# Every stage answers "already done?" by looking at its OWN output -- a record
+# field ( yolo / sections / images / code / modalities ) or a file on disk
+# ( md / methods / text / crops ). That's what makes re-running the suite cheap ,
+# and it's also why re-running it does NOTHING when the PDF underneath a paper
+# is REPLACED ( a release version swapped in for the manuscript you first
+# added ) : the DOI is the same , every artifact is still sitting there , so
+# every stage skips and the paper keeps describing the old file.
+#
+# ` prma process --force ` is the way out. It does NOT set each stage's --force
+# flag : the suite re-enters some stages inline ( md -> preprocess -> ocr ,
+# md -> images / code ) , so blanket forcing would re-run the expensive ones
+# two and three times over. Instead we DELETE the derived state first and then
+# run the ordinary suite -- each stage finds nothing done , does the work
+# exactly once , and the inline re-entries fall through as usual.
+#
+# Never touched : identity owned by the snapshot ( doi / title / sources /
+# created_at ) , the OpenAlex cache ( keyed by DOI , which didn't change ) and
+# -- unless --summarize is passed -- the LLM summaries , which cost money to
+# regenerate.
+
+# Record fields the suite derives from the PDF. Popped wholesale on --force ;
+# preprocess tests membership ( `k in paper` ) rather than truthiness , so these
+# have to be REMOVED , not set to None.
+DERIVED_FIELDS = (
+	"yolo"                     ,   # prma yolo       : page detections
+	"yolo_sorted_page_indexes" ,   # prma preprocess : reading order
+	"sections"                 ,   # prma preprocess : classified blocks
+	"raw_text"                 ,   # prma preprocess : pymupdf full text
+	"pymupdf4llm"              ,   # legacy sibling of raw_text
+	"images"                   ,   # prma images     : crop marker
+	"code"                     ,   # prma code       : source-code links
+	"modalities"               ,   # prma modalities : fMRI / EEG / ... stamp
+	"processed"                ,   # the suite's own completion stamp
+	papers_db.YOLO_FAILED_KEY  ,   # a dead-PDF marker that shouldn't outlive it
+)
+
+
+def _unlink( path ):
+	"""Delete one file , counting it. Missing is fine ( that's the goal ) ;
+	anything else is reported but never fatal -- a stale artifact we couldn't
+	remove must not abort the redo."""
+	try:
+		path.unlink()
+		return 1
+	except FileNotFoundError:
+		return 0
+	except Exception as e:
+		print( f"process :: could not delete {path} ( {e} )" )
+		return 0
+
+
+def wipe_derived( args , key , summaries=False ):
+	"""Delete every artifact the per-paper suite derived for `key` -- the files
+	under output/{md,methods,text,images} and the derived fields on the record
+	-- so the next suite run rebuilds all of them from the PDF that's on disk
+	NOW. Returns ( n_files_deleted , n_fields_cleared ).
+
+	`summaries=True` also drops output/summaries/{section}/{prefix}.md ; off by
+	default because those are LLM output ( only ` --force --summarize ` , which
+	is going to pay to regenerate them , asks for it )."""
+	prefix  = utils.doi_to_filename( key )
+	n_files = 0
+	if prefix:
+		# One flat file per stage.
+		for sub , ext in ( ( "md" , ".md" ) , ( "methods" , ".txt" ) , ( "text" , ".txt" ) ):
+			n_files += _unlink( args.output.joinpath( sub , f"{prefix}{ext}" ) )
+		# Per-paper montages.
+		for suffix in ( "-Figures.png" , "-Tables.png" ):
+			n_files += _unlink( args.output.joinpath( "images" , f"{prefix}{suffix}" ) )
+		# Figure / table crops. Matched with an anchored regex rather than a
+		# glob : a DOI can contain glob metacharacters ( '10.1002_(SICI)...' ) ,
+		# and a plain startswith would also eat the crops of a paper whose
+		# prefix merely EXTENDS this one.
+		crop_re = re.compile( rf"^{re.escape( prefix )}-(figure|table)-\d+\.png$" )
+		all_dir = args.output.joinpath( "images" , "ALL" )
+		if all_dir.is_dir():
+			for p in all_dir.iterdir():
+				if crop_re.match( p.name ):
+					n_files += _unlink( p )
+		# LLM summaries , one folder per section -- only when asked.
+		if summaries:
+			sum_dir = args.output.joinpath( "summaries" )
+			if sum_dir.is_dir():
+				for section_dir in sum_dir.iterdir():
+					if section_dir.is_dir():
+						n_files += _unlink( section_dir.joinpath( f"{prefix}.md" ) )
+
+	# Derived record fields. save() recomputes pdf_path on the way out , so the
+	# record also re-points at whatever PDF the snapshot just landed.
+	n_fields = 0
+	paper = papers_db.load( args , key )
+	if paper is not None:
+		for field in DERIVED_FIELDS:
+			if field in paper:
+				paper.pop( field , None )
+				n_fields += 1
+		try:
+			papers_db.save( args , paper )
+		except Exception as e:
+			print( f"process :: could not clear derived fields on {key} ( {e} )" )
+	return n_files , n_fields
+
+
 def _run_openalex( args ):
 	"""Ensure OpenAlex meta + references + cited-by are cached for the scoped
 	paper(s). snapshot_view is itself scoped by args.only_keys , so this is a
@@ -210,10 +324,14 @@ def _run_openalex( args ):
 		print( f"process :: openalex update failed ( {e} ) ; continuing" )
 
 
-def run_suite( args , keys , summarize=False , progress=None , reindex=True ):
+def run_suite( args , keys , summarize=False , progress=None , reindex=True , force=False ):
 	"""Run the full per-paper suite scoped to `keys` ( a list of primary
 	keys ). Stamps args.only_keys for the duration so every task touches only
 	those papers , restores it before the reindex.
+
+	`force=True` first WIPES each key's derived artifacts ( see wipe_derived )
+	so every stage re-runs against the PDF currently on disk instead of
+	skipping on the output it produced from an older one.
 
 	`progress( stage )` , if given , is called with the short stage label
 	( 'openalex' , 'yolo' , ... , 'reindex' ) right before each stage starts ,
@@ -233,6 +351,17 @@ def run_suite( args , keys , summarize=False , progress=None , reindex=True ):
 			except Exception: pass
 		else:
 			print( f"process :: ---- {stage} ----" )
+
+	# Before the scope is stamped : wipe_derived loads each record by key , so
+	# it doesn't need ( or want ) args.only_keys.
+	if force:
+		prog( "wipe" )
+		for key in keys:
+			n_files , n_fields = wipe_derived( args , key , summaries=summarize )
+			print(
+				f"process :: {key} — cleared {n_files} artifact(s) + "
+				f"{n_fields} derived field(s) ; every stage will re-run"
+			)
 
 	prev_only        = getattr( args , "only_keys" , None )
 	args.only_keys   = set( keys )
@@ -318,12 +447,22 @@ def run( args ):
 
 	paper = papers_db.load( args , key ) or {}
 	title = paper.get( "title" ) or key
+	force = getattr( args , "process_force" , False )
 	print( f"process :: {key} — {title}" )
+
+	# Which file the stages will actually read. Worth printing on a forced
+	# redo : when an item carries SEVERAL PDFs the record points at the first
+	# one that exists ( see papers._resolve_pdf_path ) , so if you added a new
+	# version alongside the old one this line is where you find out the redo is
+	# about to re-do the OLD file.
+	if force:
+		print( f"process :: pdf — {paper.get( 'pdf_path' ) or '( none on disk )'}" )
 
 	# 3.) Full per-paper suite , then reindex so the dashboard reflects it.
 	run_suite(
 		args , [ key ] ,
 		summarize = getattr( args , "process_summarize" , False ) ,
 		reindex   = True ,
+		force     = force ,
 	)
 	print( f"process :: done — {title} ; dashboard index refreshed." )

@@ -269,6 +269,43 @@
   }
   #toast.show { display:flex; }
   #toast button { padding:3px 9px; font-size:12px; }
+
+  /* ---- view-only mode ------------------------------------------------------
+     The latch is the SERVER's ( src/db/boardlock.py ) and the same answer for
+     every browser, so this is what the list looks like to EVERYONE while it is
+     on. Anything that would change it goes away rather than greying out -- a row
+     you can't re-rank shouldn't still be offering you a grip -- and what's left
+     is the list itself : readable, filterable, searchable and exportable, which
+     is the whole point of the mode. */
+  #lockstate {
+    display:none; font-size:12px; font-weight:600; color:var(--warn);
+    border:1px solid var(--warn); border-radius:7px; padding:5px 10px; white-space:nowrap;
+  }
+  :root[data-locked] #lockstate { display:inline-block; }
+  :root[data-locked] .numc .handle,
+  :root[data-locked] .xbtn,
+  :root[data-locked] .movesel,
+  :root[data-locked] .chipin,
+  :root[data-locked] .chip .x,
+  :root[data-locked] .srow .pick,
+  :root[data-locked] .stools,
+  :root[data-locked] .stagehead button,
+  :root[data-locked] .tierhead .tbtn,
+  :root[data-locked] .tierhead input[type=color],
+  :root[data-locked] #addtier { display:none !important; }
+  /* The text boxes STAY -- a note is worth reading, a tier's description worth
+     keeping in front of you -- they just stop looking like somewhere you can
+     type. ( `readonly`, not `disabled` : disabled text greys out and can't be
+     selected or copied. ) */
+  :root[data-locked] .numin { pointer-events:none; }
+  :root[data-locked] .numin:hover,
+  :root[data-locked] .notecell textarea:hover,
+  :root[data-locked] .stitle:hover { border-color:transparent; }
+  :root[data-locked] .colhead .colname,
+  :root[data-locked] .row,
+  :root[data-locked] .hit { cursor:default; }
+  :root[data-locked] .tagrow input[type=color],
+  :root[data-locked] .tagrow button { pointer-events:none; opacity:.45; }
 </style>
 </head>
 <body>
@@ -279,6 +316,7 @@
     <div class="grow"></div>
     <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
     <a class="navlink" href="/sort" title="The other board: one numbered list, ordered by hand, tagged fMRI / EEG / anything">⬒ Sort</a>
+    <a class="navlink" href="/review" title="What the sort board and the picked figures add up to: every candidate screened, with the numbers pulled out of its own text">✎ Review</a>
     <button id="autotag" title="Fill in modalities from the ` prma modalities ` stamp for every row that has none">⚡ Auto-tag</button>
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
     <button id="refsbtn" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
@@ -286,6 +324,7 @@
     <button id="exportbtn" title="Download the whole tier list as CSV">⇧ Export CSV</button>
     <button id="helpbtn" title="How this page works">?</button>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+    <span id="lockstate" title="This list is in view-only mode for everyone — nothing typed here is saved">🔒 View only</span>
     <div class="savestate" id="savestate">loading…</div>
   </div>
   <div class="toolbar">
@@ -362,6 +401,10 @@ let SOFF  = new Set();      // staged keys whose checkbox is OFF ( this browser 
 // ran, worth a badge while you review it and meaningless a day later.
 let STAGEHOW = {};
 let dirty = false, saving = false, saveTimer = null;
+// View-only : the server's answer, not this browser's ( see setLocked ). Starts
+// false so a page that never reaches the server is an ordinary broken page
+// rather than a silently read-only one.
+let LOCKED = false;
 
 // ---- chip colours ---------------------------------------------------------
 // A pastel wheel. Every modality and every tag gets one, so a row's chips are a
@@ -462,6 +505,7 @@ function tagOptions(){ return chipOptions("tag"); }
 // place in the vocabulary gets one here -- otherwise a modality you dragged
 // would snap back the next time the bar redrew.
 function reorderVocab(kind, what, onto, before){
+  if(guard()) return;
   const order = chipOptions(kind);
   const from = order.findIndex(v=>lc(v)===lc(what));
   if(from < 0) return;
@@ -475,9 +519,56 @@ function reorderVocab(kind, what, onto, before){
 }
 
 // ---------------------------------------------------------------------------
+// View only
+//
+// One latch, held on the server ( src/db/boardlock.py ), so a list locked on one
+// machine is locked on every machine -- which is the only kind of lock worth
+// having on a page anyone with the URL can open. The page's own greying-out is
+// the courtesy ; POST /api/tiers REFUSING the write is the part that holds, and
+// it is what catches a tab that was already open when the lock went on.
+// ---------------------------------------------------------------------------
+function setLocked(on){
+  LOCKED = !!on;
+  if(LOCKED) document.documentElement.dataset.locked = "1";
+  else delete document.documentElement.dataset.locked;
+  // The controls that CHANGE the list. Note who ISN'T here : Export, the filter,
+  // the search, the theme -- reading is the whole point of the mode -- and
+  // 📋 Import refs, which is the way back out ( see below ) and can't be disabled
+  // because a disabled button fires no clicks at all.
+  $$("#autotag,#addcol,#importbtn,#addtier").forEach(el=>{ el.disabled = LOCKED; });
+  $("#refsbtn").title = LOCKED
+    ? "This list is in view-only mode — nothing can be imported into it right now"
+    : "Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf";
+  syncHeadOffset();
+}
+// Returns true when the caller should stop -- and says why, once, rather than
+// letting a click land on nothing.
+function guard(){
+  if(!LOCKED) return false;
+  toast("View only — this list is locked for everyone", 4000);
+  return true;
+}
+async function setLock(on){
+  try {
+    const r = await (await fetch("/api/tiers/lock", { method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ locked: !!on }) })).json();
+    if(!r || !r.ok){ toast("Could not change the lock"); return; }
+    REV = r.rev;
+    setLocked(r.locked); renderAll();
+    toast(r.locked ? "🔒 Locked — view only, for everyone"
+                   : "🔓 Unlocked — everyone can edit again", 5000);
+  } catch(e){ toast("Could not change the lock ( server not answering? )"); }
+}
+
+// ---------------------------------------------------------------------------
 // Load / save
 // ---------------------------------------------------------------------------
 function markDirty(){
+  // The backstop. Every change to the document comes through here, so a locked
+  // list can't be saved even if something slipped past the controls above -- and
+  // you hear about it instead of watching an edit quietly not stick.
+  if(guard()) return;
   dirty = true;
   $("#savestate").textContent = "unsaved…";
   $("#savestate").classList.add("dirty");
@@ -487,12 +578,23 @@ function markDirty(){
 }
 async function save(){
   clearTimeout(saveTimer);
+  if(LOCKED){ dirty = false; return; }
   if(saving){ saveTimer = setTimeout(save, 400); return; }
   saving = true;
   try {
-    const r = await (await fetch("/api/tiers", { method:"POST",
+    const res = await fetch("/api/tiers", { method:"POST",
       headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ doc: DOC }) })).json();
+      body: JSON.stringify({ doc: DOC }) });
+    const r = await res.json();
+    // 403 : the list was locked while this tab had it open. Retrying would never
+    // work, so take the lock instead and put the server's copy back on screen --
+    // what's in this browser is an edit that was never allowed.
+    if(res.status === 403 || (r && r.locked)){
+      dirty = false; saving = false;
+      setLocked(true); clearDraft(); await loadDoc();
+      toast("🔒 This list was locked while you had it open — your unsaved changes were dropped", 9000);
+      return;
+    }
     if(r && r.ok){
       REV = r.rev; dirty = false;
       clearDraft();
@@ -518,6 +620,7 @@ function retrySave(){ clearTimeout(saveTimer); saveTimer = setTimeout(save, 5000
 async function loadDoc(){
   const d = await (await fetch("/api/tiers")).json();
   DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
+  setLocked(d.locked);
   if(!Array.isArray(DOC.staging)) DOC.staging = [];
   if(!DOC.tiers.some(t=>t.id===addTier)) addTier = STAGING;
   allItems().forEach(({it})=>sortVals(it));   // the server stores them sorted ; older files may not be
@@ -622,6 +725,14 @@ document.addEventListener("visibilitychange", ()=>{ if(document.hidden && dirty)
 async function pollRev(){
   try {
     const d = await (await fetch("/api/tiers/version")).json();
+    // The lock first, and regardless of the rev / dirty checks below : a list
+    // that just went view-only has to stop taking edits in THIS tab now, not
+    // whenever it next happens to be safe to reload.
+    if(d && typeof d.locked === "boolean" && d.locked !== LOCKED){
+      setLocked(d.locked); renderAll();
+      toast(d.locked ? "🔒 This list was just locked — view only"
+                     : "🔓 This list was just unlocked — you can edit again", 6000);
+    }
     if(d && d.rev !== REV && !dirty && !saving){ await loadDoc(); toast("Reloaded — the list changed in another tab"); }
   } catch(e){}
   setTimeout(pollRev, 6000);
@@ -656,14 +767,18 @@ function gridTemplate(){
   const n = DOC.columns.length;
   const min = n > 3 ? "112px" : "150px";
   const custom = DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ");
-  return `46px minmax(${n>3?"200px":"240px"},2.1fr) 150px 160px ${custom} 86px`;
+  // View-only drops the tools column outright rather than emptying it : an empty
+  // 86px gutter with a border down it reads as a column somebody forgot to fill
+  // in. The head, the rows and the shelf all key off this, so they stay lined up
+  // ( see renderColHead / rowHtml ).
+  return `46px minmax(${n>3?"200px":"240px"},2.1fr) 150px 160px ${custom}`+(LOCKED?"":` 86px`);
 }
 function renderColHead(){
   document.documentElement.style.setProperty("--grid", gridTemplate());
   $("#colhead").innerHTML =
     `<div style="text-align:center">#</div><div>Paper</div><div>Modalities</div><div>Tags</div>`+
     DOC.columns.map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
-    `<div></div>`;
+    (LOCKED?"":`<div></div>`);
 }
 function rowLinks(it){
   const m = META[it.key] || {};
@@ -691,6 +806,9 @@ function chipsCell(it, kind){
       `<span class="x" data-drop="${esc(v)}" data-kind="${kind}" title="Remove">×</span></span>`).join("")+
     `<input class="chipin" data-kind="${kind}" placeholder="+" autocomplete="off"></div>`;
 }
+// While the list is view-only every text box stays on screen -- you still want
+// to read a note and copy a title -- but stops taking input.
+const RO = () => LOCKED ? " readonly" : "";
 function rowHtml(it, n){
   const m = META[it.key] || {};
   const title = it.title || m.title || it.key;
@@ -701,7 +819,7 @@ function rowHtml(it, n){
   return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
     `<div class="c numc">`+
       `<input class="numin" value="${n}" title="This paper's place in its tier — type a number and press ↵ to send it there" `+
-        `inputmode="numeric" autocomplete="off">`+
+        `inputmode="numeric" autocomplete="off"${RO()}>`+
       `<span class="handle" title="Drag to re-rank, or into another tier">⠿</span></div>`+
     `<div class="c titlec">`+
       `<div class="tt">${inner}${loose}</div>`+
@@ -711,18 +829,18 @@ function rowHtml(it, n){
     `<div class="c" data-cell="mod">${chipsCell(it,"mod")}</div>`+
     `<div class="c" data-cell="tag">${chipsCell(it,"tag")}</div>`+
     DOC.columns.map(c=>`<div class="c notecell"><textarea data-field="${esc(c.id)}" `+
-      `placeholder="${esc(c.label)}…" spellcheck="false">${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
-    `<div class="c rowtools">`+
+      `placeholder="${esc(c.label)}…" spellcheck="false"${RO()}>${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
+    (LOCKED?"":`<div class="c rowtools">`+
       `<select class="movesel" title="Move to another tier">${tierOpts}</select>`+
       `<button class="xbtn" data-act="remove" title="Delete this paper from the list ( undoable )">🗑</button>`+
-    `</div>`+
+    `</div>`)+
   `</div>`;
 }
 function tierHtml(t){
   return `<section class="tier" data-tier="${esc(t.id)}">`+
     `<div class="tierhead${t.id===addTier?' target':''}" style="--tc:${esc(t.color||'#8b94a3')}">`+
-      `<div class="tbadge" style="background:${esc(t.color||'#8b94a3')}"><input class="tlabel" value="${esc(t.label)}" ${t.locked?'readonly':''}></div>`+
-      `<input class="tdesc" value="${esc(t.desc||'')}" placeholder="what belongs in this tier">`+
+      `<div class="tbadge" style="background:${esc(t.color||'#8b94a3')}"><input class="tlabel" value="${esc(t.label)}" ${(t.locked||LOCKED)?'readonly':''}></div>`+
+      `<input class="tdesc" value="${esc(t.desc||'')}" placeholder="what belongs in this tier"${RO()}>`+
       `<span class="tcount">${t.items.length}</span>`+
       `<input type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(t.color||'')?t.color:'#8b94a3')}" title="Tier colour">`+
       `<button class="tbtn" data-act="target" title="Send everything you add from search into this tier">${t.id===addTier?'◉':'○'} target</button>`+
@@ -836,6 +954,7 @@ function clearSelection(){
 // otherwise on everywhere ( so a half-tagged selection fills in rather than
 // flipping each row's state independently ).
 function toggleOnSelection(kind, value){
+  if(guard()) return;
   const items = selectedItems();
   if(!items.length) return;
   const all = items.every(it=>hasValue(it, kind, value));
@@ -955,14 +1074,16 @@ function sbadgeHtml(it){
 function stageGridTemplate(){
   const n = DOC.columns.length;
   const min = n > 3 ? "112px" : "150px";
-  return `24px minmax(${n>3?"200px":"230px"},2.2fr) minmax(130px,.9fr) minmax(130px,.9fr) `+
-         DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ")+` 118px`;
+  // Same two tracks go when the list is view-only -- the checkbox and the
+  // per-row buttons -- so the shelf keeps lining up with the board below it.
+  return (LOCKED?"":`24px `)+`minmax(${n>3?"200px":"230px"},2.2fr) minmax(130px,.9fr) minmax(130px,.9fr) `+
+         DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ")+(LOCKED?"":` 118px`);
 }
 function srowHtml(it){
   return `<div class="srow" data-key="${esc(it.key)}">`+
-    `<input type="checkbox" class="pick" ${SOFF.has(it.key)?"":"checked"} title="Include this one when you add">`+
+    (LOCKED?"":`<input type="checkbox" class="pick" ${SOFF.has(it.key)?"":"checked"} title="Include this one when you add">`)+
     `<div>`+
-      `<input class="stitle" value="${esc(it.title)}" title="A parsed title isn't always the right one — fix it here">`+
+      `<input class="stitle" value="${esc(it.title)}" title="A parsed title isn't always the right one — fix it here"${RO()}>`+
       (it.authors ? `<div class="sauth">${esc(it.authors)}</div>` : "")+
       `<div class="sauth" data-sbadge="1">${sbadgeHtml(it)}</div>`+
       `<div class="links" data-links="1">${rowLinks(it)}</div>`+
@@ -973,11 +1094,11 @@ function srowHtml(it){
     // when you have something to say about it, and a note typed here rides into
     // the tier with the row ( it is the same row -- same `fields` ).
     DOC.columns.map(c=>`<div class="notecell"><textarea data-field="${esc(c.id)}" `+
-      `placeholder="${esc(c.label)}…" spellcheck="false">${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
-    `<div class="stools">`+
+      `placeholder="${esc(c.label)}…" spellcheck="false"${RO()}>${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
+    (LOCKED?"":`<div class="stools">`+
       `<button data-act="sadd" title="Add just this one">＋ Add</button>`+
       `<button class="xbtn" data-act="sdrop" title="Throw this one away ( undoable )">🗑</button>`+
-    `</div>`+
+    `</div>`)+
   `</div>`;
 }
 // A full redraw of the shelf puts the caret back where it was afterwards -- a
@@ -1012,6 +1133,7 @@ function srowEl(key){ return document.querySelector(`.srow[data-key="${cssEsc(ke
 // BOTTOM. Staged papers arrive unranked by definition, so they queue under
 // whatever is already there rather than jumping the tier's own order.
 function addStaged(keys){
+  if(guard()) return;
   const want   = new Set(keys.filter(k=>!findItem(k)));
   const moving = staged().filter(it=>want.has(it.key));
   const t = targetTier();
@@ -1043,6 +1165,7 @@ function addStaged(keys){
   });
 }
 function dropStaged(keys){
+  if(guard()) return;
   const gone   = new Set(keys);
   const before = staged().slice();
   DOC.staging  = staged().filter(it=>!gone.has(it.key));
@@ -1073,6 +1196,7 @@ function haveIndex(){
   return seen;
 }
 function stageRefs(refs, label){
+  if(guard()) return;
   const seen = haveIndex();
   const fresh = [];
   let onBoard = 0, onShelf = 0;
@@ -1182,7 +1306,19 @@ function refFile(f){
   $("#overlay").classList.remove("show");
   parseRefs(f, "application/octet-stream", f.name);
 }
+// Hold "e" and click 📋 Import refs to flip the whole list between edit and
+// view-only -- for everyone, not just here. It rides on a button that is already
+// there and is deliberately unlabelled : a lock whose switch is drawn next to it
+// is a suggestion, and the people this mode is for are the ones who shouldn't
+// find it. ( The 🔒 badge in the header says the mode is ON ; nothing says how
+// it got there. )
+let editHeld = false;
+document.addEventListener("keydown", e=>{ if(e.key === "e" || e.key === "E") editHeld = true; }, true);
+document.addEventListener("keyup",   e=>{ if(e.key === "e" || e.key === "E") editHeld = false; }, true);
+window.addEventListener("blur", ()=>{ editHeld = false; });
 $("#refsbtn").addEventListener("click", ()=>{
+  if(editHeld){ editHeld = false; setLock(!LOCKED); return; }
+  if(guard()) return;
   sheet(`
     <h3>Import a reference list</h3>
     <p>Paste references below — numbered or not, AMA / APA / IEEE, whatever your source uses — or
@@ -1234,6 +1370,7 @@ function newItem(hit){
   };
 }
 async function addPaper(hit, tierId){
+  if(guard()) return;
   if(findItem(hit.key)){ toast("Already on the list"); return; }
   const t = DOC.tiers.find(t=>t.id===(tierId||addTier)) || DOC.tiers[DOC.tiers.length-1];
   const it = newItem(hit);
@@ -1259,6 +1396,7 @@ async function addPaper(hit, tierId){
 // One click removes ; the toast undoes it. No confirm dialog -- an undo you can
 // actually see beats a modal you have to dismiss on every delete.
 function removeItem(key){
+  if(guard()) return;
   const f = findItem(key);
   if(!f) return;
   const tier = f.tier, at = f.idx;
@@ -1271,6 +1409,7 @@ function removeItem(key){
   });
 }
 function moveItem(key, tierId, index){
+  if(guard()) return;
   const f = findItem(key);
   const t = DOC.tiers.find(t=>t.id===tierId);
   if(!f || !t) return;
@@ -1280,6 +1419,7 @@ function moveItem(key, tierId, index){
   markDirty(); renderBoard(); renderCounts();
 }
 function toggleValue(it, kind, value){
+  if(guard()) return;
   const list = kind==="mod" ? it.mods : it.tags;
   const i = list.findIndex(v=>v.toLowerCase()===value.toLowerCase());
   if(i>=0) list.splice(i,1); else list.push(value);
@@ -1288,6 +1428,7 @@ function toggleValue(it, kind, value){
   markDirty();
 }
 function addValue(it, kind, value){
+  if(guard()) return false;
   value = (value||"").trim();
   if(!value) return false;
   const list = kind==="mod" ? it.mods : it.tags;
@@ -1473,6 +1614,7 @@ document.addEventListener("dragover", e=>{
   else document.querySelector(`.rows[data-tier="${cssEsc(t.tier)}"]`).classList.add("dropinto");
 });
 document.addEventListener("drop", async e=>{
+  if(LOCKED && (dragKey || dragHit)){ clearDropMarks(); dragKey = dragHit = null; guard(); return; }
   if(!dragKey && !dragHit) return;
   const t = dropTarget(e);
   clearDropMarks();
@@ -1517,6 +1659,7 @@ $("#board").addEventListener("dragstart", e=>{
 $("#results").addEventListener("dragstart", e=>{
   const hit = e.target.closest(".hit");
   if(!hit) return;
+  if(LOCKED){ e.preventDefault(); return; }
   dragHit = hits[+hit.dataset.i];
   e.dataTransfer.effectAllowed = "copy";
   try { e.dataTransfer.setData("text/plain", dragHit.key); } catch(err){}
@@ -1535,6 +1678,7 @@ $("#board").addEventListener("click", e=>{
     const i   = DOC.tiers.findIndex(t=>t.id===tid);
     const act = tbtn.dataset.act;
     if(act==="target"){ addTier = tid; localStorage.setItem("prma-tier-target", tid); renderBoard(); if(hits.length) renderResults(); }
+    else if(guard()){ return; }          // reordering / deleting a tier is an edit
     else if(act==="up" && i>0){ [DOC.tiers[i-1], DOC.tiers[i]] = [DOC.tiers[i], DOC.tiers[i-1]]; markDirty(); renderBoard(); }
     else if(act==="down" && i<DOC.tiers.length-1 && DOC.tiers[i+1].id!==STAGING){
       [DOC.tiers[i+1], DOC.tiers[i]] = [DOC.tiers[i], DOC.tiers[i+1]]; markDirty(); renderBoard(); }
@@ -1679,6 +1823,7 @@ function chipClicked(kind, v){
     return;
   }
   if(SEL.size){ toggleOnSelection(kind, v); return; }
+  if(guard()) return;                    // arming a chip is the start of an edit
   armed = (armed && armed.kind===kind && armed.value===v) ? null : { kind, value:v };
   renderPaintbar();
 }
@@ -1689,6 +1834,7 @@ $("#modchips").addEventListener("click", e=>{
 $("#tagchips").addEventListener("click", e=>{
   const del = e.target.closest("[data-deltag]");
   if(del){
+    if(guard()) return;
     const v = del.dataset.deltag;
     const n = allItems().filter(({it})=>it.tags.some(t=>t.toLowerCase()===v.toLowerCase())).length;
     if(!confirm(`Delete the tag “${v}”${n?` and remove it from ${n} paper(s)`:""}?`)) return;
@@ -1772,6 +1918,7 @@ $("#tagchips").addEventListener("keydown", e=>{
 $("#colhead").addEventListener("dblclick", e=>{
   const c = e.target.closest(".colname");
   if(!c) return;
+  if(guard()) return;
   const col = DOC.columns.find(x=>x.id===c.dataset.col);
   const name = prompt("Column name", col.label);
   if(name && name.trim()){ col.label = name.trim(); markDirty(); renderAll(); }
@@ -1779,6 +1926,7 @@ $("#colhead").addEventListener("dblclick", e=>{
 $("#colhead").addEventListener("click", e=>{
   const c = e.target.closest(".colname");
   if(!c || !e.shiftKey) return;
+  if(guard()) return;
   const col = DOC.columns.find(x=>x.id===c.dataset.col);
   if(DOC.columns.length===1){ toast("Keep at least one column"); return; }
   if(!confirm(`Delete the “${col.label}” column and everything typed in it?`)) return;
@@ -1893,6 +2041,7 @@ function tagEditor(){
     <div class="btns"><button data-act="ok">Done</button></div>`);
 }
 function setChipColor(kind, name, color){
+  if(guard()) return;
   const e = vocabEntry(kind, name);
   if(e) e.color = color;
   else vocabList(kind).push({ name, color });
@@ -1985,7 +2134,7 @@ document.addEventListener("keydown", e=>{
 // fetch() does not. The browser's own "are you sure" is the fallback for when
 // the beacon can't even be queued.
 window.addEventListener("beforeunload", e=>{
-  if(!dirty) return;
+  if(!dirty || LOCKED) return;
   writeDraft();
   let sent = false;
   try {
@@ -2258,6 +2407,10 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         server that dies mid-session, or a tab closed by accident all leave the work intact: the
         next time you open the page it offers to <b>restore</b> it. A save that fails keeps retrying
         by itself, and closing the tab pushes one last copy out on the way through.</li>
+    <li><b>🔒 View only</b> in the header means the list has been locked: everyone who opens it can
+        read, search, filter and export it, but nobody can change it, and the server turns away the
+        save if a tab tries. It is one setting for the whole list rather than a per-browser
+        preference, so it looks the same from every machine.</li>
     <li>Everything saves to <code>output/cache/tiers.json</code> a moment after you stop typing
         ( <kbd>⌘S</kbd> forces it ), and every version it replaces is kept in
         <code>output/cache/tiers-history/</code> — which is also where a file damaged by a crash is

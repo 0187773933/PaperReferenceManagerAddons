@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · review</title>
+<!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<!--
+  The /review page : what /sort and /images ADD UP TO.
+
+  Everything here is rendered from ONE document ( GET /api/review , written by
+  src/review/build.py ) and nothing on this page writes anything back -- the
+  judgements live on the two boards , and this is the read of them. The single
+  exception is the Rebuild button , which asks the server to re-screen from the
+  boards as they stand now ; that runs for minutes on its own thread , so the
+  page polls its progress rather than holding a request open.
+
+  THE ONE RENDERER. Every extracted field -- forty-odd of them across three
+  groups -- arrives in the same shape { value , values , counts , evidence ,
+  source } , so field() below draws all of them and there is no per-field markup
+  anywhere. Add a pattern to src/review/extract.py and it appears here on its
+  own. That uniformity is the whole reason the schema looks the way it does.
+
+  A BLANK VALUE MEANS THE PAPER DOES NOT SAY IT. Not zero , not unknown-to-us :
+  the extractor read the text and the number is not in it. The page says so in
+  words rather than leaving an empty cell to be misread.
+
+  Paper bodies are built ON EXPAND , not up front : 194 papers x ~50 fields x
+  three evidence quotes is a lot of DOM to make for rows nobody opened.
+-->
+<style>
+  /* The shared prma palette : light by default , dark opt-in via
+     [data-theme="dark"] on <html> ( restored from localStorage before paint by
+     the script above , flipped by the header \u2600/\U0001F319 button ) -- the same four
+     blocks the dashboard and the two boards carry.
+
+     Everything below the first six tokens is this page's own vocabulary : a
+     field's background , the pill colours , the "the paper does not say" grey.
+     They are tokens rather than literals for one reason -- a hex typed into a
+     rule is a colour that only works in one theme , and this page has four. */
+  :root {
+    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
+    --fg:#101820; --muted:#5a6560; --accent:#046a38; --green:#046a38; --warn:#8a6420;
+    --chip:#e9eee6; --field:#f2f5ef; --edge:#a8c2b1; --prose:#2b3439; --faint:#8e9a93;
+    --sel:#d8e9de; --sel-fg:#08442a;
+    --ds:#dcefe9;  --ds-fg:#0f5c4d;
+    --mod:#e8e2f4; --mod-fg:#4a3480;
+    --cur:#f4e7cf; --cur-fg:#7a5715;
+    --pri1:#d5ecdd; --pri1-fg:#046a38;
+    --pri2:#dbe7f5; --pri2-fg:#1d4f7c;
+    --pri3:#e6e9e4; --pri3-fg:#5a6560;
+    --note-bg:#fdf6e6; --note-line:#e0c893;
+  }
+  :root[data-theme="dark"] {
+    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
+    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --green:#719949; --warn:#f8e08e;
+    --chip:#232f2a; --field:#141c22; --edge:#3d5147; --prose:#cfd6d0; --faint:#6b7a73;
+    --sel:#33422f; --sel-fg:#f0dfb8;
+    --ds:#1a2f2c;  --ds-fg:#7fd4c4;
+    --mod:#2a2438; --mod-fg:#c3a8f0;
+    --cur:#3a2f13; --cur-fg:#f8e08e;
+    --pri1:#1b3f2c; --pri1-fg:#8fd0a0;
+    --pri2:#22323f; --pri2-fg:#8ec8ff;
+    --pri3:#242f2c; --pri3-fg:#a9b6cc;
+    --note-bg:#1e1a11; --note-line:#4a3a1a;
+  }
+  :root[data-skin="pastel"] {
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38; --warn:#c1670c;
+    --chip:#eceff3; --field:#f4f6f9; --edge:#b3c6de; --prose:#2b3038; --faint:#98a1ad;
+    --sel:#dbe9fb; --sel-fg:#0d47a1;
+    --ds:#dcf0ec;  --ds-fg:#0f5c4d;
+    --mod:#e9e3f6; --mod-fg:#4a3480;
+    --cur:#fdeacd; --cur-fg:#a8560a;
+    --pri1:#dcf0e2; --pri1-fg:#046A38;
+    --pri2:#dde9f9; --pri2-fg:#1a4f8a;
+    --pri3:#e8ebef; --pri3-fg:#5b6470;
+    --note-bg:#fff7e8; --note-line:#f0d7a8;
+  }
+  :root[data-skin="pastel"][data-theme="dark"] {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#5fd99a; --warn:#e8a33d;
+    --chip:#262c37; --field:#1f242e; --edge:#38506b; --prose:#c8cfda; --faint:#5b6472;
+    --sel:#1d3550; --sel-fg:#cfe6ff;
+    --ds:#1a2b2b;  --ds-fg:#7fd4c4;
+    --mod:#2b2338; --mod-fg:#c3a8f0;
+    --cur:#3a2a13; --cur-fg:#ffb454;
+    --pri1:#1b3f2c; --pri1-fg:#5fd99a;
+    --pri2:#1d3550; --pri2-fg:#8ec8ff;
+    --pri3:#2a2f3d; --pri3-fg:#a9b6cc;
+    --note-bg:#1e1a11; --note-line:#4a3a1a;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header {
+    position:sticky; top:0; z-index:5; background:var(--panel);
+    border-bottom:1px solid var(--line); padding:11px 18px 9px;
+  }
+  .titlebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .counts { color:var(--muted); font-size:12px; display:flex; gap:13px; flex-wrap:wrap; }
+  .counts b { color:var(--fg); font-weight:600; }
+  .grow { flex:1; }
+  button {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
+  }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  .navlink {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
+  }
+  .navlink:hover { border-color:var(--accent); }
+  input[type=search] {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 11px; font-size:13px; min-width:230px;
+  }
+  input[type=search]:focus { outline:none; border-color:var(--accent); }
+  select {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 9px; font-size:13px;
+  }
+
+  /* ---- filter chips ---- */
+  .controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:9px; }
+  .chipbar { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+  .chipbar .lbl { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-right:2px; }
+  .chip {
+    background:var(--chip); border:1px solid transparent; color:var(--fg);
+    border-radius:11px; padding:2px 9px; font-size:12px; cursor:pointer; user-select:none;
+    white-space:nowrap;
+  }
+  .chip:hover { border-color:var(--line); }
+  .chip.on { background:var(--sel); border-color:var(--accent); color:var(--sel-fg); }
+  .chip .c { color:var(--muted); font-variant-numeric:tabular-nums; margin-left:5px; font-size:11px; }
+  .chip.on .c { color:inherit; opacity:.72; }
+  .sep { width:1px; align-self:stretch; background:var(--line); margin:0 3px; }
+
+  main { padding:16px 18px 60px; max-width:1180px; margin:0 auto; }
+  #task-chips { margin-bottom:14px; }
+
+  /* ---- banner ( empty / building / stale ) ---- */
+  .banner {
+    border:1px solid var(--line); border-radius:10px; background:var(--panel);
+    padding:14px 16px; margin-bottom:16px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+  }
+  .banner.warn { border-color:var(--note-line); background:var(--note-bg); }
+  .banner .msg { flex:1; min-width:260px; }
+  .banner .msg b { display:block; margin-bottom:3px; }
+  .banner .msg span { color:var(--muted); font-size:12.5px; }
+  .track { height:8px; border-radius:5px; background:var(--panel2); overflow:hidden; width:100%; margin-top:9px; }
+  .track .done { background:var(--accent); height:100%; transition:width .3s ease; }
+
+  /* ---- criteria ---- */
+  details.crit { margin-bottom:14px; }
+  details.crit > summary {
+    cursor:pointer; color:var(--muted); font-size:12px; list-style:none;
+    text-transform:uppercase; letter-spacing:.5px;
+  }
+  details.crit > summary::-webkit-details-marker { display:none; }
+  details.crit > summary::before { content:"▸ "; }
+  details.crit[open] > summary::before { content:"▾ "; }
+  details.crit ol { margin:9px 0 0; padding-left:22px; color:var(--muted); font-size:12.5px; }
+  details.crit li { margin-bottom:6px; }
+
+  /* ---- paper rows ---- */
+  .section-title {
+    color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.5px;
+    margin:24px 0 10px; display:flex; align-items:baseline; gap:9px;
+  }
+  .section-title .n { color:var(--fg); font-weight:600; }
+  .paper { border:1px solid var(--line); border-radius:9px; background:var(--panel); margin-bottom:7px; }
+  .paper.open { border-color:var(--edge); }
+  .hd { display:flex; gap:11px; padding:10px 12px; cursor:pointer; align-items:flex-start; }
+  .hd:hover { background:var(--panel2); border-radius:9px; }
+  .paper.open .hd { border-radius:9px 9px 0 0; }
+  .hd .num { color:var(--muted); font-variant-numeric:tabular-nums; width:34px; flex:none; text-align:right; font-size:12px; padding-top:2px; }
+  .pri {
+    flex:none; font-size:11px; font-weight:700; border-radius:5px; padding:2px 6px; margin-top:1px;
+    background:var(--chip); color:var(--muted);
+  }
+  .pri.p1 { background:var(--pri1); color:var(--pri1-fg); }
+  .pri.p2 { background:var(--pri2); color:var(--pri2-fg); }
+  .pri.p3 { background:var(--pri3); color:var(--pri3-fg); }
+  .who { flex:1; min-width:0; }
+  .who .t { font-weight:600; }
+  .who .t .yr { color:var(--muted); font-weight:400; font-variant-numeric:tabular-nums; margin-left:7px; font-size:12.5px; }
+  .who .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  .who .sub .model { color:var(--mod-fg); font-weight:600; }
+  .who .sub .role { color:var(--muted); }
+  .who .tagline { margin-top:5px; display:flex; gap:5px; flex-wrap:wrap; }
+  .tag { font-size:11px; padding:1px 7px; border-radius:9px; background:var(--chip); color:var(--muted); }
+  .tag.ds { background:var(--ds); color:var(--ds-fg); }
+  .tag.mod { background:var(--mod); color:var(--mod-fg); }
+  .tag.cur { background:var(--cur); color:var(--cur-fg); }
+  .lk { flex:none; white-space:nowrap; padding-top:2px; text-align:right; }
+  .lk a { color:var(--accent); text-decoration:none; margin-left:9px; font-size:12.5px; }
+  .lk a:hover { text-decoration:underline; }
+  .lk .meta { color:var(--muted); font-size:11.5px; margin-top:4px; font-variant-numeric:tabular-nums; }
+
+  /* ---- expanded body ---- */
+  .body { display:none; padding:2px 12px 14px 57px; border-top:1px solid var(--line); }
+  .paper.open .body { display:block; }
+  .blk { margin-top:13px; }
+  .blk > h4 {
+    margin:0 0 7px; font-size:11px; color:var(--muted); font-weight:600;
+    text-transform:uppercase; letter-spacing:.5px;
+  }
+  .prose { color:var(--prose); font-size:13px; }
+  .prose.clamp { max-height:74px; overflow:hidden; position:relative; cursor:pointer; }
+  .prose.clamp::after {
+    content:""; position:absolute; left:0; right:0; bottom:0; height:34px;
+    background:linear-gradient(transparent,var(--panel));
+  }
+  .notes { color:var(--cur-fg); font-size:13px; }
+  .caps { color:var(--prose); font-size:12.5px; }
+  .caps div { margin-bottom:5px; }
+
+  /* ---- the uniform field grid ---- */
+  .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(268px,1fr)); gap:5px; }
+  .f {
+    background:var(--field); border:1px solid transparent; border-radius:7px;
+    padding:6px 9px; font-size:12.5px; min-width:0;
+  }
+  .f.has { cursor:pointer; }
+  .f.has:hover { border-color:var(--line); }
+  .f .k { color:var(--muted); font-size:11px; }
+  .f .v { margin-top:1px; word-break:break-word; }
+  .f .v.none { color:var(--faint); font-style:italic; }
+  .f .badge {
+    font-size:10px; padding:0 5px; border-radius:8px; margin-left:6px; vertical-align:1px;
+    background:var(--chip); color:var(--muted);
+  }
+  .f .badge.curated  { background:var(--cur); color:var(--cur-fg); }
+  .f .badge.inferred { background:var(--ds); color:var(--ds-fg); }
+  .f .ev { display:none; margin-top:7px; border-top:1px solid var(--line); padding-top:7px; }
+  .f.open { border-color:var(--edge); }
+  .f.open .ev { display:block; }
+  .f .ev .alt { color:var(--muted); font-size:11.5px; margin-bottom:6px; }
+  .f .ev q {
+    display:block; color:var(--prose); font-size:11.5px; line-height:1.5;
+    border-left:2px solid var(--line); padding-left:8px; margin-bottom:6px;
+  }
+  .f .ev q::before, .f .ev q::after { content:""; }
+  .f .ev .why { color:var(--ds-fg); font-size:11.5px; }
+
+  .scores { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+  .scores b { color:var(--fg); font-variant-numeric:tabular-nums; }
+
+  /* ---- excluded + dataset tables ---- */
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  .tbl { border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+  thead th {
+    text-align:left; color:var(--muted); font-weight:600; font-size:11.5px;
+    padding:7px 12px; border-bottom:1px solid var(--line); background:var(--panel); white-space:nowrap;
+  }
+  tbody td { padding:7px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr:hover { background:var(--panel); }
+  td.num, td.nowrap { width:1%; white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; background:var(--chip); color:var(--muted); }
+  .pill.border { background:var(--cur); color:var(--cur-fg); }
+
+  .empty { color:var(--muted); padding:44px; text-align:center; }
+  code { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:12px; }
+  footer { color:var(--muted); font-size:12px; padding:26px 18px 40px; max-width:1180px; margin:0 auto; line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma · review</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+    <a class="navlink" href="/sort" title="The list this review screens — one numbered list you drag into order">⬒ Sort</a>
+    <a class="navlink" href="/images" title="The other input — every cropped figure, with the selection this review reads">▣ Figures</a>
+    <button id="export-json" title="Download the papers currently shown, as JSON">⇧ JSON</button>
+    <button id="export-csv"  title="Download the papers currently shown, one row each, as CSV">⇧ CSV</button>
+    <button id="rebuild" title="Re-screen and re-extract from the boards as they stand now ( minutes )">↻ Rebuild</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+  <div class="controls" id="controls" hidden>
+    <input type="search" id="q" placeholder="Search title, model, tag, dataset, key…  ( / )" autocomplete="off">
+    <div class="chipbar" id="pri-chips"><span class="lbl">Priority</span></div>
+    <div class="sep"></div>
+    <div class="chipbar" id="flag-chips"></div>
+    <div class="grow"></div>
+    <select id="sortby" title="Order of the included list. 'Recently added' is when the paper entered your prma library — the same date the figure reports sort by, not Zotero's own dateAdded, which the record does not carry. 'Publication date' is OpenAlex's, falling back to your manager's date field.">
+      <option value="priority">Priority, then newest</option>
+      <option value="added">Recently added</option>
+      <option value="added-asc">Added, oldest first</option>
+      <option value="year">Year, newest first</option>
+      <option value="year-asc">Year, oldest first</option>
+      <option value="published">Publication date, newest</option>
+      <option value="published-asc">Publication date, oldest</option>
+      <option value="cites">Citations</option>
+      <option value="title">Title A–Z</option>
+      <option value="model">Model name</option>
+    </select>
+  </div>
+</header>
+
+<main>
+  <div id="banner"></div>
+  <div class="chipbar" id="task-chips" hidden></div>
+  <details class="crit" id="crit"><summary>Inclusion criteria — a paper is included only if all three hold</summary><ol id="crit-list"></ol></details>
+  <div id="main"></div>
+</main>
+
+<footer id="footer"></footer>
+
+<script>
+/* Where a DOI goes when you want the PDF through the university's subscription.
+   Lives here with the other link decisions , not in the Python that built the
+   document -- that file states FACTS about a paper ( it has a .md , it has a
+   PDF ) and this page decides what they turn into. */
+const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
+
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const fmt = n => (n||0).toLocaleString();
+const when = s => esc(String(s||"").replace("T"," "));
+
+let DOC = null;          // the whole review document
+let STATUS = {};         // availability / build progress , polled
+let VIEW = [];           // the included papers currently shown
+let HAY  = new WeakMap();// paper -> its lowercase search haystack
+let poll = null;
+
+/* ---- filter state ------------------------------------------------------- */
+const activePri  = new Set();   // priority numbers
+const activeTask = new Set();   // task_category strings
+const activeFlag = new Set();   // "curated" | "code" | "sort" | "figures" | "borderline-only" ( excluded )
+let query = "";
+let sortBy = "priority";
+
+/* ---- links --------------------------------------------------------------
+   The document says WHICH text a paper has ; the routes are this page's to
+   compose. /md/<stem> renders the paper in the browser , /methods/<stem>.txt
+   is the plain methods section off disk , /pdf?key= streams the PDF the
+   library actually holds. */
+function links(p){
+  const f = p.files || {}, out = [];
+  if(p.doi){
+    out.push(`<a href="https://doi.org/${esc(p.doi)}" target="_blank" title="Publisher page">DOI</a>`);
+    out.push(`<a href="${PROXY}${esc(p.doi)}" target="_blank" title="Through the library proxy">Proxy</a>`);
+  }
+  if(f.pdf)     out.push(`<a href="/pdf?key=${encodeURIComponent(p.key)}" target="_blank" title="The PDF in your library">PDF</a>`);
+  if(f.md)      out.push(`<a href="/md/${encodeURIComponent(f.prefix)}" target="_blank" title="The rendered paper, figures and all">MD</a>`);
+  if(f.methods) out.push(`<a href="/methods/${encodeURIComponent(f.prefix)}.txt" target="_blank" title="The isolated methods section — what most of this page was read out of">Methods</a>`);
+  if(f.montage) out.push(`<a href="/images/${encodeURIComponent(f.prefix)}-Figures.png" target="_blank" title="Figure montage">Figures</a>`);
+  return out.join("");
+}
+
+/* ---- the one field renderer ---------------------------------------------
+   Every field in every group arrives in the same shape , so this is the only
+   place a field turns into markup. A field with evidence is clickable and
+   expands to the verbatim quotes it was parsed from , plus the values the
+   paper stated less often. A field with nothing says the paper does not say
+   it , in those words -- an empty cell reads as zero to too many people. */
+function field(name, f){
+  const label = name.replace(/_/g," ");
+  const has = (f.evidence && f.evidence.length) || (f.values && f.values.length > 1) || f.inferred_from || f.note;
+  const src = f.source === "curated" ? `<span class="badge curated" title="Hand-verified in config/review-overrides.json">curated</span>`
+            : f.source === "inferred-from-dataset" ? `<span class="badge inferred" title="${esc(f.inferred_from||"")}">from dataset</span>`
+            : (f.counts && Object.keys(f.counts).length > 1)
+              ? `<span class="badge" title="The paper states more than one value for this — click to see them all">${Object.keys(f.counts).length} values</span>` : "";
+  const val = f.value
+    ? `<div class="v">${esc(f.value)}${src}</div>`
+    : `<div class="v none">the paper does not say</div>`;
+  let ev = "";
+  if(has){
+    const parts = [];
+    if(f.inferred_from) parts.push(`<div class="why">${esc(f.inferred_from)}</div>`);
+    if(f.note)          parts.push(`<div class="why">${esc(f.note)}</div>`);
+    // A curated value still shows the extractor's quotes , but they are no longer
+    // the evidence FOR it -- they are what the machine made of the same sentence ,
+    // which is the interesting part when a human went in and overrode it.
+    if(f.source === "curated" && (f.evidence||[]).length)
+      parts.push(`<div class="alt">the value above was read by hand; below is what the extractor found in the same text</div>`);
+    if(f.values && f.values.length > 1){
+      parts.push(`<div class="alt">also stated: ${f.values.slice(1).map(v =>
+        esc(v) + (f.counts && f.counts[v] > 1 ? ` (×${f.counts[v]})` : "")).join(" · ")}</div>`);
+    }
+    (f.evidence||[]).forEach(q => parts.push(`<q>${esc(q)}</q>`));
+    ev = `<div class="ev">${parts.join("")}</div>`;
+  }
+  return `<div class="f${has?" has":""}"><div class="k">${esc(label)}</div>${val}${ev}</div>`;
+}
+
+function fieldGroup(title, cols, block, note){
+  const filled = cols.filter(c => (block[c]||{}).value).length;
+  const cells  = cols.map(c => field(c, block[c] || { value:"", source:"absent" })).join("");
+  return `<div class="blk"><h4>${esc(title)} <span style="color:var(--muted);font-weight:400">— ${filled} of ${cols.length} stated</span></h4>`
+       + (note ? `<div class="prose" style="margin-bottom:7px;color:var(--muted);font-size:12px">${note}</div>` : "")
+       + `<div class="fields">${cells}</div></div>`;
+}
+
+/* ---- one paper ---------------------------------------------------------- */
+function paperHead(p){
+  // A modality is drawn once. The stamp ` prma modalities ` put on the record and
+  // the tag you typed on the sort board very often say the same word ( fMRI ) ,
+  // and two identical pills side by side just read as a rendering bug.
+  const shown = new Set((p.modalities||[]).map(m => m.toLowerCase()));
+  const tags = []
+    .concat((p.modalities||[]).map(m => `<span class="tag mod" title="Modality the study used, from its own text">${esc(m)}</span>`))
+    .concat((p.datasets_used||[]).map(d => `<span class="tag ds" title="Public dataset the paper uses">${esc(d)}</span>`))
+    .concat((p.tags||[]).filter(t => !shown.has(String(t).toLowerCase()))
+      .map(t => `<span class="tag" title="Your tag on the sort board">${esc(t)}</span>`))
+    .concat(p.curated ? [`<span class="tag cur">human-curated</span>`] : []);
+  const pri = p.priority <= 3 ? `pri p${p.priority}` : "pri";
+  // Citations and the date you added it , on the row : a list ordered by a fact
+  // you cannot see is a list you have to take on faith.
+  const meta = [
+    p.cited_by ? `${fmt(p.cited_by)} cite${p.cited_by === 1 ? "" : "s"}` : "" ,
+    p.added ? `added ${esc(String(p.added).slice(0,10))}` : "" ,
+  ].filter(Boolean).join(" · ");
+  return `<div class="hd">`
+    + `<div class="num">${p.n}</div>`
+    + `<div class="${pri}" title="${esc(DOC.meta.priority_legend[String(p.priority)]||"")}">P${p.priority}</div>`
+    + `<div class="who">`
+      + `<div class="t">${esc(p.title||p.key)}${p.year?`<span class="yr">${esc(p.year)}</span>`:""}</div>`
+      + `<div class="sub">`
+        + (p.model_name ? `<span class="model">${esc(p.model_name)}</span> · ` : "")
+        + `${esc(p.task_category)}`
+        + (p.attention_role && p.attention_role !== "unspecified" ? ` · <span class="role">${esc(p.attention_role)}</span>` : "")
+      + `</div>`
+      + (tags.length ? `<div class="tagline">${tags.join("")}</div>` : "")
+    + `</div>`
+    + `<div class="lk">`
+      + `<div class="links">${links(p)}</div>`
+      + (meta ? `<div class="meta" title="Publication date ${esc(p.published||"unknown")}">${meta}</div>` : "")
+    + `</div>`
+  + `</div><div class="body"></div>`;
+}
+
+/* Built on first expand , never up front -- see the note at the top of the file. */
+function paperBody(p){
+  const G = DOC.meta.field_groups, out = [];
+
+  if(p.curator_notes && p.curator_notes.length)
+    out.push(`<div class="blk"><h4>Your notes on the sort board</h4><div class="notes">${p.curator_notes.map(esc).join(" · ")}</div></div>`);
+
+  if(p.decoding_target)
+    out.push(`<div class="blk"><h4>What it decodes</h4><div class="prose">${esc(p.decoding_target)}</div></div>`);
+
+  const S = p.summary || {};
+  if(S.architecture_summary || S.pipeline_stages || S.input_representation){
+    out.push(`<div class="blk"><h4>Hand-written summary</h4><div class="prose">`
+      + [ S.architecture_summary, S.pipeline_stages, S.input_representation ].filter(Boolean).map(esc).join("<br>")
+      + `</div></div>`);
+  }
+
+  if(p.abstract)
+    out.push(`<div class="blk"><h4>Abstract</h4><div class="prose clamp" title="Click to expand">${esc(p.abstract)}</div></div>`);
+
+  out.push(fieldGroup("Model architecture", G.architecture, p.architecture));
+  out.push(fieldGroup("fMRI acquisition", G.acquisition, p.acquisition,
+    "Most deep-learning papers cite a public dataset instead of stating scanner settings. Where a paper is silent and used exactly one dataset this corpus has a consensus for, the value is filled from that and marked <em>from dataset</em>; a paper using several is left blank rather than guessed."));
+  out.push(fieldGroup("Preprocessing", G.preprocessing, p.preprocessing));
+
+  if(p.figures && p.figures.length)
+    out.push(`<div class="blk"><h4>Figures you picked on /images</h4><div class="caps">`
+      + p.figures.map(c => `<div>${esc(c)}</div>`).join("") + `</div></div>`);
+
+  const s = p.screening || {};
+  out.push(`<div class="blk"><h4>Why it got in</h4><div class="scores">`
+    + `<span>fMRI evidence in methods <b>${fmt(s.fmri_evidence_methods)}</b></span>`
+    + `<span>rival modality <b>${fmt(s.rival_modality_methods)}</b></span>`
+    + `<span>attention hits <b>${fmt(s.attention_hits_methods)}</b></span>`
+    + `<span>pretrained transformers <b>${fmt(s.pretrained_transformer_hits)}</b></span>`
+    + `<span>decoding score <b>${fmt(s.decoding_score)}</b></span>`
+    + (s.attention_attributed_to_authors ? `<span style="color:var(--green)">attention attributed to the authors</span>` : "")
+    + (s.multimodal ? `<span style="color:var(--warn)">multimodal — check it really is fMRI-led</span>` : "")
+    + `</div>`
+    + (s.attention_evidence ? `<div class="prose" style="margin-top:8px;font-size:12px"><q style="color:var(--prose)">${esc(s.attention_evidence)}</q></div>` : "")
+    + `<div class="scores" style="margin-top:8px"><span>from: ${(p.curated_lists||[]).map(esc).join(" + ")||"—"}</span>`
+    + `<span>detail: ${esc(p.detail_source)}</span>`
+    + `<span>key <code>${esc(p.key)}</code></span></div>`
+  + `</div>`);
+
+  return out.join("");
+}
+
+/* ---- filtering + sorting ------------------------------------------------ */
+function matches(p){
+  if(activePri.size  && !activePri.has(p.priority)) return false;
+  if(activeTask.size && !activeTask.has(p.task_category)) return false;
+  if(activeFlag.has("curated") && !p.curated) return false;
+  if(activeFlag.has("code")    && !((p.architecture||{}).Code_URL||{}).value) return false;
+  if(activeFlag.has("sort")    && !(p.curated_lists||[]).includes("sort board")) return false;
+  if(activeFlag.has("figures") && !(p.curated_lists||[]).includes("selected figures")) return false;
+  if(!query) return true;
+  return (HAY.get(p) || "").includes(query);
+}
+
+/* The same keys the rest of prma orders lists by -- the figure reports' Recently
+   added / Publication date and the sort board's year / citations / title -- so a
+   list ordered here is ordered the way you already order lists everywhere else.
+   Papers missing the key always sort LAST rather than clumping at the top as a
+   run of blanks, whichever direction you asked for. */
+const last = (v, dir) => v ? v : (dir < 0 ? "" : "\uffff");
+const SORTS = {
+  "priority":      (a,b) => a.n - b.n,      // the document is already in this order
+  "added":         (a,b) => String(last(b.added,-1)).localeCompare(String(last(a.added,-1))) || a.n - b.n,
+  "added-asc":     (a,b) => String(last(a.added,1)).localeCompare(String(last(b.added,1))) || a.n - b.n,
+  "year":          (a,b) => (+b.year||0) - (+a.year||0) || a.n - b.n,
+  "year-asc":      (a,b) => (+a.year||9999) - (+b.year||9999) || a.n - b.n,
+  "published":     (a,b) => String(last(b.published,-1)).localeCompare(String(last(a.published,-1))) || a.n - b.n,
+  "published-asc": (a,b) => String(last(a.published,1)).localeCompare(String(last(b.published,1))) || a.n - b.n,
+  "cites":         (a,b) => (b.cited_by||0) - (a.cited_by||0) || a.n - b.n,
+  "title":         (a,b) => (a.title||"").localeCompare(b.title||""),
+  "model":         (a,b) => (a.model_name||"~~~").localeCompare(b.model_name||"~~~") || a.n - b.n,
+};
+
+function apply(){
+  VIEW = (DOC.papers||[]).filter(matches).sort(SORTS[sortBy] || SORTS.priority);
+  renderIncluded();
+  $("#shown") && ($("#shown").textContent = fmt(VIEW.length));
+  $("#inc-n") && ($("#inc-n").textContent = fmt(VIEW.length));
+}
+
+/* ---- rendering ---------------------------------------------------------- */
+function renderIncluded(){
+  const host = $("#included-list");
+  if(!host) return;
+  if(!VIEW.length){ host.innerHTML = `<div class="empty">Nothing matches those filters.</div>`; return; }
+  host.innerHTML = VIEW.map(p =>
+    `<article class="paper" data-key="${esc(p.key)}">${paperHead(p)}</article>`).join("");
+}
+
+function chip(text, n, on, data){
+  const attrs = Object.entries(data).map(([k,v]) => `data-${k}="${esc(v)}"`).join(" ");
+  return `<span class="chip${on?" on":""}" ${attrs} data-count="${n}">${esc(text)}<span class="c">${fmt(n)}</span></span>`;
+}
+
+function renderControls(){
+  const P = DOC.papers || [];
+  const byPri = {}, byTask = {};
+  P.forEach(p => { byPri[p.priority] = (byPri[p.priority]||0)+1;
+                   byTask[p.task_category] = (byTask[p.task_category]||0)+1; });
+
+  $("#pri-chips").innerHTML = `<span class="lbl">Priority</span>` + Object.keys(byPri)
+    .sort((a,b)=>a-b)
+    .map(k => chip("P"+k, byPri[k], activePri.has(+k), { pri:k })).join("");
+  $("#pri-chips").querySelectorAll(".chip").forEach(c =>
+    c.title = DOC.meta.priority_legend[c.dataset.pri] || "");
+
+  $("#task-chips").innerHTML = `<span class="lbl">Task</span>` + Object.keys(byTask)
+    .sort((a,b) => byTask[b]-byTask[a])
+    .map(k => chip(k, byTask[k], activeTask.has(k), { task:k })).join("");
+
+  const nCur  = P.filter(p => p.curated).length;
+  const nCode = P.filter(p => ((p.architecture||{}).Code_URL||{}).value).length;
+  const nSort = P.filter(p => (p.curated_lists||[]).includes("sort board")).length;
+  const nFig  = P.filter(p => (p.curated_lists||[]).includes("selected figures")).length;
+  $("#flag-chips").innerHTML =
+      chip("Human-curated", nCur,  activeFlag.has("curated"), { flag:"curated" })
+    + chip("Has code",      nCode, activeFlag.has("code"),    { flag:"code" })
+    + chip("On sort board", nSort, activeFlag.has("sort"),    { flag:"sort" })
+    + chip("Picked figures",nFig,  activeFlag.has("figures"), { flag:"figures" });
+
+  $("#controls").hidden = false;
+  $("#task-chips").hidden = false;
+}
+
+function renderCounts(){
+  const c = (DOC.meta.counts)||{};
+  $("#counts").innerHTML =
+      `<span><b id="shown">${fmt(c.included)}</b> of <b>${fmt(c.included)}</b> included</span>`
+    + `<span><b>${fmt(c.candidates)}</b> candidates</span>`
+    + `<span><b>${fmt(c.excluded)}</b> excluded</span>`
+    + `<span><b>${fmt(c.borderline)}</b> borderline</span>`
+    + `<span>${fmt(c.from_sort)} sorted · ${fmt(c.from_figures)} figured · ${fmt(c.from_both)} both</span>`
+    + (DOC.meta.generated ? `<span>built ${when(DOC.meta.generated)}</span>` : "");
+}
+
+function renderCriteria(){
+  $("#crit-list").innerHTML = (DOC.meta.criteria||[]).map(c => `<li>${esc(c)}</li>`).join("");
+}
+
+function renderExcluded(){
+  const rows = (DOC.excluded||[]).filter(e => {
+    if(activeFlag.has("borderline-only") && !e.borderline) return false;
+    if(!query) return true;
+    return ((e.title||"") + " " + e.key + " " + (e.tags||[]).join(" ") + " " + e.exclusion_reason)
+      .toLowerCase().includes(query);
+  });
+  const byReason = {};
+  (DOC.excluded||[]).forEach(e => { byReason[e.exclusion_reason] = (byReason[e.exclusion_reason]||0)+1; });
+  const nBorder = (DOC.excluded||[]).filter(e => e.borderline).length;
+
+  return `<div class="section-title"><span class="n">${fmt(rows.length)}</span> excluded`
+    + `<span style="font-weight:400">— and why. The <span class="pill border">borderline</span> ones were dropped only for weak attention evidence: that is where a false negative hides.</span></div>`
+    + `<div class="chipbar" style="margin-bottom:9px">`
+      + chip("Borderline only", nBorder, activeFlag.has("borderline-only"), { flag:"borderline-only" })
+      + Object.keys(byReason).sort((a,b)=>byReason[b]-byReason[a])
+          .map(r => `<span class="chip" style="cursor:default">${esc(r)}<span class="c">${fmt(byReason[r])}</span></span>`).join("")
+    + `</div>`
+    + `<div class="tbl"><table><thead><tr>`
+      + `<th>Title</th><th>Year</th><th>Reason</th><th>fMRI</th><th>Rival</th><th>Attn</th><th>Decode</th><th></th>`
+    + `</tr></thead><tbody>`
+    + rows.map(e => {
+        const s = e.screening || {}, f = e.files || {};
+        const lk = [];
+        if(e.doi)     lk.push(`<a href="https://doi.org/${esc(e.doi)}" target="_blank">DOI</a>`);
+        if(f.md)      lk.push(`<a href="/md/${encodeURIComponent(f.prefix)}" target="_blank">MD</a>`);
+        if(f.methods) lk.push(`<a href="/methods/${encodeURIComponent(f.prefix)}.txt" target="_blank" title="The isolated methods section — what it was screened on">Methods</a>`);
+        if(f.montage) lk.push(`<a href="/images/${encodeURIComponent(f.prefix)}-Figures.png" target="_blank" title="Figure montage — the quickest way to eyeball a borderline exclusion">Figures</a>`);
+        return `<tr><td>${esc(e.title||e.key)}${e.borderline?` <span class="pill border">borderline</span>`:""}`
+          + `<div style="color:var(--muted);font-size:11px;margin-top:2px">${esc(e.best_task_guess)}</div></td>`
+          + `<td class="num">${esc(e.year||"")}</td>`
+          + `<td>${esc(e.exclusion_reason)}</td>`
+          + `<td class="num">${fmt(s.fmri_evidence_methods)}</td>`
+          + `<td class="num">${fmt(s.rival_modality_methods)}</td>`
+          + `<td class="num">${fmt(s.attention_hits_methods)}</td>`
+          + `<td class="num">${fmt(s.decoding_score)}</td>`
+          + `<td class="nowrap lk">${lk.join("")}</td></tr>`;
+      }).join("")
+    + `</tbody></table></div>`;
+}
+
+function renderDatasets(){
+  const rows = DOC.dataset_reference || [];
+  if(!rows.length) return "";
+  return `<div class="section-title"><span class="n">${fmt(rows.length)}</span> dataset acquisition values`
+    + `<span style="font-weight:400">— mined from the whole corpus, not asserted. Each is the value most papers here report near that dataset's name, with how many back it.</span></div>`
+    + `<div class="tbl"><table><thead><tr>`
+      + `<th>Dataset</th><th>Parameter</th><th>Consensus</th><th>Papers</th><th>Other values seen</th>`
+    + `</tr></thead><tbody>`
+    + rows.map(r => `<tr><td>${esc(r.Dataset)}</td><td class="nowrap">${esc(r.Parameter)}</td>`
+        + `<td><b>${esc(r.Consensus_Value)}</b></td><td class="num">${fmt(r.N_Papers_Reporting)}</td>`
+        + `<td style="color:var(--muted)">${esc(r.Other_Reported_Values||"—")}</td></tr>`).join("")
+    + `</tbody></table></div>`;
+}
+
+function renderAll(){
+  renderCounts(); renderCriteria(); renderControls();
+  $("#main").innerHTML =
+      `<div class="section-title"><span class="n" id="inc-n">${fmt((DOC.papers||[]).length)}</span> included`
+    + `<span style="font-weight:400">— click a paper to open it; click any field to see the sentence it was read out of.</span></div>`
+    + `<div id="included-list"></div>`
+    + `<div id="excluded-host"></div>`
+    + `<div id="datasets-host"></div>`;
+  apply();
+  $("#excluded-host").innerHTML = renderExcluded();
+  $("#datasets-host").innerHTML = renderDatasets();
+  renderFooter();
+}
+
+function renderFooter(){
+  const m = DOC.meta || {}, s = m.sources || {}, n = m.notes || {};
+  $("#footer").innerHTML =
+      `Everything on this page is derived. It is the union of <a class="navlink" style="padding:1px 6px" href="/sort">/sort</a> `
+    + `and the figures you picked on <a class="navlink" style="padding:1px 6px" href="/images">/images</a>, screened against the three criteria above and read out of the text `
+    + `<code>prma md</code> and <code>prma methods</code> already wrote. Nothing here is typed by hand except `
+    + `<code>${esc(s.overrides||"config/review-overrides.json")}</code>, which overrides the extraction for papers somebody has actually read. `
+    + `<br><br><b>${esc(n.blank_cells||"")}</b> ${esc(n.evidence||"")} ${esc(n.ranking||"")} ${esc(n.inferred||"")}`
+    + `<br><br>Rebuilt from the boards with the Rebuild button, or <code>prma review</code>. `
+    + `Change either board and this page says so on its next load.`;
+}
+
+/* ---- banner : nothing built / building / stale --------------------------- */
+function renderBanner(){
+  const b = $("#banner");
+  if(STATUS.building){
+    const pct = STATUS.total ? Math.round(100 * STATUS.done / STATUS.total) : 0;
+    b.className = "banner";
+    b.innerHTML = `<div class="msg"><b>Building the review…</b>`
+      + `<span>${esc(STATUS.stage||"working")}${STATUS.total?` — ${fmt(STATUS.done)} of ${fmt(STATUS.total)} papers`:""}. `
+      + `This is a regex pass over every candidate's full text; it takes minutes. You can leave the page open.</span>`
+      + `<div class="track"><div class="done" style="width:${STATUS.total?pct:6}%"></div></div></div>`;
+    return;
+  }
+  if(!STATUS.available){
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>No review has been built yet.</b>`
+      + `<span>Screening every paper on the sort board and every paper you picked a figure from takes a few minutes, so it is never done on the way to serving this page.</span></div>`
+      + `<button id="build-now">Build it now</button>`;
+    $("#build-now").addEventListener("click", startRebuild);
+    return;
+  }
+  if(STATUS.error){
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>The last rebuild failed.</b><span>${esc(STATUS.error)}</span></div>`;
+    return;
+  }
+  const F = (DOC && DOC.meta && DOC.meta.filters) || {};
+  if(F.min_year || F.priority_only){
+    // A build narrowed at the command line holds fewer papers than the boards
+    // do , and nothing else on the page would say so.
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>This build was narrowed when it was made.</b>`
+      + `<span>${[ F.min_year ? `nothing published before ${F.min_year}` : "",
+                   F.priority_only ? "priority 1–4 only — the clinical-classification and fingerprinting papers were dropped" : "" ]
+                 .filter(Boolean).join("; ")}. Rebuild here to take the whole board.</span></div>`
+      + `<button id="rebuild-3">↻ Rebuild unfiltered</button>`;
+    $("#rebuild-3").addEventListener("click", startRebuild);
+    return;
+  }
+  if(STATUS.stale){
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>The boards have moved since this was built.</b>`
+      + `<span>Papers added to /sort or figures picked on /images since ${when(STATUS.generated)} are not in what you are looking at.</span></div>`
+      + `<button id="rebuild-2">↻ Rebuild</button>`;
+    $("#rebuild-2").addEventListener("click", startRebuild);
+    return;
+  }
+  b.className = ""; b.innerHTML = "";
+}
+
+/* ---- export --------------------------------------------------------------
+   Exports carry what is ON SCREEN , filters and all -- a set you narrowed to
+   twelve papers is the thing worth taking away. */
+function download(text, name, mime){
+  const url = URL.createObjectURL(new Blob([text], { type:mime }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const stamp = () => new Date().toISOString().slice(0,10);
+
+$("#export-json").addEventListener("click", () => {
+  if(!DOC) return;
+  download(JSON.stringify({
+    source: "prma review", generated: new Date().toISOString(),
+    meta: DOC.meta, count: VIEW.length, papers: VIEW,
+    dataset_reference: DOC.dataset_reference,
+  }, null, 1), `prma-review-${stamp()}.json`, "application/json");
+});
+
+$("#export-csv").addEventListener("click", () => {
+  if(!DOC) return;
+  const G = DOC.meta.field_groups;
+  const flat = [].concat(G.architecture, G.acquisition, G.preprocessing);
+  const head = ["#","Priority","Model_Name","Title","Year","Publication_Date","Added_To_Library",
+                "Citations","DOI_or_Key","Task","Decoding_Target",
+                "Attention_Role","Datasets_Used","Tags","Curator_Notes","Curated_Lists","Detail_Source"]
+               .concat(flat);
+  const cell = v => { const s = Array.isArray(v) ? v.join("; ") : (v==null?"":String(v));
+                      return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const lines = [ head.map(cell).join(",") ];
+  VIEW.forEach(p => {
+    const groups = Object.assign({}, p.architecture, p.acquisition, p.preprocessing);
+    lines.push([ p.n, p.priority, p.model_name, p.title, p.year, p.published,
+                 String(p.added||"").slice(0,10), p.cited_by,
+                 p.key, p.task_category,
+                 p.decoding_target, p.attention_role, p.datasets_used, p.tags,
+                 p.curator_notes, p.curated_lists, p.detail_source ]
+      .concat(flat.map(c => (groups[c]||{}).value || ""))
+      .map(cell).join(","));
+  });
+  download(lines.join("\n"), `prma-review-${stamp()}.csv`, "text/csv");
+});
+
+/* ---- fetching ------------------------------------------------------------ */
+async function fetchDoc(){
+  const r = await fetch("/api/review");
+  const d = await r.json();
+  STATUS = { available:d.available, building:d.building, stage:d.stage, done:d.done,
+             total:d.total, error:d.error, generated:d.generated, stale:d.stale };
+  if(d.papers){
+    DOC = { meta:d.meta, papers:d.papers, excluded:d.excluded, dataset_reference:d.dataset_reference };
+    // One lowercase haystack per paper , built once : the search box runs over
+    // every paper on every keystroke and re-joining these each time is what
+    // would make it feel slow. Kept OUTSIDE the paper objects -- they are what
+    // the JSON export hands back , and a search index is not part of the review.
+    HAY = new WeakMap();
+    DOC.papers.forEach(p => HAY.set(p,
+      [ p.title, p.model_name, p.key, p.doi, p.task_category, p.attention_role,
+        (p.tags||[]).join(" "), (p.modalities||[]).join(" "),
+        (p.datasets_used||[]).join(" "), (p.curator_notes||[]).join(" ") ]
+      .filter(Boolean).join(" ").toLowerCase()));
+    renderAll();
+  } else {
+    $("#main").innerHTML = "";
+  }
+  renderBanner();
+  $("#rebuild").disabled = !!STATUS.building;
+}
+
+async function pollStatus(){
+  try {
+    const r = await fetch("/api/review/version");
+    const s = await r.json();
+    const landed = STATUS.building && !s.building;
+    STATUS = s;
+    renderBanner();
+    $("#rebuild").disabled = !!s.building;
+    if(landed){ clearInterval(poll); poll = null; await fetchDoc(); }
+    else if(!s.building && poll){ clearInterval(poll); poll = null; }
+  } catch(e){ /* server went away ; the next click will say so */ }
+}
+
+async function startRebuild(){
+  $("#rebuild").disabled = true;
+  STATUS = Object.assign({}, STATUS, { building:true, stage:"starting", done:0, total:0 });
+  renderBanner();
+  try { await fetch("/api/review/rebuild", { method:"POST" }); }
+  catch(e){ STATUS.building = false; STATUS.error = String(e); renderBanner(); return; }
+  if(!poll) poll = setInterval(pollStatus, 1500);
+}
+
+$("#rebuild").addEventListener("click", startRebuild);
+
+/* The theme is one setting shared by every prma page ( localStorage
+   "prma-theme" ) , so flipping it here flips the dashboard and both boards too. */
+$("#toggleTheme").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("prma-theme", next); } catch(e){}
+  labelTheme();
+});
+function labelTheme(){
+  $("#toggleTheme").textContent =
+    document.documentElement.dataset.theme === "dark" ? "☀ Light" : "🌙 Dark";
+}
+labelTheme();
+
+/* ---- interaction --------------------------------------------------------- */
+document.addEventListener("click", e => {
+  // A field opens to show the sentence behind it.
+  const f = e.target.closest(".f.has");
+  if(f){ f.classList.toggle("open"); e.stopPropagation(); return; }
+  // A clamped abstract opens fully.
+  const pr = e.target.closest(".prose.clamp");
+  if(pr){ pr.classList.remove("clamp"); e.stopPropagation(); return; }
+  if(e.target.closest(".lk a")) return;      // links are links
+
+  const art = e.target.closest(".paper");
+  if(art && e.target.closest(".hd")){
+    const body = art.querySelector(".body");
+    if(!art.classList.contains("open") && !body.dataset.built){
+      const p = (DOC.papers||[]).find(x => x.key === art.dataset.key);
+      if(p){ body.innerHTML = paperBody(p); body.dataset.built = "1"; }
+    }
+    art.classList.toggle("open");
+    if(art.classList.contains("open")){
+      const top = art.getBoundingClientRect().top;
+      const hdr = document.querySelector("header").offsetHeight;
+      if(top < hdr) window.scrollBy({ top: top - hdr - 8 , behavior:"smooth" });
+    }
+    return;
+  }
+
+  const c = e.target.closest(".chip");
+  if(!c || !c.dataset) return;
+  if(c.dataset.pri){  const v = +c.dataset.pri;  activePri.has(v)  ? activePri.delete(v)  : activePri.add(v); }
+  else if(c.dataset.task){ const v = c.dataset.task; activeTask.has(v) ? activeTask.delete(v) : activeTask.add(v); }
+  else if(c.dataset.flag){ const v = c.dataset.flag; activeFlag.has(v) ? activeFlag.delete(v) : activeFlag.add(v); }
+  else return;
+  c.classList.toggle("on");
+  apply();
+  $("#excluded-host").innerHTML = renderExcluded();
+});
+
+let qTimer = null;
+$("#q").addEventListener("input", e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => {
+    query = e.target.value.trim().toLowerCase();
+    apply();
+    $("#excluded-host").innerHTML = renderExcluded();
+  }, 140);
+});
+$("#sortby").addEventListener("change", e => { sortBy = e.target.value; apply(); });
+
+document.addEventListener("keydown", e => {
+  if(e.key === "/" && document.activeElement !== $("#q")){
+    e.preventDefault(); $("#q").focus(); $("#q").select();
+  }
+  if(e.key === "Escape" && document.activeElement === $("#q")){
+    $("#q").value = ""; query = ""; apply(); $("#q").blur();
+  }
+});
+
+fetchDoc().then(() => { if(STATUS.building && !poll) poll = setInterval(pollStatus, 1500); });
+</script>
+</body>
+</html>

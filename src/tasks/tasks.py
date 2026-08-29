@@ -126,6 +126,13 @@ def all_images( args ):
 	from . import all_images
 	all_images.run( args )
 
+def review( args ):
+	# No snapshot , same reason as method-images / all-images : a pure pass over
+	# what is already on disk -- the two curated boards and the text the suite
+	# wrote. It runs no stage , it only reads.
+	from ..review import build
+	build.run( args )
+
 def modalities( args ):
 	# No snapshot : like method-images , a pure pass over what the suite
 	# already produced ( OpenAlex cache , methods .txt , md ) -- it just

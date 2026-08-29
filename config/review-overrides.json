@@ -1,0 +1,144 @@
+{
+  "_README": "Hand-verified detail read directly from each paper's methods section. Keys are DOI_or_Key as they appear in the curated lists. Any field here overrides the auto-extracted value and the row is marked 'human-curated + auto' in Detail_Source. Add entries as you read more papers.",
+
+  "10.48550/arXiv.2606.20696": {
+    "Model_Name": "MindAlign",
+    "Decoding_Target": "free-form Japanese inner-speech sentences produced while viewing images",
+    "Attention_Role": "pretrained transformer VLM (LLaVA-1.6-Vicuna-7B) as frozen decoder, driven by a learned soft prefix; CLIP ViT-L/14 as frozen semantic target space. The fMRI encoder itself is a Bi-LSTM, not a transformer.",
+    "Architecture_Summary": "Two-stage decoupled brain-to-language framework. STAGE 1 (cross-modal alignment): linear projection of selected voxels -> ReLU(LayerNorm(W_in x_t + b_in)); multi-layer Bidirectional LSTM over T = 8 TRs; global average pooling over the temporal dimension; MLP head aligning to CLIP ViT-L/14 embedding space (d_clip = 768); linear projection into LLaVA input-embedding space (d_llm = 4096). STAGE 2 (multimodal fusion generative decoding): dual-stream soft-prefix construction. Neural stream = frozen Stage-1 encoder output e_fmri in R^4096 -> linear W_f -> [B, L x 2048]. Visual stream = frozen CLIP ViT-L/14 image features -> linear W_v -> [B, L x 2048]. The two are concatenated along the feature dim to [B, L x 4096], reshaped to [B, L, 4096], and passed through a fusion MLP (Linear -> LayerNorm -> GELU) to give the soft prefix P. P is prepended to the BOS token and fed to the FROZEN LLaVA-1.6-vicuna-7B-hf decoder through the input-embedding interface. Only the projection and fusion modules are trained.",
+    "Pipeline_Stages": "1) EV-based voxel selection -> 2) Bi-LSTM fMRI encoder + GAP -> 3) CLIP/LLaVA embedding alignment -> 4) dual-stream soft-prefix fusion -> 5) frozen LLaVA generation",
+    "Input_Representation": "voxel time series restricted by category-based explainable-variance (EV) filtering; fixed voxel mask shared across splits; T = 8 TRs per sample",
+    "Patch_Token_Size": "prefix length L = 8 (hyperparameter); T = 8 TRs input window",
+    "Hidden_Embed_Dim": "d_clip = 768; d_llm = 4096; per-stream projection 2048 (= d_llm/2)",
+    "Pooling": "Global Average Pooling (GAP) over the temporal dimension; GAP over LLaVA input-layer embeddings for the sentence-level target vector",
+    "Conv_GNN_Components": "Bidirectional LSTM (multi-layer) as the fMRI temporal encoder",
+    "Pretrained_Backbone": "CLIP ViT-L/14 (frozen); LLaVA-1.6-vicuna-7B-hf (frozen)",
+    "Frozen_Finetuned": "LLaVA decoder and CLIP fully frozen; only Stage-1 encoder then Stage-2 projection/fusion MLP trained (soft prefix tuning)",
+    "Loss_Functions": "Stage 1 hybrid: InfoNCE contrastive + cosine + MSE + auxiliary cross-entropy on COCO category labels. Stage 2: teacher-forced cross-entropy (NLL) with prefix positions masked to -100",
+    "Augmentation_Regularization": "Intra-category Mixup (category-constrained); spatially constrained noise injection perturbing voxel activations within localized regions",
+    "Validation_Scheme": "subject-wise and cross-subject evaluation",
+    "N_Subjects": "5 participants, ~2,000 samples total"
+  },
+
+  "10.1038/s41593-023-01304-9": {
+    "Model_Name": "Tang et al. semantic decoder",
+    "Decoding_Target": "continuous natural language (perceived speech, imagined speech, and silent film) from cortical BOLD",
+    "Attention_Role": "GPT-1 (12-layer transformer, multi-head self-attention) serves two roles: it supplies the semantic feature space for the voxelwise encoding model (9th hidden layer), and it acts as the generative language-model prior that proposes word continuations inside the beam search. The brain-side model itself is linearized ridge regression, not a transformer.",
+    "Architecture_Summary": "Encoding-model-in-the-loop Bayesian decoder. (1) LANGUAGE MODEL: GPT (GPT-1), a 12-layer transformer using multi-head self-attention, fine-tuned on a corpus of Reddit comments plus autobiographical narratives (>200M words total), trained 50 epochs with maximum context length 100. Provides both the prior P(S) over word sequences and semantic features. (2) SEMANTIC FEATURES: for each word, the sequence (s_i-5 ... s_i) is passed through GPT and activations are taken from the NINTH hidden layer. (3) ENCODING MODEL: per-voxel L2-regularized linear (ridge) regression from the semantic features to BOLD, with a finite impulse response delay structure; a separate word-rate model predicts when words occur. (4) DECODER: beam search of width 200 (10 for the null model). At each predicted word time the language model generates continuations via nucleus sampling; each candidate is scored by the encoding model's likelihood against measured BOLD under a Gaussian noise model with shrinkage factor alpha; the top candidates are retained.",
+    "Pipeline_Stages": "1) GPT fine-tune -> 2) 9th-layer semantic features -> 3) voxelwise ridge encoding model + word-rate model -> 4) beam search with LM proposals scored by encoding-model likelihood",
+    "Input_Representation": "cortical surface BOLD, voxelwise; 3 subjects with ~16 hours of scanning each",
+    "N_Transformer_Layers": "GPT: 12 layers (semantic features taken from layer 9)",
+    "Pretrained_Backbone": "GPT (GPT-1), fine-tuned on Reddit + narrative corpus; BERTScore used only for evaluation",
+    "Frozen_Finetuned": "GPT fine-tuned on the domain corpus for 50 epochs; ridge encoding models fit per subject",
+    "Loss_Functions": "ridge (L2) regression objective for encoding models; likelihood-based beam scoring under a Gaussian noise model",
+    "Epochs_Steps": "GPT fine-tuned for 50 epochs; max context length 100 words",
+    "Validation_Scheme": "held-out test stories; within-subject decoders; cross-subject decoders tested and shown to fail (privacy control)",
+    "Code_URL": "https://github.com/HuthLab/semantic-decoding"
+  },
+
+  "10.1109/TIP.2025.3572784": {
+    "Model_Name": "MindGPT",
+    "Decoding_Target": "natural-language descriptions of viewed images from fMRI",
+    "Attention_Role": "ViT self-attention encoder over fMRI + cross-attention injected into every layer of a frozen GPT-2 decoder",
+    "Architecture_Summary": "fMRI ENCODER: a standard ViT with embedding size 768, 8 layers, and 8-head self-attention. TEXT DECODER: frozen GPT-2 Base; a 12-HEAD cross-attention layer is inserted into EACH of the 12 GPT-2 decoder layers so that generated tokens attend to the fMRI representation. CLIP ViT-B/32 supplies the visual-semantic target space. Only the fMRI encoder and the added cross-attention layers are trainable; CLIP-ViT-B/32 and GPT-2 Base stay frozen.",
+    "N_Transformer_Layers": "fMRI ViT encoder: 8 layers; GPT-2 decoder: 12 layers (cross-attention added to all 12)",
+    "N_Attention_Heads": "8 heads (fMRI encoder self-attention); 12 heads (cross-attention into GPT-2)",
+    "Hidden_Embed_Dim": "768 (fMRI encoder embedding size)",
+    "Pretrained_Backbone": "CLIP ViT-B/32 (frozen), GPT-2 Base (frozen)",
+    "Frozen_Finetuned": "only the fMRI encoder and the cross-attention layers are trainable"
+  },
+
+  "10.48550/arXiv.2502.15786": {
+    "Model_Name": "MindLLM",
+    "Decoding_Target": "subject-agnostic, open-ended fMRI-to-text (captioning, VQA, memory recall, reasoning)",
+    "Attention_Role": "a custom neuroscience-informed CROSS-ATTENTION layer is the whole fMRI encoder; a frozen Vicuna-7B LLM does the generation",
+    "Architecture_Summary": "fMRI ENCODER built on a modified cross-attention layer that handles a varying number of voxels per subject (N ranges 12,682-17,907 in NSD). VALUES = the raw scalar fMRI signal of each voxel (v_i in R), so every voxel is its own value token and nothing is lost to pooling or sampling. QUERIES = randomly initialised, learnable, each expected to capture a brain pattern. KEYS deliberately EXCLUDE the fMRI value and are built purely from voxel identity: Fourier positional encoding PE(c_i) of the voxel's 3-D coordinates, concatenated with learnable per-region embeddings E[P(i)] taken from brain parcellations (Glasser, Rolls), and multiple parcellations can be concatenated together. Attention output z_q in R^Nq then goes through an MLP + reshape to give L fMRI tokens X_v in R^{L x d}, which are prepended to the language tokens. LLM = Vicuna-7B, frozen; only the fMRI encoder trains.",
+    "Pipeline_Stages": "1) voxels as value tokens -> 2) position+parcellation keys, learnable queries -> 3) cross-attention -> 4) MLP/reshape into L fMRI tokens -> 5) prepend to prompt -> 6) frozen Vicuna-7B generation",
+    "Input_Representation": "raw voxel vector v in R^N, N varying 12,682-17,907 across subjects (NSD); voxel 3-D coordinates + Glasser/Rolls parcellation indices as side information",
+    "Positional_Encoding": "Fourier positional encoding (Tancik et al. 2020) of voxel coordinates, concatenated with learnable brain-region embeddings from one or more parcellations",
+    "Attention_Variant": "modified cross-attention with value-free keys (positional + region encodings only)",
+    "Pretrained_Backbone": "Vicuna-7b",
+    "Frozen_Finetuned": "LLM frozen; only the fMRI encoder is trained, to preserve the language-modelling prior",
+    "Loss_Functions": "autoregressive cross-entropy on assistant turns only (brain instruction tuning)",
+    "Validation_Scheme": "subject-agnostic / cross-subject evaluation, including unseen subjects"
+  },
+
+  "10.1016/j.media.2023.102841": {
+    "Model_Name": "BolT",
+    "Decoding_Target": "cognitive task / disease state classification from resting-state and task fMRI time series",
+    "Attention_Role": "fused window multi-head self-attention (FW-MSA) transformer is the entire model",
+    "Architecture_Summary": "A linear projection layer maps the ROI BOLD response dimensionality to the transformer hidden dimensionality. A CASCADE OF FOUR transformer blocks follows, each composed of an FW-MSA module and an MLP module, both with layer normalization and skip connections. Hidden dimensionality 400, with 40 attention heads at 20 dimensions per head. Dropout 0.1 in both the FW-MSA and MLP layers. FW-MSA computes attention inside temporal windows extended by a learned fringe of length L given a window size W and stride s, so adjacent windows overlap and information fuses across them. A CLS token per window plus a readout mechanism aggregates the sequence.",
+    "N_Transformer_Layers": "4 transformer blocks (cascade)",
+    "N_Attention_Heads": "40 heads x 20 dims per head",
+    "Hidden_Embed_Dim": "400",
+    "Attention_Variant": "fused window multi-head self-attention (FW-MSA) with learned fringe extension",
+    "Normalization": "layer normalization (with skip connections)",
+    "Dropout": "0.1 in both FW-MSA and MLP layers",
+    "Pooling": "per-window CLS tokens + readout aggregation",
+    "Optimizer": "Adam",
+    "Learning_Rate": "initial 1e-4, raised to 2e-4 over the first 10 epochs, then decayed to 1e-5",
+    "Batch_Size": "32",
+    "Epochs_Steps": "20 epochs",
+    "Loss_Functions": "cross-entropy",
+    "Hardware": "NVIDIA RTX 3090",
+    "Validation_Scheme": "nested cross-validation",
+    "Code_URL": "https://github.com/icon-lab/BolT"
+  },
+
+  "10.48550/arXiv.2307.05916": {
+    "Model_Name": "SwiFT (Swin 4D fMRI Transformer)",
+    "Decoding_Target": "sex classification, age and trait regression directly from 4D fMRI volumes",
+    "Attention_Role": "4D shifted-window multi-head self-attention over raw fMRI volumes — a Swin Transformer generalised to 4D",
+    "Architecture_Summary": "Operates on the raw 4D volume (3D volume cropped/padded to 96 x 96 x 96, times time) rather than on ROI time series. Swin-Transformer variant with channel number C = 36. Layer depths fixed at {L1, L2, L3, L4} = {2, 2, 6, 2}: three stages of 2, 2 and 6 consecutive 4D Swin Transformer blocks, then a final stage of 2 consecutive GLOBAL-attention transformer blocks. 4D (shifted) window multi-head self-attention uses patch size P = 4 and window size M = 4. The output feature map of Stage 4 is reduced by GLOBAL AVERAGE POOLING and passed to an MLP head.",
+    "N_Transformer_Layers": "{2, 2, 6, 2} blocks across 4 stages (12 blocks total; final stage uses global attention)",
+    "Attention_Variant": "4D window / shifted-window multi-head self-attention (4D W-MSA / 4D SW-MSA), global attention in the last stage",
+    "Patch_Token_Size": "patch size P = 4, window size M = 4; volumes reshaped to 96 x 96 x 96",
+    "Hidden_Embed_Dim": "channel number C = 36",
+    "Pooling": "global average pooling over the Stage-4 feature map, then an MLP head",
+    "Loss_Functions": "Binary Cross Entropy for binary classification; MSE for regression; contrastive (LIC + LLL) for the self-supervised objective",
+    "Input_Representation": "raw 4D fMRI volumes (no ROI parcellation)"
+  },
+
+  "10.48550/arXiv.2409.19407": {
+    "Model_Name": "Brain-JEPA",
+    "Decoding_Target": "brain-dynamics foundation model; demographic prediction, disease diagnosis and trait prediction from fMRI time series",
+    "Attention_Role": "ViT backbone with joint-embedding predictive architecture — latent-space prediction rather than masked reconstruction",
+    "Architecture_Summary": "Joint-Embedding Predictive Architecture over parcellated fMRI time series. Each parcel's temporal signal is split into patches of p time points (10 timestep patches in total) after ROI shuffling. Input is divided into three non-overlapping regions (Cross-Time, plus others) with the observation block excluded. An observation block x is sampled within range {eta_o_R, eta_o_T} and passed through the observation encoder f_theta to give patch-level representations; a predictor then predicts the representations of several target blocks in LATENT space. BRAIN GRADIENT POSITIONING: the functional-connectivity gradient G in R^{n x m} is mapped by a trainable linear layer to G_hat in R^{n x d/2}, where d is the ViT embedding dimension; the temporal position T in R^{n x d/2} uses fixed sine/cosine encodings; the final positional embedding is the concatenation P = [T, G_hat].",
+    "Positional_Encoding": "Brain Gradient Positioning: learned linear map of FC gradients (spatial half) concatenated with sinusoidal temporal encodings (temporal half)",
+    "Input_Representation": "parcellated ROI time series, patched into 10 timestep patches, ROIs shuffled",
+    "Attention_Variant": "ViT self-attention (observation encoder + predictor)",
+    "Loss_Functions": "latent-space predictive loss between predicted and target block representations (JEPA objective)"
+  },
+
+  "10.18653/v1/2023.acl-long.741": {
+    "Model_Name": "UniCoRN",
+    "Decoding_Target": "fMRI-to-text (and EEG-to-text) continuous language reconstruction",
+    "Attention_Role": "multi-layer transformer encoder performs self-attention over the fMRI volume series; a pretrained seq2seq LM decodes to text",
+    "Architecture_Summary": "Two stages. STAGE 1 — cognitive signal reconstruction, itself in two phases. (a) Snapshot reconstruction: each individual fMRI frame goes through a CNN-based Snapshot Encoder E_r (following Malkiel et al. 2021) to a snapshot embedding E_i, and a simpler CNN-based Snapshot Decoder D_r reconstructs the frame; this captures intra-volume information. (b) Series reconstruction: a MULTI-LAYER TRANSFORMER ENCODER (Vaswani et al. 2017) E_s takes the snapshot embeddings of T sequential frames and applies self-attention across the time axis to produce the serialized embedding E_e, capturing inter-volume information; the same decoder reconstructs the series. Mean absolute error is the loss for both phases. STAGE 2 — cog2text: the serialized embeddings condition a pretrained sequence-to-sequence language model to generate text.",
+    "Pipeline_Stages": "1) CNN snapshot encoder/decoder per fMRI frame -> 2) transformer encoder over T frames (series reconstruction) -> 3) cog2text generation with a pretrained seq2seq LM",
+    "Conv_GNN_Components": "CNN-based snapshot encoder and (simpler) snapshot decoder",
+    "Attention_Variant": "self-attention across the fMRI time series (series encoder)",
+    "Loss_Functions": "mean absolute error (MAE) for both reconstruction phases; cross-entropy for text generation"
+  },
+
+  "10.1016/j.inffus.2025.103589": {
+    "Model_Name": "BrainDEC",
+    "Decoding_Target": "text produced by a participant during conversation, decoded from whole-brain fMRI sequences",
+    "Attention_Role": "encoder-decoder transformer treated as cross-modal machine translation: fMRI sequence in, text out",
+    "Architecture_Summary": "Frames brain-to-text as machine translation between two different modalities. The transformer ENCODER takes a sequence of whole-brain fMRI recordings and the DECODER emits the participant's produced text. Following the variant proposed in prior work, the classical text embedding layer in the encoder and the fully connected layers in both encoder and decoder are replaced with 1D CONVOLUTION operations so the architecture accepts a continuous multivariate brain signal instead of discrete tokens. A multimodal LLM supplies the language side.",
+    "Input_Representation": "sequence of whole-brain fMRI volumes (continuous multivariate signal, not tokens)",
+    "Conv_GNN_Components": "1D convolutions replacing the embedding layer and the fully connected layers in both encoder and decoder",
+    "Attention_Variant": "encoder self-attention + encoder-decoder cross-attention (seq2seq transformer)"
+  },
+
+  "10.1126/sciadv.adw1464": {
+    "Model_Name": "Mind captioning",
+    "Decoding_Target": "descriptive text of perceived and recalled video content, generated word by word from fMRI",
+    "Attention_Role": "transformer LMs supply the semantic target space (DeBERTa-large selected out of 42 candidates) and a masked LM drives the iterative text-generation search; the brain-side decoders are linear.",
+    "Architecture_Summary": "FEATURE SPACE: 42 pretrained language models (BERT, RoBERTa, DeBERTa, ALBERT, OpenAI-GPT, GPT-2, Sentence-GPT, XLNet, DistilBERT, DistilGPT2, T5, BART, CTRL, XLM, XLM-RoBERTa, ELECTRA, CLIP text encoder; base/large/xlarge sizes) were evaluated by cross-validated encoding performance on the training perception data; DeBERTa-large was selected as best, with features taken from each of its 12 layers. Video captions (20 per video) are embedded and averaged. TimeSformer supplies visual features and CLIP ViT-B/16 the visuo-semantic features used to replicate the brain-captioning baseline. ENCODING: voxelwise L2-regularized (ridge) regression from layer features to voxel amplitudes, regularization chosen per layer/model/subject over 10 candidate coefficients, sixfold cross-validation on 58 training runs. DECODING: a set of L2-regularized linear decoders, one per feature unit per layer, predicts semantic features from fMRI patterns; text is then produced by iteratively optimizing a candidate sentence with a masked language model so that its embedding matches the decoded features.",
+    "Pipeline_Stages": "1) caption embedding with DeBERTa-large (12 layers) -> 2) voxelwise ridge encoding for model selection -> 3) per-unit ridge feature decoders -> 4) masked-LM iterative optimization of the caption",
+    "Pretrained_Backbone": "DeBERTa-large (selected from 42 LMs), TimeSformer, CLIP ViT-B/16",
+    "Validation_Scheme": "sixfold cross-validation on training perception data (58 runs in five sets of 10); generalization to test perception and to mental-recall data",
+    "Code_URL": "https://github.com/horikawa-t/MindCaptioning"
+  }
+}

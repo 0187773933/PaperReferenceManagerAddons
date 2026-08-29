@@ -378,21 +378,56 @@ def crawl( sub , global_parser ):
 		"crawl_out_name":       None  ,
 	}
 
-def process( sub , global_parser ):
-	p = sub.add_parser(
-		"process" ,
-		parents=[ global_parser ] ,
-		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> code -> md -> modalities ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper. Pass --summarize to also run the LLM summary ( costs money )."
-	)
+# Shared by ` process ` and its force-by-default twin ` reprocess ` , so the two
+# can't drift. ` reprocess ` is NOT an argparse alias : an alias would inherit
+# --force's False default and quietly do nothing on a paper that's already been
+# through the pipeline , which is the exact case you type ' reprocess ' for.
+FORCE_HELP = (
+	"REDO everything on this one paper. Deletes what the suite derived for it "
+	"-- output/md , output/methods , output/text , its figure crops + montages "
+	"under output/images , and the derived fields on its record ( yolo / "
+	"sections / raw_text / images / code / modalities / the 'processed' stamp ) "
+	"-- then runs every stage again against the PDF that's on disk NOW. This is "
+	"the fix for a paper whose PDF you REPLACED ( a release version swapped in "
+	"for the manuscript you first added ) : the DOI never changed , so nothing "
+	"else notices -- every stage sees its old output and skips , and the "
+	"server's --watch backlog counts the paper as done. Identity ( doi / title "
+	"/ sources ) and the OpenAlex cache are left alone ; summaries are kept too "
+	"unless you also pass --summarize , which regenerates them ( LLM calls )." )
+
+def _process_args( p ):
 	p.add_argument( "process_query" ,
 		help="DOI ( exact ) or title ( fuzzy-matched ) of the paper to process" )
 	p.add_argument( "--summarize" , dest="process_summarize" ,
 		action="store_true" , default=False ,
 		help="Also run the LLM summarize stage ( off by default ; costs LLM calls )" )
 	p.set_defaults( _entry=tasks.process )
+	return p
+
+def process( sub , global_parser ):
+	p = _process_args( sub.add_parser(
+		"process" ,
+		parents=[ global_parser ] ,
+		help="Find ONE paper in your manager by DOI or title and run the full per-paper suite on just it ( snapshot -> openalex -> yolo -> ocr -> images -> methods -> code -> md -> modalities ) , then reindex so the dashboard refreshes. The library tasks are idempotent and scoped to the single paper -- so on a paper that's ALREADY been through the pipeline this is a no-op ; use ` prma reprocess ` ( or --force ) to redo it from scratch against a PDF you've since replaced. Pass --summarize to also run the LLM summary ( costs money )."
+	) )
+	p.add_argument( "--force" , dest="process_force" ,
+		action="store_true" , default=False , help=FORCE_HELP )
 	return {
 		"process_summarize": False ,
+		"process_force":     False ,
 	}
+
+def reprocess( sub , global_parser ):
+	p = _process_args( sub.add_parser(
+		"reprocess" ,
+		parents=[ global_parser ] ,
+		help="` prma process ` with --force ON : find ONE paper by DOI or title , THROW AWAY everything the pipeline derived for it , and run every stage again against the PDF that's on disk now. Reach for this when you swapped a paper's PDF ( the published version replacing the preprint / manuscript you first added ) : the DOI is unchanged , so the snapshot sees nothing new , every stage finds its old output and skips , and the server's backlog counts the paper as done -- this is what breaks that tie. See ` prma process --force ` for exactly what's deleted and what's preserved. ( Not to be confused with ` prma reindex ` , which rebuilds the dashboard's search index for the WHOLE library and processes nothing. )"
+	) )
+	# The point of the command : force is the default here. A subparser default
+	# wins over the top-level one , so ` prma reprocess ` is forced while
+	# ` prma process ` stays idempotent.
+	p.set_defaults( process_force=True )
+	return {}
 
 def code( sub , global_parser ):
 	p = sub.add_parser(
@@ -470,11 +505,33 @@ def all_images( sub , global_parser ):
 		"all_images_out": None ,
 	}
 
+def review( sub , global_parser ):
+	p = sub.add_parser(
+		"review" ,
+		parents=[ global_parser ] ,
+		help="Build the literature review the /review page shows : take every paper on the SORT BOARD ( /sort ) or with a figure picked on ALL FIGURES ( /images ) , screen each one against three inclusion criteria -- fMRI is the dominant modality in its methods , it DECODES ( fMRI in , content out , so encoding models and MRI reconstruction are excluded ) , and transformer / attention machinery sits inside the model the authors themselves built -- then pull every architecture , acquisition and preprocessing detail the paper's own text states , each one carrying the verbatim quote it was parsed from. Reads the text ` prma md ` and ` prma methods ` already wrote ; runs no pipeline stage , so papers the suite hasn't reached are screened out for having no text and counted. Acquisition settings a paper never states are filled from a consensus mined out of the WHOLE corpus for the public dataset it used ( and left blank , never guessed , when it used several ). Hand-verified detail in config/review-overrides.json overrides the extraction. Output : output/cache/review.json , which ` prma server ` serves at /review -- where the same rebuild is a button. SLOW : a regex pass over every candidate's full text , minutes on a few hundred papers."
+	)
+	p.add_argument( "--min-year" , dest="review_min_year" ,
+		type=int , default=0 ,
+		help="Drop included papers published before this year ( 0 = keep all ). Papers with no year are always kept" )
+	p.add_argument( "--priority-only" , dest="review_priority_only" ,
+		action="store_true" , default=False ,
+		help="Keep only priority 1-4 -- inner / imagined speech , language , visual , audio and brain-state decoding -- dropping the clinical-classification and fingerprinting papers" )
+	p.add_argument( "--out" , dest="review_out" ,
+		type=Path , default=None ,
+		help="Write the document here instead of output/cache/review.json ( a relative path is taken under --output ). NOTE the server only ever reads the default location" )
+	p.set_defaults( _entry=tasks.review )
+	return {
+		"review_min_year":      0 ,
+		"review_priority_only": False ,
+		"review_out":           None ,
+	}
+
 def reindex( sub , global_parser ):
 	p = sub.add_parser(
 		"reindex" ,
 		parents=[ global_parser ] ,
-		help="Refresh the OpenAlex cache ( snapshot + fetch new papers ) , then (re)build the dashboard's OWN full-text search index by streaming the OpenAlex cache off disk , and persist it. Incremental : adding papers only re-reads the new papers + their new references , not everything. A running ` prma server ` auto-picks-up the fresh index. Use --skip-snapshot to index the existing cache without re-fetching ; --full to rebuild from scratch."
+		help="Refresh the OpenAlex cache ( snapshot + fetch new papers ) , then (re)build the dashboard's OWN full-text search index by streaming the OpenAlex cache off disk , and persist it. Incremental : adding papers only re-reads the new papers + their new references , not everything. A running ` prma server ` auto-picks-up the fresh index. Use --skip-snapshot to index the existing cache without re-fetching ; --full to rebuild from scratch. NOTE this is the SEARCH INDEX for the whole library -- it runs no pipeline stages. To redo the pipeline on ONE paper ( e.g. after replacing its PDF ) you want ` prma reprocess <doi-or-title> ` ."
 	)
 	p.add_argument( "--full" , dest="reindex_full" , action="store_true" , default=False ,
 		help="Ignore the saved index state and rebuild from scratch ( e.g. after regenerating text / summaries , which the per-paper signature doesn't watch )" )
@@ -553,10 +610,12 @@ REGISTRARS = (
 	zotero        ,
 	crawl         ,
 	process       ,
+	reprocess     ,
 	code          ,
 	modalities    ,
 	method_images ,
 	all_images    ,
+	review        ,
 	reindex       ,
 	server        ,
 )

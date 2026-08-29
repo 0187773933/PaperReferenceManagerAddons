@@ -80,6 +80,14 @@ TIERS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 SORT_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "sort.html" )
 
+# What the two curated surfaces ADD UP TO : every paper on the sort board or with
+# a figure picked on /images , screened against fixed inclusion criteria and with
+# every architecture / acquisition number its own text states pulled out , each
+# behind the verbatim quote it was parsed from ( src/review/build.py ). Served at
+# GET /review ; its document comes from GET /api/review .
+REVIEW_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "review.html" )
+
 
 class _RequestLog:
 	"""Thread-safe ring of recent /exists queries + running totals, read by the
@@ -479,6 +487,10 @@ class FigureSelectionState:
 			self._persist_locked()
 
 
+class BoardLocked( Exception ):
+	"""Raised by BoardState.replace when the board is in view-only mode."""
+
+
 class BoardState:
 	"""In-memory holder for ONE hand-curated board document -- the tier list
 	( src/db/tiers.py , /tiers ) or the tag-sectioned sort board
@@ -494,37 +506,179 @@ class BoardState:
 
 	`store` is the src/db module that owns the file -- load / save / default_doc
 	is the whole interface , which is why a second board cost a module and one
-	more instance rather than a second copy of any of this."""
+	more instance rather than a second copy of any of this.
+
+	A board also carries a VIEW-ONLY latch ( src/db/boardlock.py ) : one server-
+	side boolean , the same for every browser that opens the page. While it is on
+	the page greys its own editing out AND this refuses the write , which is the
+	half that matters -- a tab left open from before the lock would otherwise
+	still beacon its document back over the top on the way out."""
 
 	def __init__( self , args , store , name ):
-		self.args  = args
-		self.store = store
-		self.name  = name
-		self._lock = threading.Lock()
-		self.doc   = None
-		self.rev   = 0
+		self.args   = args
+		self.store  = store
+		self.name   = name
+		self._lock  = threading.Lock()
+		self.doc    = None
+		self.rev    = 0
+		self.locked = False
 
 	def load( self ):
 		"""Populate from disk ( call at startup ). Never raises."""
+		from ..db import boardlock
 		try:
 			with self._lock:
 				self.doc = self.store.load( self.args )
 		except Exception as e:
 			print( f"{self.name} :: could not load the board ( {e} )" )
 			self.doc = None
+		self.locked = boardlock.load( self.args , self.name )
 
 	def snapshot( self ):
 		with self._lock:
 			doc = self.doc if self.doc is not None else self.store.default_doc()
-			return { "rev": self.rev , "doc": doc }
+			return { "rev": self.rev , "doc": doc , "locked": self.locked }
 
 	def replace( self , doc ):
 		"""Write a whole document ( the page's save ). Returns the normalized
-		document as stored , with the new rev."""
+		document as stored , with the new rev. Raises BoardLocked when the board
+		is in view-only mode -- see the class docstring."""
 		with self._lock:
+			if self.locked:
+				raise BoardLocked( self.name )
 			self.doc = self.store.save( self.args , doc )
 			self.rev += 1
 			return { "rev": self.rev , "doc": self.doc }
+
+	def set_lock( self , on ):
+		"""Turn the view-only latch on / off , persisted. `rev` is bumped so the
+		OTHER open tabs notice on their next version poll ( that is the only
+		signal they have ) and flip with it."""
+		from ..db import boardlock
+		with self._lock:
+			self.locked = boardlock.save( self.args , self.name , on )
+			self.rev   += 1
+			return { "rev": self.rev , "locked": self.locked }
+
+
+class ReviewState:
+	"""The /review document -- read from disk , rebuilt in the background.
+
+	Unlike everything else the server holds , this one is DERIVED and EXPENSIVE :
+	it is a regex pass over every candidate paper's full text , which is minutes
+	on a few hundred papers ( see src/review/build.py ). So it is never built on
+	the request that noticed it was stale. The request gets whatever is on disk ,
+	plus a flag saying the boards have moved since ; a rebuild happens on its own
+	thread , and the page watches its progress and re-fetches when it lands.
+
+	One rebuild at a time , enforced here : the page polls , and two overlapping
+	full-library passes would only fight each other for the same CPU.
+
+	Staleness is the mtimes of the two curated surfaces the review is built FROM
+	( the sort board and the /images selection ) , stamped into the document at
+	build time -- two stat() calls per poll , no parse. Editing either board is
+	what makes the review out of date , so that is exactly the right signal."""
+
+	def __init__( self , args ):
+		self.args     = args
+		self._lock    = threading.Lock()
+		self.doc      = None
+		self.building = False
+		self.stage    = ""      # what the running build is doing , for the page
+		self.done     = 0
+		self.total    = 0
+		self.error    = ""
+		self.built_at = ""
+
+	def load( self ):
+		"""Read the persisted review ( call at startup ). Never raises."""
+		from ..review import build as review_build
+		try:
+			doc = review_build.load( self.args )
+		except Exception as e:
+			print( f"review :: could not load the built review ( {e} )" )
+			doc = None
+		with self._lock:
+			self.doc      = doc
+			self.built_at = ( ( doc or {} ).get( "meta" ) or {} ).get( "generated" , "" )
+		return doc is not None
+
+	def stale( self ):
+		"""Have the boards moved since this review was built ( or was it never )?"""
+		from ..review import build as review_build
+		try:
+			return review_build.is_stale( self.args , self.doc )
+		except Exception:
+			return False
+
+	def status( self ):
+		"""The small payload the page polls : is there a review , is one being
+		built , and how far along. Never carries the document itself."""
+		with self._lock:
+			return {
+				"available" : self.doc is not None ,
+				"building"  : self.building ,
+				"stage"     : self.stage ,
+				"done"      : self.done ,
+				"total"     : self.total ,
+				"error"     : self.error ,
+				"generated" : self.built_at ,
+				"stale"     : self.stale() ,
+			}
+
+	def snapshot( self ):
+		"""The whole document plus the status block the page needs alongside it."""
+		with self._lock:
+			doc = self.doc
+		out = dict( self.status() )
+		if doc:
+			out.update( doc )
+		return out
+
+	def rebuild( self , block=False ):
+		"""Kick off a rebuild. Returns the status ; when one is already running
+		this is a no-op that says so , so a page that polls can't stack them."""
+		with self._lock:
+			# status() takes this same lock , and it is not reentrant , so decide
+			# here and report AFTER letting go.
+			already = self.building
+			if not already:
+				self.building = True
+				self.stage    = "starting"
+				self.done , self.total , self.error = 0 , 0 , ""
+		if already:
+			return self.status()
+		if block:
+			self._build()
+		else:
+			threading.Thread( target=self._build , daemon=True ).start()
+		return self.status()
+
+	def _build( self ):
+		from ..review import build as review_build
+
+		def progress( stage , done , total ):
+			with self._lock:
+				self.stage , self.done , self.total = stage , done , total
+
+		try:
+			doc = review_build.build( self.args , progress=progress )
+			doc[ "meta" ][ "input_signature" ] = review_build.signature( self.args )
+			review_build.save( self.args , doc )
+			with self._lock:
+				self.doc      = doc
+				self.built_at = doc[ "meta" ][ "generated" ]
+				self.error    = ""
+			c = doc[ "meta" ][ "counts" ]
+			print( f"review :: rebuilt -- {c[ 'included' ]} included / {c[ 'candidates' ]} candidates" )
+		except Exception as e:
+			print( f"review :: rebuild failed ( {e} )" )
+			with self._lock:
+				self.error = str( e )
+		finally:
+			with self._lock:
+				self.building = False
+				self.stage    = ""
 
 
 class PaperMeta:
@@ -700,6 +854,23 @@ def _load_sort_html():
 		return SORT_HTML_PATH.read_text( encoding="utf-8" )
 	except Exception as e:
 		return f"<h1>sort.html not found</h1><pre>{e}</pre>"
+
+
+def _review_state( review ):
+	"""One line for the startup banner : what /review has to show right now."""
+	st = review.status() if review else { "available": False }
+	if not st.get( "available" ):
+		return "nothing built yet ; open the page or run ` prma review `"
+	n = ( ( review.doc.get( "meta" ) or {} ).get( "counts" ) or {} ).get( "included" , 0 )
+	return f"{n} included papers" + ( " ; STALE -- boards moved since" if st.get( "stale" ) else "" )
+
+
+def _load_review_html():
+	"""Read the review page fresh on each request. Falls back to a stub."""
+	try:
+		return REVIEW_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>review.html not found</h1><pre>{e}</pre>"
 
 
 # Serializes status recomputes so a flurry of /status loads can't kick off
@@ -1601,6 +1772,9 @@ class Handler( BaseHTTPRequestHandler ):
 	# their per-row links / modality stamps from the one shared papermeta.
 	tiers: "BoardState" = None
 	sort:  "BoardState" = None
+	# What those two boards add up to , screened and field-extracted ( /review ).
+	# Injected at startup ; None in minimal mode.
+	review: "ReviewState" = None
 	papermeta: "PaperMeta" = None
 
 	def log_message( self , *_ ):
@@ -1804,6 +1978,27 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_html( 200 , _load_sort_html() )
 			return
 
+		if path in ( "/review" , "/review.html" ):
+			self._send_html( 200 , _load_review_html() )
+			return
+
+		if path == "/api/review":
+			# The whole review document. Big ( a few MB ) and derived , so it is
+			# served from what was last BUILT -- never built inline , which would
+			# hold the request open for minutes. When the boards have moved since ,
+			# the payload still comes back , flagged stale ; kicking off the
+			# rebuild is the page's call ( POST /api/review/rebuild ) , because it
+			# is the one that knows whether anybody is looking.
+			self._send_json( 200 , self.review.snapshot() )
+			return
+
+		if path == "/api/review/version":
+			# The cheap poll : status only , no document. Carries `building` +
+			# progress while a rebuild runs and `generated` when it lands , which
+			# is how the page knows to re-fetch.
+			self._send_json( 200 , self.review.status() )
+			return
+
 		board = self._board( path , "" )
 		if board:
 			# The whole curated document , plus the modality vocabulary the page's
@@ -1821,8 +2016,12 @@ class Handler( BaseHTTPRequestHandler ):
 		board = self._board( path , "/version" )
 		if board:
 			# Cheap "did another tab save" token , polled by the page ( same idea
-			# as the figure reports' /api/<mode>/version ).
-			self._send_json( 200 , { "rev": board.snapshot()[ "rev" ] } )
+			# as the figure reports' /api/<mode>/version ). The view-only latch
+			# rides along on it : this poll is the ONLY thing an idle tab does , so
+			# it is also the only way a board locked from another browser reaches
+			# the tabs that were already open when it happened.
+			snap = board.snapshot()
+			self._send_json( 200 , { "rev": snap[ "rev" ] , "locked": snap[ "locked" ] } )
 			return
 
 		if path == "/api/errors":
@@ -1971,6 +2170,14 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_minimal_notice()
 			return
 
+		if urlparse( self.path ).path == "/api/review/rebuild":
+			# Re-screen and re-extract from the boards as they stand now. Minutes
+			# of work , so it runs on its own thread and this returns immediately
+			# with the status the page then polls ; a second press while one is
+			# running is a no-op that reports the build already under way.
+			self._send_json( 200 , { "ok": True , **self.review.rebuild() } )
+			return
+
 		mode = _figure_mode( self.path , "state" )
 		if mode:
 			# Toggle one figure's selected state or one paper's skipped state on ONE
@@ -2019,6 +2226,28 @@ class Handler( BaseHTTPRequestHandler ):
 					self._send_json( 400 , { "ok": False , "error": "body needs a 'doc' object" } )
 					return
 				self._send_json( 200 , { "ok": True , **board.replace( doc ) } )
+			except BoardLocked:
+				# View-only ( src/db/boardlock.py ). The page already knows and has
+				# greyed itself out ; what lands here is a tab that was open BEFORE
+				# the lock -- including the beacon it fires on the way out -- so the
+				# answer carries the latch and the page flips instead of retrying.
+				self._send_json( 403 , { "ok": False , "locked": True ,
+					"error": "this board is in view-only mode" } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		board = self._board( urlparse( self.path ).path , "/lock" )
+		if board:
+			# Flip a board into / out of view-only mode , for EVERYONE ( body :
+			# { "locked": bool } ). Its own endpoint rather than a field in the
+			# document because the document is written whole : storing the latch
+			# inside it would need a write of the very thing the latch forbids.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				self._send_json( 200 , { "ok": True , **board.set_lock( data.get( "locked" ) ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
@@ -2179,6 +2408,7 @@ def run( args ):
 		Handler.figstate  = {}
 		Handler.tiers     = None
 		Handler.sort      = None
+		Handler.review    = None
 		Handler.papermeta = None
 		httpd   = ThreadingHTTPServer( ( args.host , args.port ) , Handler )
 		watched = "mtime-watched" if cache._watch_files else f"ttl={args.ttl}s"
@@ -2214,6 +2444,18 @@ def run( args ):
 		_board = BoardState( args , _store , _name )
 		_board.load()
 		setattr( Handler , _attr , _board )
+
+	# What those two boards ADD UP TO ( /review ) : serve whatever was last built
+	# so the page opens instantly. Rebuilding is minutes of regex over every
+	# candidate's full text , so it is NEVER done here -- the page is told the
+	# review is stale and offers the button.
+	Handler.review = ReviewState( args )
+	if Handler.review.load():
+		_c = ( Handler.review.doc.get( "meta" ) or {} ).get( "counts" ) or {}
+		print( f"review :: loaded {_c.get( 'included' , 0 )} included / "
+			f"{_c.get( 'candidates' , 0 )} candidates"
+			+ ( "  ( the boards have moved since -- rebuild from /review )"
+				if Handler.review.stale() else "" ) )
 
 	# Both figure reports are pre-built artifacts served verbatim. If the PAGE
 	# template , a report's own renderer , or ( for method-images ) the keyword list
@@ -2277,6 +2519,7 @@ def run( args ):
 		f"exists server  {base}/exists   (manager={args.manager}, {watched})" ,
 		f"dashboard      {base}/          ({dash_state})" ,
 		f"sort board     {base}/sort     (hand-curated , sections ARE tag sets ; CSV in / out)" ,
+		f"review         {base}/review   ({_review_state( Handler.review )})" ,
 		f"tier list      {base}/tiers    (hand-curated buckets ; CSV in / out)" ,
 		f"errors         {base}/errors   (pipeline problems log)" ,
 		f"status         {base}/status   (pipeline completeness ; run ` prma status `)" ,

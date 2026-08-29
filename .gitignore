@@ -1,6 +1,7 @@
 .git/
 *__pycache__/
 venv/
+temp/
 output/*
 *.egg-info
 .claude/
@@ -16,3 +17,8 @@ config/creds.json
 gitPushUpdate.sh
 method-images-selected.json
 *.csv
+
+# dockerRun.sh writes its state here ( output/ mount ) and reads config.yaml
+# from beside itself when this repo IS the deployment directory.
+data/
+/config.yaml
