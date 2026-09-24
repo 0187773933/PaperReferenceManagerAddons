@@ -4,42 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma · errors</title>
+<!-- The chrome every prma page shares : the pre-paint theme restore , then the
+     palette and the header / button / link styling. This page used to carry its
+     own dark-only palette , which is why it was one of the two that ignored the
+     theme you had picked everywhere else. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <style>
+  /* The palette and the base chrome are in /static/common.css ; what is left
+     here is this page's own -- the problem cards , and the badge colours , which
+     need a light ground as well as a dark one now the page follows the theme. */
   :root {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --warn:#ffb454; --red:#ff6b6b;
-    --chip:#262c37;
+    --b-snap:#ece0fa; --b-snap-fg:#5a3a91; --b-oa:#dde8fb; --b-oa-fg:#1a4f8a;
+    --b-pdf:#f8e8cd; --b-pdf-fg:#8a5a12;
   }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  :root[data-theme="dark"] {
+    --b-snap:#2e2440; --b-snap-fg:#c79bff; --b-oa:#1a2740; --b-oa-fg:#7fb6ff;
+    --b-pdf:#3a2a13; --b-pdf-fg:#ffb454;
   }
-  header {
-    position:sticky; top:0; z-index:5; background:var(--panel);
-    border-bottom:1px solid var(--line); padding:12px 18px;
-  }
-  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .counts { color:var(--muted); font-size:12px; display:flex; gap:14px; flex-wrap:wrap; }
-  .counts b { color:var(--fg); font-weight:600; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
-  }
-  button:hover { border-color:var(--accent); }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
-  }
-  .navlink:hover { border-color:var(--accent); }
   .controls { display:flex; gap:10px; align-items:center; margin-top:11px; flex-wrap:wrap; }
-  input[type=search] {
-    flex:1; min-width:240px; background:var(--panel2); color:var(--fg);
-    border:1px solid var(--line); border-radius:8px; padding:10px 13px; font-size:14px;
-  }
-  input[type=search]:focus { outline:none; border-color:var(--accent); }
+  input[type=search] { flex:1; min-width:240px; }
   .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-top:11px; }
   .tab {
     padding:7px 13px; border-radius:7px; cursor:pointer; font-size:13px;
@@ -68,9 +52,9 @@
     display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px;
     background:var(--chip); color:var(--muted); white-space:nowrap;
   }
-  .badge.snap { background:#2e2440; color:#c79bff; }
-  .badge.oa   { background:#1a2740; color:#7fb6ff; }
-  .badge.pdf  { background:#3a2a13; color:#ffb454; }
+  .badge.snap { background:var(--b-snap); color:var(--b-snap-fg); }
+  .badge.oa   { background:var(--b-oa);   color:var(--b-oa-fg); }
+  .badge.pdf  { background:var(--b-pdf);  color:var(--b-pdf-fg); }
   .cbody { display:none; border-top:1px solid var(--line); padding:6px 0; background:var(--bg); }
   .card.open .cbody { display:block; }
   .hlinks { padding:6px 14px 2px; }
@@ -91,7 +75,7 @@
   .pid { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; }
 
   .empty { color:var(--muted); padding:48px; text-align:center; }
-  .empty.ok { color:#5fd99a; }
+  .empty.ok { color:var(--green); }
 </style>
 </head>
 <body>
@@ -103,6 +87,7 @@
     <a class="navlink" href="/">← Dashboard</a>
     <a class="navlink" href="/status">▦ Status</a>
     <button id="reload">↻ Reload</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
   </div>
   <div class="controls">
     <input type="search" id="q" placeholder="Filter by title, id or detail…" autocomplete="off">
@@ -113,9 +98,11 @@
   <div class="status" id="status"></div>
   <div id="view"></div>
 </main>
+<!-- $ , esc , when , PROXY , doiLinks() , initTheme() -- the helpers every prma
+     page used to write out for itself. Loaded before the page script , so they
+     are plain globals below ; nothing here may redeclare them. -->
+<script src="/static/common.js"></script>
 <script>
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
-
 // Friendly labels + badge class for the known problem kinds. Unknown kinds
 // fall through to their raw name so new kinds still show up.
 const KINDS = {
@@ -132,20 +119,14 @@ let DATA = { total:0, paper_count:0, generated_at:null, groups:[] };
 let activeKind = "all";
 const openSet = new Set();   // group ids currently expanded ( survives re-render )
 
-const $ = s => document.querySelector(s);
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const isDoi = id => /^10\.\S+\/\S+/.test(String(id||""));
 const isWid = id => /^W\d+$/.test(String(id||""));
-const when  = s => esc(String(s||"").replace("T"," ").replace("+00:00"," UTC"));
 
 // External links for an id ( DOI -> doi.org + proxy ; WID -> OpenAlex ).
 function idLinks(id){
-  id = String(id||""); const out = [];
-  if(isDoi(id)){
-    out.push(`<a href="https://doi.org/${esc(id)}" target="_blank">DOI</a>`);
-    out.push(`<a href="${PROXY}${esc(id)}" target="_blank">Proxy</a>`);
-  } else if(isWid(id)){
+  id = String(id||"");
+  const out = isDoi(id) ? doiLinks(id) : [];
+  if(!out.length && isWid(id)){
     out.push(`<a href="https://openalex.org/${esc(id)}" target="_blank">OA</a>`);
   }
   return out;
@@ -269,6 +250,7 @@ async function load(){
 let timer=null;
 $("#q").addEventListener("input", ()=>{ clearTimeout(timer); timer=setTimeout(renderView, 150); });
 $("#reload").addEventListener("click", load);
+initTheme();
 load();
 </script>
 </body>

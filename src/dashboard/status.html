@@ -4,36 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma · status</title>
+<!-- The chrome every prma page shares : the pre-paint theme restore , then the
+     palette and the header / button / link styling. This page used to carry its
+     own dark-only palette , which is why it was one of the two that ignored the
+     theme you had picked everywhere else. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-  :root {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#5fd99a;
-    --warn:#ffb454; --red:#ff6b6b; --chip:#262c37;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  }
-  header {
-    position:sticky; top:0; z-index:5; background:var(--panel);
-    border-bottom:1px solid var(--line); padding:12px 18px;
-  }
-  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .counts { color:var(--muted); font-size:12px; display:flex; gap:14px; flex-wrap:wrap; }
-  .counts b { color:var(--fg); font-weight:600; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
-  }
-  button:hover { border-color:var(--accent); }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
-  }
-  .navlink:hover { border-color:var(--accent); }
+  /* The palette and the base chrome are in /static/common.css ; what is left
+     here is this page's own -- the stage cards , and the two state pills , which
+     need a light ground as well as a dark one now the page follows the theme. */
+  :root        { --p-missing:#f8e8cd; --p-failed:#f9dcd9; }
+  :root[data-theme="dark"] { --p-missing:#3a2a13; --p-failed:#3a1a1a; }
   main { padding:18px; max-width:1000px; margin:0 auto; }
 
   .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:22px; }
@@ -83,8 +65,8 @@
   td.lk a { color:var(--accent); text-decoration:none; margin-right:9px; }
   td.lk a:hover { text-decoration:underline; }
   .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; background:var(--chip); }
-  .pill.missing { background:#3a2a13; color:var(--warn); }
-  .pill.failed  { background:#3a1a1a; color:var(--red); }
+  .pill.missing { background:var(--p-missing); color:var(--warn); }
+  .pill.failed  { background:var(--p-failed);  color:var(--red); }
 
   .section-title { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.5px; margin:26px 0 10px; }
   .empty { color:var(--muted); padding:48px; text-align:center; }
@@ -100,19 +82,19 @@
     <div class="grow"></div>
     <a class="navlink" href="/">← Dashboard</a>
     <a class="navlink" href="/review">✎ Review</a>
+    <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
     <a class="navlink" href="/errors">⚠ Errors</a>
     <button id="reload">↻ Reload</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
   </div>
 </header>
 <main id="main"></main>
+<!-- $ , esc , fmt , when , PROXY , doiLinks() , initTheme() -- the helpers every
+     prma page used to write out for itself. Loaded before the page script , so
+     they are plain globals below ; nothing here may redeclare them. -->
+<script src="/static/common.js"></script>
 <script>
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
 const ROW_CAP = 500;   // cap drill-down rows so a 2000-missing stage stays snappy
-const $ = s => document.querySelector(s);
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
-const fmt = n => (n||0).toLocaleString();
-const when = s => esc(String(s||"").replace("T"," ").replace("+00:00"," UTC"));
 
 let DATA = { papers:[], stages:[] };
 const openStages = new Set();   // which stages are expanded ( survives reload )
@@ -133,11 +115,8 @@ function renderCounts(D){
 function paperLinks(r){
   const out = [];
   if(r.pdf) out.push(`<a href="/pdf?key=${encodeURIComponent(r.key)}" target="_blank">PDF</a>`);
-  if(r.doi){
-    out.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank">DOI</a>`);
-    out.push(`<a href="${PROXY}${esc(r.doi)}" target="_blank">Proxy</a>`);
-  }
-  return out.join(" ");
+  // The same two anchors every prma surface offers ( /static/common.js ).
+  return out.concat(doiLinks(r.doi)).join(" ");
 }
 function paperRow(r, stageKey){
   const state = r.states[stageKey];
@@ -314,6 +293,7 @@ async function load(){
 }
 
 $("#reload").addEventListener("click", load);
+initTheme();
 load();
 </script>
 </body>

@@ -15,6 +15,14 @@ def missing( args ):
 	from . import main
 	main.missing( args )
 
+def check_missing_file( args ):
+	# Which papers in a Markdown research log aren't in the library. No
+	# snapshot : the check reads titles + DOIs straight from the manager source
+	# through the server's SnapshotCache , exactly as the /exists endpoint
+	# does -- and no network , no port.
+	from . import check_missing_file
+	check_missing_file.run( args )
+
 def snapshot( args ):
 	from . import snapshot
 	snapshot.get_common( args )
@@ -133,12 +141,35 @@ def review( args ):
 	from ..review import build
 	build.run( args )
 
+def review_missing( args ):
+	# The same screen as review() , over the papers you do NOT have -- the
+	# dashboard's external pools. No snapshot and no network : it reads the index
+	# ` prma reindex ` already wrote , and an abstract it does not have is not an
+	# abstract it goes and fetches.
+	from ..review import missing
+	missing.run( args )
+
 def modalities( args ):
 	# No snapshot : like method-images , a pure pass over what the suite
 	# already produced ( OpenAlex cache , methods .txt , md ) -- it just
 	# stamps paper[ 'modalities' ] on each record.
 	from . import modalities
 	modalities.run( args )
+
+def datasets( args ):
+	# Scan every paper for the PUBLIC DATA it stands on -- archive links
+	# ( OpenNeuro / NeuroVault / DANDI / OSF / Zenodo / Hugging Face / ... ) and
+	# the datasets it only NAMES ( HCP , NSD , ABIDE , ... ) -- and pin both on
+	# each record for the /datasets page. Snapshots first , like ` prma code ` :
+	# a paper the manager just gained should be scanned on this run , not the
+	# next. Shares run() with the 'datasets' stage run_suite drives.
+	_ensure_snapshot( args )
+	from . import datasets
+	datasets.run( args )
+	# CLI-only , exactly like ` prma code `'s GitHub / OSF enrichment : the
+	# per-paper stage above only SCANS , so the --watch worker never reaches the
+	# network. This is what teaches /datasets to say what each record IS.
+	datasets.fetch_records( args )
 
 def code( args ):
 	# Scan every paper's OpenAlex abstract + OCR text for source-code / data

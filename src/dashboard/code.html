@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · code</title>
+<!-- The chrome every prma page shares : the pre-paint theme restore , then the
+     palette and the header / button / link styling. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  /* The palette , the header chrome AND the whole list-page vocabulary -- the
+     chipbar , the sortable table , the membership badges , the empty state and
+     the toast -- are in /static/common.css , which this page opts into with
+     <body class="list">. Nothing here is /code's alone any more , which is the
+     point : /datasets wears the same furniture. */
+</style>
+</head>
+<body class="list">
+<header>
+  <div class="titlebar">
+    <h1>prma · code</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+    <a class="navlink" href="/review" title="The screened , field-extracted review these papers are checked against">✎ Review</a>
+    <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
+    <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
+    <a class="navlink" href="/sort" title="The hand-ordered list">⬒ Sort</a>
+    <a class="navlink" href="/tiers" title="The hand-ranked tiers">★ Tiers</a>
+    <a class="navlink" href="/images" title="Every cropped figure , and the picks counted in the Figs column">▣ Figures</a>
+    <button id="xlsx" title="Download the rows you are looking at , in this order , as .xlsx ( two sheets : one per paper , one per link )">⇧ XLSX</button>
+    <button id="csv"  title="Download the rows you are looking at , in this order , as CSV">⇧ CSV</button>
+    <button id="reload" title="Re-read the links and the boards">↻ Reload</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+  <div class="controls">
+    <input type="search" id="q" placeholder="Search title, DOI, repo url, source, tag…  ( / )" autocomplete="off">
+    <div class="chipbar" id="flags"></div>
+    <div class="sep"></div>
+    <div class="chipbar" id="hosts"></div>
+  </div>
+</header>
+
+<main>
+  <div class="status" id="status"></div>
+  <div id="view"></div>
+</main>
+
+<footer id="footer"></footer>
+
+<!-- $ , esc , fmt , fmtDate , mdHref , doiLinks() , codeLinks() , initTheme() --
+     the helpers every prma page used to write out for itself. Loaded before the
+     page script , so they are plain globals below ; nothing here may redeclare
+     them. -->
+<script src="/static/common.js"></script>
+<script>
+/* ---------------------------------------------------------------------------
+   /code -- the papers that ship a repo , against everything you curated.
+
+   Every column here is already an answer somebody else computed : the links are
+   what ` prma code ` pinned on the record ( and what the dashboard's In-Library
+   Code column shows , through the same codeLinks() renderer ) , and the four
+   membership columns are read straight off /sort , /tiers , /review and the
+   /images picks. This page joins them and lets you sort by the join , which is
+   the one question none of those pages can answer on its own : which of the
+   papers I kept actually ship code.
+
+   Nothing here writes. It is a view -- reload it after you move a board.
+--------------------------------------------------------------------------- */
+
+let DATA = { rows: [] , counts: {} , status: "idle" };
+let VIEW = [];                  // the rows currently shown , in shown order
+let query = "";
+let poll  = null;
+
+/* Which of the toggles are on. `code` starts on because the page is about the
+   papers that have a repo ; turning it off is how you ask the opposite question
+   ( "what did I keep that ships nothing" ) , which is worth one click. */
+const flags = new Set( [ "code" ] );
+const hosts = new Set();        // source labels to keep ; empty = all of them
+
+/* Sort : column id + direction. Defaults to the review column , descending ,
+   which puts the papers that are IN the review at the top -- the reason to open
+   this page. Ties fall through to picked figures then title , so the top of the
+   list is ordered by how much attention a paper has already had. */
+let sortKey = "review" , sortDir = "desc";
+
+const FLAGS = [
+  { id:"code"   , label:"Has code"      , title:"Papers ` prma code ` found at least one repo / data link for" ,
+    test: r => r.code.length } ,
+  { id:"review" , label:"In review"     , title:"Included by /review's three screening criteria" ,
+    test: r => r.review === "included" } ,
+  { id:"excl"   , label:"Screened out"  , title:"Reached /review as a candidate and was excluded" ,
+    test: r => r.review === "excluded" } ,
+  { id:"sort"   , label:"On sort"       , title:"On the /sort list ( or its staging shelf )" ,
+    test: r => !!r.sort } ,
+  { id:"tier"   , label:"In a tier"     , title:"Ranked into a tier on /tiers" ,
+    test: r => !!r.tier } ,
+  { id:"figs"   , label:"Has figures"   , title:"At least one figure picked on /images" ,
+    test: r => r.figures > 0 } ,
+];
+
+/* The columns , in the order they are drawn. `get` is what the row sorts by --
+   a number or a lowercase string , never the rendered HTML , so ordering can't
+   drift from what a cell says. */
+const COLS = [
+  { id:"title"  , label:"Paper"    , get: r => ( r.title || "" ).toLowerCase() , dir:"asc"  } ,
+  { id:"year"   , label:"Year"     , get: r => r.year || 0        , dir:"desc" , num:true } ,
+  { id:"added"  , label:"Added"    , get: r => r.added || ""      , dir:"desc" } ,
+  { id:"cites"  , label:"Cites"    , get: r => r.cited_by || 0    , dir:"desc" , num:true } ,
+  { id:"code"   , label:"Code"     , get: r => r.code.length      , dir:"desc" } ,
+  { id:"review" , label:"Review"   , get: r => ( { included:2 , excluded:1 }[ r.review ] || 0 ) , dir:"desc" } ,
+  { id:"sort"   , label:"Sort"     , get: r => ( { list:2 , staged:1 }[ r.sort ] || 0 )         , dir:"desc" } ,
+  /* Unranked sorts BELOW every real tier label rather than above "A" , so the
+     first click on Tier gives you the ranked papers , not the blanks. */
+  { id:"tier"   , label:"Tier"     , get: r => ( r.tier || "\uffff" ).toLowerCase()          , dir:"asc"  } ,
+  { id:"figs"   , label:"Figs"     , get: r => r.figures || 0     , dir:"desc" , num:true } ,
+];
+const COL = Object.fromEntries( COLS.map( c => [ c.id , c ] ) );
+
+/* ---- haystack ------------------------------------------------------------
+   Everything a row can be searched by , folded once per load : the title , the
+   identifiers , every repo url and host label , and the tags it carries on the
+   boards. Cached on the row so typing re-filters without rebuilding it. */
+function hay( r ){
+  if( r._hay == null ){
+    r._hay = [ r.title , r.doi , r.key , r.tier , r.review_why ,
+      ( r.tags || [] ).join( " " ) ,
+      r.code.map( l => `${l.source || ""} ${l.url || ""}` ).join( " " ) ,
+    ].join( " " ).toLowerCase();
+  }
+  return r._hay;
+}
+
+/* ---- filter + sort ------------------------------------------------------- */
+function passes( r ){
+  for( const f of FLAGS ) if( flags.has( f.id ) && !f.test( r ) ) return false;
+  if( hosts.size && !r.sources.some( s => hosts.has( s ) ) ) return false;
+  if( query && !hay( r ).includes( query ) ) return false;
+  return true;
+}
+
+function compute(){
+  const col  = COL[ sortKey ] || COL.review;
+  const sign = sortDir === "asc" ? 1 : -1;
+  VIEW = DATA.rows.filter( passes );
+  VIEW.sort( ( a , b ) => {
+    const va = col.get( a ) , vb = col.get( b );
+    if( va < vb ) return -1 * sign;
+    if( va > vb ) return  1 * sign;
+    /* One stable tie-break for every column : the papers you have looked at
+       most , then alphabetical. Without it a re-sort reshuffles rows that
+       compare equal , which reads like the table lost your place. */
+    if( ( b.figures || 0 ) !== ( a.figures || 0 ) ) return ( b.figures || 0 ) - ( a.figures || 0 );
+    return ( a.title || "" ).localeCompare( b.title || "" );
+  } );
+}
+
+/* ---- render -------------------------------------------------------------- */
+function renderCounts(){
+  const c = DATA.counts || {};
+  $( "#counts" ).innerHTML =
+    `<span><b>${fmt( c.with_code )}</b> papers with code</span>` +
+    `<span><b>${fmt( c.links )}</b> links</span>` +
+    `<span><b>${fmt( c.in_review )}</b> of them in the review</span>` +
+    `<span>of <b>${fmt( c.papers )}</b> in the library</span>`;
+}
+
+function renderChips(){
+  renderChipbar( $( "#flags" ) , "Show" ,
+    FLAGS.map( f => ( { id: f.id , label: f.label , title: f.title ,
+      n: DATA.rows.filter( f.test ).length } ) ) ,
+    id => flags.has( id ) ,
+    id => { flags.has( id ) ? flags.delete( id ) : flags.add( id ); renderChips(); draw(); } );
+
+  /* One chip per code host actually present , commonest first -- GitHub , OSF ,
+     Zenodo … -- so "the repos , not the data archives" is a click. */
+  const n = {};
+  for( const r of DATA.rows ) for( const s of r.sources ) n[ s ] = ( n[ s ] || 0 ) + 1;
+  renderChipbar( $( "#hosts" ) , "Host" ,
+    Object.keys( n ).sort( ( a , b ) => n[ b ] - n[ a ] || a.localeCompare( b ) )
+      .map( s => ( { id: s , label: s , n: n[ s ] } ) ) ,
+    id => hosts.has( id ) ,
+    id => { hosts.has( id ) ? hosts.delete( id ) : hosts.add( id ); renderChips(); draw(); } );
+}
+
+/* The link strip under a title -- the same anchors the rest of prma offers for
+   a paper , built from the two primitives in /static/common.js plus the routes
+   this server serves : the PDF it holds , the rendered md , the figure montage
+   ` prma images ` wrote. */
+/* The Code cell. codeLinks() draws one anchor per repo , labelled by host --
+   right for the two or three most papers carry , but a dataset paper that lists
+   eighteen turns the cell into a paragraph of the word "GitHub" and pushes
+   every other column off the screen. So the tail is folded into a count that
+   names the rest in its tooltip : the links are all still there in the export ,
+   and the row stays a row. */
+const CODE_SHOWN = 8;
+function codeCell( links ){
+  if( links.length <= CODE_SHOWN ) return codeLinks( links );
+  const rest = links.slice( CODE_SHOWN );
+  return codeLinks( links.slice( 0 , CODE_SHOWN ) ) +
+    ` <span class="muted" title="${esc( rest.map( l => l.url ).join( "\n" ) )}">` +
+    `+${rest.length} more</span>`;
+}
+
+function rowHtml( r , i ){
+  const tags = ( r.tags || [] ).length
+    ? `<div class="tags">${r.tags.map( t => `<span class="tag">${esc( t )}</span>` ).join( "" )}</div>` : "";
+  const rev = REVIEW_BADGE[ r.review ] || DASH;
+  return `<tr class="row">
+    <td class="idx">${i + 1}</td>
+    <td class="ttl">
+      <div class="t">${esc( r.title )}</div>
+      ${paperLinkRow( r )}${tags}
+    </td>
+    <td class="num nowrap">${r.year || ""}</td>
+    <td class="nowrap">${esc( fmtDate( r.added ) )}</td>
+    <td class="num nowrap">${r.cited_by == null ? "" : fmt( r.cited_by )}</td>
+    <td class="links">${codeCell( r.code )}</td>
+    <td class="nowrap" title="${esc( r.review_why || "" )}">${rev}</td>
+    <td class="nowrap">${SORT_BADGE[ r.sort ] || DASH}</td>
+    <td class="nowrap">${r.tier ? `<span class="badge tier">${esc( r.tier )}</span>` : DASH}</td>
+    <td class="num nowrap" title="${r.mfigures ? `${r.mfigures} picked on /method-images` : ""}">${
+      r.figures ? `<span class="badge figs">${r.figures}</span>` : DASH}</td>
+  </tr>`;
+}
+
+function draw(){
+  compute();
+  if( DATA.status !== "ready" ){
+    $( "#view" ).innerHTML = indexBuildingHtml( DATA );
+    $( "#status" ).textContent = "";
+    return;
+  }
+  if( !VIEW.length ){
+    $( "#view" ).innerHTML = DATA.rows.length
+      ? `<div class="empty">Nothing matches these filters.</div>`
+      : `<div class="empty">No papers indexed yet. Run <code>prma code</code> to scan the library for repos.</div>`;
+    $( "#status" ).textContent = "";
+    return;
+  }
+  $( "#view" ).innerHTML =
+    `<div class="wrap"><table><thead>${sortHeader( COLS , sortKey , sortDir )}</thead>` +
+    `<tbody>${VIEW.map( rowHtml ).join( "" )}</tbody></table></div>`;
+  $$( "#view thead th[data-col]" ).forEach( th => th.onclick = () => {
+    const id = th.dataset.col;
+    /* Same column -> flip ; a new one -> start in the direction that column is
+       actually interesting in ( most links , newest , A–Z ). */
+    if( id === sortKey ) sortDir = sortDir === "asc" ? "desc" : "asc";
+    else { sortKey = id; sortDir = COL[ id ].dir; }
+    draw();
+  } );
+
+  const links = VIEW.reduce( ( a , r ) => a + r.code.length , 0 );
+  const inrev = VIEW.filter( r => r.review === "included" ).length;
+  const rv    = DATA.review || {};
+  $( "#status" ).innerHTML =
+    `<span>${fmt( VIEW.length )} papers · ${fmt( links )} links · ${fmt( inrev )} in the review</span>` +
+    reviewNote( rv );
+}
+
+/* ---- export --------------------------------------------------------------
+   Both exports are the CURRENT VIEW , in the order it is in : the filtering and
+   sorting is the work , so the file is what you built rather than the library
+   again ( that one is ` prma code `'s own output/code/code.xlsx ). The xlsx is
+   built server-side -- POST the keys , read the workbook back as a blob -- so
+   the sheet carries real hyperlinks and this page carries no spreadsheet
+   library. */
+const CSV_HEAD = [ "DOI_or_Key" , "Title" , "Year" , "Added" , "Published" , "Cited_By" ,
+  "N_Links" , "Sources" , "Code_URLs" , "Review" , "Review_Detail" , "Sort" , "Tier" ,
+  "Figures" , "Design_Figures" , "Tags" ];
+function toCSV(){
+  const lines = [ CSV_HEAD.map( csvCell ).join( "," ) ];
+  for( const r of VIEW ){
+    lines.push( [ r.doi || r.key , r.title , r.year || "" , r.added , r.published ,
+      r.cited_by == null ? "" : r.cited_by , r.code.length , r.sources.join( "; " ) ,
+      r.code.map( l => l.url ).join( " " ) , r.review , r.review_why , r.sort , r.tier ,
+      r.figures , r.mfigures , ( r.tags || [] ).join( "; " ) ].map( csvCell ).join( "," ) );
+  }
+  return lines.join( "\n" );
+}
+$( "#csv" ).addEventListener( "click" , () => {
+  if( !VIEW.length ){ toast( "Nothing to export" ); return; }
+  saveCSV( toCSV() , `prma-code-${stamp()}.csv` );
+} );
+
+bindXlsxExport( "#xlsx" , "/api/code/export.xlsx" ,
+  () => `prma-code-${stamp()}.xlsx` , () => VIEW.map( r => r.key ) );
+
+/* ---- load ---------------------------------------------------------------- */
+async function load(){
+  try {
+    DATA = await ( await fetch( "/api/code" ) ).json();
+  } catch( e ){
+    $( "#view" ).innerHTML = `<div class="empty">Couldn't load /api/code: ${esc( e.message || e )}</div>`;
+    return;
+  }
+  DATA.rows = DATA.rows || [];
+  renderCounts(); renderChips(); draw();
+  /* The index builds in the background on a first-ever open ; keep asking until
+     it lands , then stop ( this page is a view , it does not need to poll ). */
+  clearTimeout( poll );
+  if( DATA.status === "building" ) poll = setTimeout( load , 2000 );
+}
+
+$( "#reload" ).addEventListener( "click" , load );
+bindSearch( "#q" , q => { query = q; draw(); } );
+
+$( "#footer" ).innerHTML =
+  `The links are what <code>prma code</code> harvested from each paper's OpenAlex abstract and its OCR full text — ` +
+  `read off the record , not re-derived here , so a repo reads the same on this page , the dashboard's Code column and /review . ` +
+  `A <sup>˟</sup> marks a link repaired from an OCR-mangled name ; the tooltip spells out the original. ` +
+  `<br>Review , Sort , Tier and Figs are read live off <code>output/cache/review.json</code> , the two board documents and the /images picks , ` +
+  `so everything but Review updates the moment you reload. Review is the last <em>build</em> — rebuild it from /review when the boards have moved. ` +
+  `<br>Library papers only : a paper on a board that isn't in your library has never been scanned , so it has nothing to say here.`;
+
+initTheme();
+load();
+</script>
+</body>
+</html>

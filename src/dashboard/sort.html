@@ -4,57 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma sort</title>
-<!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<!-- The chrome every prma page shares : the pre-paint theme restore ( so nothing
+     flashes ) , then the palette and the header / button / link styling. The
+     <style> below loads after and wins wherever it redefines something. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-  :root {
-    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
-    --fg:#101820; --muted:#5a6560; --accent:#046a38; --accent-ink:#ffffff; --green:#046a38;
-    --chip:#e9eee6; --warn:#8a6420; --row:#ffffff;
-  }
-  :root[data-theme="dark"] {
-    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
-    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --accent-ink:#101820; --green:#719949;
-    --chip:#232f2a; --warn:#f8e08e; --row:#141c22;
-  }
-  :root[data-skin="pastel"] {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --accent-ink:#04121f; --green:#046A38;
-    --chip:#eceff3; --warn:#c1670c; --row:#ffffff;
-  }
-  :root[data-skin="pastel"][data-theme="dark"] {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --accent-ink:#04121f; --green:#046A38;
-    --chip:#262c37; --warn:#e8a33d; --row:#141821;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  }
-  header { position:sticky; top:0; z-index:20; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 16px; }
-  .titlebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .counts { color:var(--muted); font-size:12px; display:flex; gap:12px; flex-wrap:wrap; }
-  .counts b { color:var(--fg); font-weight:600; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:6px 11px; cursor:pointer; font-size:13px;
-  }
-  button:hover { border-color:var(--accent); }
-  button:disabled { opacity:.5; cursor:default; }
-  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  /* The palette and the base header / button / .navlink chrome are in
+     /static/common.css. What is left here is where this board differs from it :
+     a tighter header that has to sit above the drag layer , smaller buttons ,
+     and everything below that is the board's own. */
+  header { z-index:20; padding:8px 16px; }
+  .titlebar { gap:12px; }
+  .counts { gap:12px; }
+  button { padding:6px 11px; }
   button.on { border-color:var(--accent); color:var(--accent); }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:6px 11px; font-size:13px; text-decoration:none;
-  }
-  .navlink:hover { border-color:var(--accent); }
+  .navlink { padding:6px 11px; }
   .savestate { font-size:12px; color:var(--muted); min-width:104px; text-align:right; }
   .savestate.dirty { color:var(--warn); }
+  /* The pinned bar is ONE line however long the note gets : the note takes
+     what's left of it and trails off ( its whole text is its tooltip ), so it
+     never wraps the bar -- or moves the column head pinned under it. */
+  header .paintnote { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* #tools : everything the bar doesn't pin. In its place under the bar it's
+     part of the page and scrolls away with the list ; .float drops it down over
+     the list from the bar instead, while its slot holds its place. */
+  #tools { background:var(--panel); border-bottom:1px solid var(--line); padding:9px 16px 10px; }
+  #tools.float {
+    position:fixed; top:var(--headh); left:0; right:0; z-index:19;
+    box-shadow:0 14px 34px rgba(0,0,0,.30); animation:toolsin .12s ease-out;
+  }
+  #tools.float .paintbar { max-height:34vh; overflow-y:auto; }
+  @keyframes toolsin { from { opacity:0; transform:translateY(-6px); } }
+  /* The other pages, in the pinned bar : its own flex row so the six of them
+     wrap together as a block rather than one at a time into the counts. */
+  .navlinks { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .actionrow { display:flex; gap:8px 10px; align-items:center; flex-wrap:wrap; }
 
   .toolbar { display:flex; gap:10px; align-items:flex-start; margin-top:9px; flex-wrap:wrap; }
+  /* The select and the filter box in the action row sit in a line of BUTTONS,
+     so they take a button's height rather than the search row's taller one --
+     otherwise either one of them sets the height of the whole row. */
+  .actionrow select { padding:6px 8px; }
+  .actionrow input[type=search] { padding:6px 10px; font-size:13px; }
   .searchwrap { position:relative; flex:1; min-width:320px; }
   input[type=search], input[type=text] {
     width:100%; background:var(--panel2); color:var(--fg);
@@ -75,10 +68,21 @@
   .hit .hm { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
   .hit .in { flex:none; color:var(--green); font-size:12px; white-space:nowrap; padding-top:3px; }
   .rhint { padding:7px 11px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--line); }
+  /* "show 25 · 50" in the recently-added hint line -- how many of them to ask
+     for, put where it costs the ( already full ) toolbar row nothing. */
+  .rhint a { color:var(--accent); text-decoration:none; }
+  .rhint a:hover { text-decoration:underline; }
+  /* A recently-added paper the dashboard index has never seen : addable, but
+     nothing has read it yet, so it comes in bare. */
+  .hit .nyet { color:var(--warn); white-space:nowrap; }
 
   .paintbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
   .pblabel { color:var(--muted); font-size:12px; }
   .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+  /* The bar's own controls, trailing the chips as one more item in their flow
+     so they take whatever is left of the last chip line instead of a line of
+     their own. Held together so a wrap never splits the label off its buttons. */
+  .pbctl { display:inline-flex; gap:7px; align-items:center; margin-left:5px; }
   .chip {
     display:inline-flex; align-items:center; gap:4px; font-size:12px; padding:2px 8px;
     border-radius:11px; background:var(--chip); color:var(--fg); border:1px solid transparent;
@@ -117,14 +121,36 @@
 
   main { padding:12px 16px 140px; }
   .colhead, .row { display:grid; grid-template-columns:var(--grid); align-items:stretch; }
-  .colhead {
+  /* The board is never narrower than the sum of its columns' minimums ( --gridmin ,
+     see gridTemplate ) : past the edge of the window it scrolls sideways instead
+     of squeezing, which is what the folded columns need when they're out. The
+     head and the board are two scrollers kept in step ( see syncX ), and the
+     head -- sticky, so always in reach -- is the one with the scrollbar. */
+  .colwrap {
     position:sticky; top:var(--headh,132px); z-index:9; background:var(--bg);
+    overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+  }
+  .boardwrap { overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+  .boardwrap::-webkit-scrollbar { display:none; }
+  .colhead {
+    min-width:calc(var(--gridmin,0px) + 2px); background:var(--bg);
     color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em;
     border-bottom:1px solid var(--line); padding:4px 0;
   }
   .colhead > div { padding:2px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .colhead .colname { cursor:pointer; }
-  #board { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--panel); margin-top:2px; }
+  /* `clip`, not `hidden` : a `hidden` box is a scroll container, and the frozen
+     columns below would stick to it ( which never scrolls ) instead of to
+     .boardwrap ( which does ). */
+  #board { border:1px solid var(--line); border-radius:10px; overflow:clip; background:var(--panel); margin-top:2px;
+           min-width:calc(var(--gridmin,0px) + 2px); }
+  /* With the folded columns out, the number and the paper stay put while the
+     rest scrolls under them -- a Methods summary is no use without the title it
+     belongs to. */
+  :root[data-fold] .row > .c:nth-child(-n+2),
+  :root[data-fold] .colhead > div:nth-child(-n+2) { position:sticky; z-index:2; background:inherit; }
+  :root[data-fold] .row > .c:nth-child(1), :root[data-fold] .colhead > div:nth-child(1) { left:0; }
+  :root[data-fold] .row > .c:nth-child(2), :root[data-fold] .colhead > div:nth-child(2) { left:52px; }
   #board.dropinto { box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   .row { border-bottom:1px solid var(--line); background:var(--row); }
   .row:last-child { border-bottom:none; }
@@ -169,12 +195,72 @@
     color:var(--fg); border-radius:11px; padding:2px 7px; font-size:12px;
   }
   .chipin:focus { outline:none; width:120px; min-width:120px; border-style:solid; border-color:var(--accent); }
+  /* A free-text cell is the box plus -- when its text has a URL in it -- a copy
+     of that text laid exactly over the box with the links live ( see cellHtml ).
+     The two have to agree on every metric that decides where a character lands,
+     which is why the overlay repeats the border + padding as one padding and
+     wraps the same way. */
+  /* A cell fills its row. The box used to be a flat 44px however tall the row
+     was, so a Code cell with three links sat scrunched into a scrollbar beside
+     a title that had taken the row to twice that. The grid already stretches
+     the CELL to the row's height ( .row is align-items:stretch ) ; these pass
+     that height down to the box inside it, and so to the copy of its text laid
+     over the box. The shelf stretches only its note cells -- the rest of a
+     staged row is deliberately top-aligned.
+
+     44px stays the floor for a short row, and dragging the corner still works:
+     a dragged height is an inline one, and stretching only applies while the
+     height is auto. */
+  .notecell { display:flex; }
+  .srow > .notecell { align-self:stretch; }
+  .cellbox { position:relative; flex:1; min-width:0; display:flex; }
+  .cellbox > textarea { display:block; flex:1; }
+  /* The cell font, said ONCE for the box and for the copy of its text laid over
+     it : the two have to agree on every metric that decides where a character
+     lands, or the same string wraps in two different places.
+
+     Monospace because that is what the board has always drawn these in -- the
+     rule below used to read ` font:13px/1.4 inherit ` , which is not valid CSS
+     ( the shorthand takes no ` inherit ` family ) , so the whole declaration was
+     thrown away and the textarea kept the browser's own monospace default.
+     Spelled out properly now, and shared, so the two copies can't drift. */
+  .notecell textarea, .cellbox .lnk {
+    font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
   .notecell textarea {
     width:100%; min-height:44px; resize:vertical; background:transparent; color:var(--fg);
-    border:1px solid transparent; border-radius:6px; padding:4px 6px; font:13px/1.4 inherit;
+    border:1px solid transparent; border-radius:6px; padding:4px 6px;
   }
   .notecell textarea:hover { border-color:var(--line); }
   .notecell textarea:focus { outline:none; border-color:var(--accent); background:var(--panel2); min-height:110px; }
+  .cellbox .lnk {
+    /* inset:0 over .cellbox , whose box IS the textarea's : 5px / 7px of padding
+       here is the textarea's 1px border plus its 4px / 6px. */
+    position:absolute; inset:0; overflow:hidden; padding:5px 7px; color:var(--fg);
+    white-space:pre-wrap; overflow-wrap:break-word;
+    /* The mouse goes straight through to the box underneath -- so a click on
+       the words still puts the caret where you clicked -- and is caught only by
+       the links themselves. */
+    pointer-events:none; user-select:none;
+  }
+  .cellbox .lnk a { pointer-events:auto; color:var(--accent); text-decoration:underline; text-underline-offset:2px; }
+  .cellbox .lnk a:hover { color:var(--fg); background:color-mix(in srgb, var(--accent) 18%, transparent); }
+  /* Unfocused, the box's own text is invisible and what you read is the overlay.
+     Focus gives the text back and takes the overlay away -- except on a locked
+     board, where there is no editing to make room for and the links stay live. */
+  /* At rest the box's own text is invisible and what you read is the overlay ;
+     .editing ( the caret is in this box -- see the focusin pair below the
+     script's cell section ) gives the text back and takes the overlay away. A
+     class rather than :focus because :focus stops matching the moment the
+     WINDOW loses focus, which would drop the overlay back over a box you are
+     still typing in the instant you glanced at another app. A locked board
+     never gets the class, so there the links simply stay live.
+
+     The scrollbar goes with it : inside the box it would narrow the text by its
+     own width, and the same string would then wrap in two different places. */
+  .cellbox.linked:not(.editing) > textarea { color:transparent; caret-color:var(--fg); scrollbar-width:none; }
+  .cellbox.linked:not(.editing) > textarea::-webkit-scrollbar { display:none; }
+  .cellbox.linked.editing > .lnk { visibility:hidden; }
   .rowtools { display:flex; gap:5px; align-items:flex-start; justify-content:flex-end; }
   .delbtn { padding:2px 8px; font-size:13px; color:var(--muted); }
   .delbtn:hover { color:#fff; background:#c0392b; border-color:#c0392b; }
@@ -202,7 +288,8 @@
   /* Same shape as a board row -- checkbox, paper, tags, one cell per free-text
      column, tools -- so a staged row is the row it is about to become, notes
      and all ( --sgrid , set by renderStage ). */
-  .srow { display:grid; grid-template-columns:var(--sgrid); gap:9px; align-items:start; padding:7px 11px; border-bottom:1px solid var(--line); }
+  .srow { display:grid; grid-template-columns:var(--sgrid); gap:9px; align-items:start; padding:7px 11px; border-bottom:1px solid var(--line);
+          min-width:var(--sgridmin,0px); }
   .srow:last-child { border-bottom:none; }
   .srow:hover { background:var(--panel2); }
   .srow .pick { margin-top:7px; }
@@ -235,6 +322,17 @@
   .sheet kbd { background:var(--chip); border-radius:4px; padding:1px 5px; font-size:11px; }
   .sheet ul { margin:0 0 12px 18px; padding:0; color:var(--muted); font-size:13px; }
   .sheet li { margin:3px 0; }
+  /* the import sheet's per-column choices ( name · what to do · what it would
+     change here ) and its order choice */
+  .sheet .sub { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:14px 0 6px; }
+  .colmodes { display:grid; grid-template-columns:minmax(90px,max-content) max-content minmax(0,1fr);
+              gap:6px 12px; align-items:center; margin:0 0 10px; font-size:13px; }
+  .colmodes b { font-weight:500; }
+  .colmodes select { padding:3px 6px; font-size:12px; }
+  .colmodes .cc { color:var(--muted); font-size:12px; }
+  .colmodes .cc.over, .sheet p.warn, .sheet .warnb { color:var(--warn); }
+  .sheet .opt { display:flex; gap:7px; align-items:flex-start; font-size:13px; cursor:pointer; margin:0 0 8px; }
+  .sheet .opt span { color:var(--muted); }
   #toast {
     position:fixed; right:18px; bottom:18px; z-index:90; display:none; align-items:center; gap:12px;
     background:var(--panel); border:1px solid var(--line); border-radius:9px;
@@ -277,14 +375,49 @@
 </style>
 </head>
 <body>
+<!-- The header is two parts ( see the "header" section of the script ). The bar
+     is pinned : the board, its counts, where else you can go, the note on what
+     you're in the middle of, save state. Everything under it is #tools, which
+     scrolls away with the list.
+
+     As FEW rows as possible sit between the title and the tags, because the
+     tags and the board itself are what the page is for. So the nav links ride
+     in the pinned bar -- it had a whole window's worth of space next to the
+     save stamp doing nothing -- and #tools is two :
+       .actionrow  what happens to the board : papers in, papers out, the shape
+                   of the list, its columns
+       .toolbar    which paper am I looking for -->
 <header>
   <div class="titlebar">
     <h1>prma sort</h1>
     <div class="counts" id="counts"></div>
-    <div class="grow"></div>
-    <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
-    <a class="navlink" href="/tiers" title="The other board: tier buckets you place papers in">★ Tiers</a>
-    <a class="navlink" href="/review" title="What this list adds up to: every paper on it screened, with the numbers pulled out of its own text">✎ Review</a>
+    <nav class="navlinks">
+      <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+      <a class="navlink" href="/tiers" title="The other board: tier buckets you place papers in">★ Tiers</a>
+      <a class="navlink" href="/review" title="What this list adds up to: every paper on it screened, with the numbers pulled out of its own text">✎ Review</a>
+      <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
+      <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx">{ } Code</a>
+      <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
+    </nav>
+    <span class="paintnote" id="paintnote"></span>
+    <button id="helpbtn" title="How this page works">?</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+    <span id="lockstate" title="This board is in view-only mode for everyone — nothing typed here is saved">🔒 View only</span>
+    <div class="savestate" id="savestate">loading…</div>
+  </div>
+</header>
+<div id="toolslot"><div id="tools">
+  <!-- Everything that happens TO the board : what comes in, what goes out, the
+       order, what tagging does, the columns -- and, at the end, the two that
+       change what you are LOOKING at : the newest papers in the library, and
+       the text filter. Packed left and left to wrap on its own rather than
+       split across the row -- a spacer in here would push half of it onto a
+       second line the moment the window narrowed. -->
+  <div class="actionrow">
+    <button id="refsbtn" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
+    <button id="importbtn" title="Import a CSV file, or a Google Sheet by its link">⇩ Import CSV / Sheet</button>
+    <button id="pulltiers" title="Copy every paper from the /tiers board into this one">⇄ Pull from Tiers</button>
+    <button id="exportbtn" title="Download the whole board as CSV">⇧ Export CSV</button>
     <select id="orderby" title="Reorder the whole list once — the order stays yours afterwards">
       <option value="">⇅ Order by…</option>
       <option value="tags">tags ( group them )</option>
@@ -297,15 +430,12 @@
     <button id="automove" title="Off: tagging never moves a row. On: a row jumps to sit with the others sharing its tags.">⇥ Auto-move: off</button>
     <button id="autotag" title="Tag every untagged row from its ` prma modalities ` stamp">⚡ Auto-tag</button>
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
-    <button id="refsbtn" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
-    <button id="importbtn" title="Import a CSV — merge into this board or replace it">⇩ Import CSV</button>
-    <button id="exportbtn" title="Download the whole board as CSV">⇧ Export CSV</button>
-    <button id="pulltiers" title="Copy every paper from the /tiers board into this one">⇄ Pull from Tiers</button>
-    <button id="helpbtn" title="How this page works">?</button>
-    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
-    <span id="lockstate" title="This board is in view-only mode for everyone — nothing typed here is saved">🔒 View only</span>
-    <div class="savestate" id="savestate">loading…</div>
+    <button id="foldbtn" style="display:none"></button>
+    <button id="recentbtn" title="The papers most recently added to your reference manager — read from it directly, so one saved a minute ago is here without a reindex or a restart">🆕 Recently added</button>
+    <input type="search" id="filter" style="flex:0 1 480px;min-width:240px" placeholder="Filter the list…" autocomplete="off">
   </div>
+  <!-- Finding a paper to put on the board. Nothing but the search and the three
+       choices that shape it, so the box itself gets the width of the row. -->
   <div class="toolbar">
     <div class="searchwrap">
       <input type="search" id="q" autocomplete="off"
@@ -327,39 +457,46 @@
       <option value="top">add to top</option>
       <option value="placed">add after last sorted</option>
     </select>
-    <input type="text" id="filter" style="max-width:220px" placeholder="Filter the list…" autocomplete="off">
   </div>
+  <!-- The tags. The bar's own controls are at the END of the flow, after the
+       chips and the + new tag box : in front they were a header that took a
+       whole row to itself before a single chip was drawn. #pbctl is real DOM
+       with the listeners on it, moved back to the end after every re-render
+       ( see renderPaintbar ) rather than written out again each time. -->
   <div class="paintbar">
-    <span class="pblabel" title="Drag a tag along this bar to move it — the order is the board's, so groups you build here stay built">Tags:</span>
-    <button class="pbtn" id="tagfilter" title="Turn the tag bar into a filter: click tags to show only the papers carrying them">🔎 Filter</button>
-    <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen tags · all = it needs every one">any</button>
-    <button class="pbtn" id="tagedit" title="Pick the colour every tag's chips are drawn in">🎨 Colors</button>
-    <div class="chips" id="tagchips"></div>
-    <span class="paintnote" id="paintnote"></span>
+    <div class="chips" id="tagchips" title="Drag a tag along this bar to move it — the order is the board's, so groups you build here stay built">
+      <span class="pbctl" id="pbctl">
+        <input class="chipin newtag" id="newtag" placeholder="+ new tag" autocomplete="off"
+          title="Type a name and press ↵ — the new tag is armed for painting, or goes straight onto the rows you have selected">
+        <span class="pblabel" title="The bar to the left is every tag on this board: click a chip to paint it onto rows, drag one to move it along the bar">Tags:</span>
+        <button class="pbtn" id="tagfilter" title="Turn the tag bar into a filter: click tags to show only the papers carrying them">🔎 Filter</button>
+        <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen tags · all = it needs every one">any</button>
+        <button class="pbtn" id="tagedit" title="Pick the colour every tag's chips are drawn in">🎨 Colors</button>
+      </span>
+    </div>
   </div>
-</header>
+</div></div>
 <main>
   <section id="stage"></section>
-  <div class="colhead" id="colhead"></div>
-  <div id="board"></div>
+  <div class="colwrap" id="colwrap"><div class="colhead" id="colhead"></div></div>
+  <div class="boardwrap" id="boardwrap"><div id="board"></div></div>
 </main>
 <div id="acpop"></div>
 <div id="overlay"><div class="sheet" id="sheet"></div></div>
 <div id="toast"></div>
+<!-- $ , $$ , esc , fmt , PROXY , mdHref() , doiLinks() , codeLinks() ,
+     initTheme() , trackHeadHeight() -- the helpers every prma page used to write out for itself.
+     Loaded before the page script , so they are plain globals below ; nothing
+     here may redeclare them. -->
+<script src="/static/common.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // The sort board : ONE list, in your order, numbered 1..N. No groups -- what a
 // paper IS you say with tags, where it SITS you say by dragging it. Tagging
 // never moves a row unless you turn Auto-move on. See src/db/sortboard.py .
 // ---------------------------------------------------------------------------
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
-const mdHref = k => "/md/" + encodeURIComponent(k).replace(/%2F/gi, "/");
 const fileStem = k => String(k||"").replace(/[\/\\]/g, "_");
 
-const $  = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48);
 const nowISO = () => new Date().toISOString();
 const lc = s => String(s||"").toLowerCase();
@@ -482,7 +619,6 @@ function setLocked(on){
   $("#refsbtn").title = LOCKED
     ? "This board is in view-only mode — nothing can be imported into it right now"
     : "Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf";
-  syncHeadOffset();
 }
 // Returns true when the caller should stop -- and says why, once, rather than
 // letting a click land on nothing.
@@ -684,15 +820,19 @@ async function pollRev(){
   } catch(e){}
   setTimeout(pollRev, 6000);
 }
-async function fetchMeta(keys, wantMods){
-  keys = Array.from(new Set(keys.filter(k=>k && (wantMods || !META[k]))));
+// `fresh` : these papers are being added, or are search hits that might be. Ask
+// for everything a new row is filled in from -- the modality stamp, and the code
+// / data links ( see prefill ) -- and ask again even for a key already here,
+// since those are the parts a scan changes.
+async function fetchMeta(keys, fresh){
+  keys = Array.from(new Set(keys.filter(k=>k && (fresh || !META[k]))));
   if(!keys.length) return {};
   const got = {};
   for(let i=0; i<keys.length; i+=60){
     try {
       const r = await (await fetch("/api/paper-meta", { method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ keys: keys.slice(i,i+60), mods: !!wantMods }) })).json();
+        body: JSON.stringify({ keys: keys.slice(i,i+60), mods: !!fresh, links: !!fresh }) })).json();
       Object.assign(META, r.meta || {});
       Object.assign(got,  r.meta || {});
     } catch(e){}
@@ -701,31 +841,78 @@ async function fetchMeta(keys, wantMods){
   return got;
 }
 
+// ---- folded columns -------------------------------------------------------
+// The columns a Google Sheet import brings in ( Methods summary, Datasets, Code
+// -- DOC.options.fold_cols ) hold paragraphs, not notes : drawn all the time
+// they'd push the board past the edge of the window. So they fold away behind
+// one header button, and whether they're out is a property of THIS browser --
+// a habit, like the search mode -- not of the board. Folded or not they are
+// still in the document, the export and the text filter.
+const FOLD_KEY = "prma-sort-fold";
+let SHOWFOLD = false;
+try { SHOWFOLD = localStorage.getItem(FOLD_KEY) === "1"; } catch(e){}
+const isFold    = id => (DOC.options.fold_cols||[]).includes(id);
+const shownCols = () => DOC.columns.filter(c=>SHOWFOLD || !isFold(c.id));
+function labelFold(){
+  const f = DOC.columns.filter(c=>isFold(c.id)), b = $("#foldbtn");
+  b.style.display = f.length ? "" : "none";
+  b.textContent = SHOWFOLD ? "◂ Hide Extra Columns" : "▸ Show Extra Columns";
+  // How MANY there are, and which, moves into the tooltip : the button sits in
+  // the row with the rest of them now, where a label that changes width every
+  // time a column is added or folded would shuffle its neighbours along.
+  b.title = `${SHOWFOLD?"Fold away":"Show"} ${f.length} column${f.length===1?"":"s"}`+
+    ` — ${f.map(c=>c.label).join(" · ")}`+
+    (SHOWFOLD ? "" : " ( the board scrolls sideways while they're out )");
+  b.classList.toggle("on", SHOWFOLD && f.length > 0);
+  if(SHOWFOLD && f.length) document.documentElement.dataset.fold = "1";
+  else delete document.documentElement.dataset.fold;
+}
+$("#foldbtn").addEventListener("click", ()=>{
+  SHOWFOLD = !SHOWFOLD;
+  try { localStorage.setItem(FOLD_KEY, SHOWFOLD ? "1" : "0"); } catch(e){}
+  renderAll();
+});
+// The column head and the board scroll sideways together.
+function syncX(from, to){ if(to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft; }
+$("#boardwrap").addEventListener("scroll", ()=>syncX($("#boardwrap"), $("#colwrap")), { passive:true });
+$("#colwrap").addEventListener("scroll",   ()=>syncX($("#colwrap"), $("#boardwrap")), { passive:true });
+
 // ---- rendering ------------------------------------------------------------
+// A grid as [ minimum px, fr ] tracks ( no fr = fixed ) -> its template, and the
+// width it can't go below -- which is how wide the board is made to stay.
+function tracks(list, gap){
+  return { css: list.map(([m,fr])=>fr ? `minmax(${m}px,${fr})` : `${m}px`).join(" "),
+           min: list.reduce((s,[m])=>s+m, 0) + (gap||0)*(list.length-1) };
+}
+// A free-text column's track. A folded one is a paragraph and gets the room for
+// one ; the rest size off how many ordinary columns there are, so bringing the
+// folded ones out never squeezes the columns that were already there.
+function colTrack(c, base){ return isFold(c.id) ? [ 260, "1.4fr" ] : [ base > 3 ? 112 : 150, "1.1fr" ]; }
+const baseCols = () => DOC.columns.filter(c=>!isFold(c.id)).length;
 function gridTemplate(){
-  const n = DOC.columns.length;
-  const min = n > 3 ? "112px" : "150px";
+  const n = baseCols();
   // View-only drops the tools column outright rather than emptying it : an
   // empty 54px gutter with a border down it reads as a column somebody forgot
   // to fill in. The head, the rows and the shelf all key off this, so they stay
   // lined up ( see renderColHead / rowHtml ).
-  return `52px minmax(${n>3?"200px":"250px"},2.2fr) minmax(170px,1.1fr) `+
-         DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ")+(LOCKED?"":` 54px`);
+  return tracks([ [52], [n>3?200:250, "2.2fr"], [170, "1.1fr"] ]
+    .concat(shownCols().map(c=>colTrack(c, n)))
+    .concat(LOCKED ? [] : [[54]]));
 }
 function renderColHead(){
-  document.documentElement.style.setProperty("--grid", gridTemplate());
+  const g = gridTemplate();
+  document.documentElement.style.setProperty("--grid", g.css);
+  document.documentElement.style.setProperty("--gridmin", g.min + "px");
   $("#colhead").innerHTML = `<div style="text-align:right">#</div><div>Paper</div><div>Tags</div>`+
-    DOC.columns.map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
+    shownCols().map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
     (LOCKED?"":`<div></div>`);
 }
 function rowLinks(it){
   const m = META[it.key] || {};
   const doi = it.doi || m.doi || "", wid = it.wid || m.wid || "";
-  const out = [];
-  if(doi){
-    out.push(`<a href="https://doi.org/${esc(doi)}" target="_blank" rel="noopener">DOI</a>`);
-    out.push(`<a href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">Proxy</a>`);
-  }
+  // DOI + Proxy are the same two anchors every prma surface offers
+  // ( /static/common.js ) ; the rest is what a board row can additionally reach.
+  const out = doiLinks(doi);
   if(m.pdf)       out.push(`<a href="/pdf?key=${encodeURIComponent(it.key)}" target="_blank">PDF</a>`);
   else if(it.pdf) out.push(`<a href="${esc(it.pdf)}" target="_blank" rel="noopener">PDF</a>`);
   if(wid)       out.push(`<a href="https://openalex.org/${esc(wid)}" target="_blank" rel="noopener">OA</a>`);
@@ -761,8 +948,7 @@ function rowHtml(it, n){
       `<div class="links" data-links="1">${rowLinks(it)}</div>`+
     `</div>`+
     `<div class="c" data-cell="tags">${tagsCell(it)}</div>`+
-    DOC.columns.map(c=>`<div class="c notecell"><textarea data-field="${esc(c.id)}" `+
-      `placeholder="${esc(c.label)}…" spellcheck="false"${RO()}>${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
+    shownCols().map(c=>`<div class="c notecell">${cellHtml(it, c)}</div>`).join("")+
     (LOCKED?"":`<div class="c rowtools">`+
       `<button class="delbtn" data-act="remove" title="Delete this paper from the board ( undoable )">🗑</button>`+
     `</div>`)+
@@ -813,6 +999,12 @@ function renderCounts(){
 //                           outline = every one has it, dashed = some do, and a
 //                           click flips it on all of them.
 //   otherwise            -- a click arms the tag for painting ( click rows ).
+// The bar's own controls -- + new tag, the label, 🔎 Filter, any, 🎨 Colors --
+// live at the END of the chip flow, and are REAL elements with their listeners
+// already on them. So they are captured once here and moved back to the end
+// after each redraw ; rewriting them as markup every time would throw those
+// listeners away, and would empty the + new tag box mid-word.
+const PBCTL = $("#pbctl");
 function renderPaintbar(){
   const sel = filtering ? [] : selectedItems();
   $("#tagchips").innerHTML = tagOptions().map(v=>{
@@ -826,13 +1018,15 @@ function renderPaintbar(){
     return `<span class="chip ${(inF||armed===v||on)?'on':som?'half':''}" ${chipStyle(v)} draggable="true" `+
       `data-val="${esc(v)}" title="${esc(how)} — drag it to move it along the bar">${esc(v)}<span class="n">${n||""}</span>`+
       `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
-  }).join("")+
-    `<input class="chipin newtag" id="newtag" placeholder="+ new tag" autocomplete="off">`;
+  }).join("");
+  $("#tagchips").appendChild(PBCTL);
   renderNote();
   document.body.classList.toggle("painting", !!armed && !filtering);
 }
-// One line under the chips, saying whichever of these is true : what the board
-// is filtered to, what's selected, what you're painting.
+// One line in the pinned bar, saying whichever of these is true : what the
+// board is filtered to, what's selected, what you're painting. It's in the bar
+// rather than by the chips so it's still in sight halfway down the list --
+// which is exactly where a filter you've forgotten about hides rows from you.
 function renderNote(shown){
   const bits = [];
   if(TAGF.size || $("#filter").value.trim()){
@@ -844,10 +1038,11 @@ function renderNote(shown){
   }
   if(!filtering){
     const sel = selectedItems();
-    if(sel.length) bits.push(`${sel.length} row(s) selected — click a tag above to toggle it on them ( Esc clears )`);
+    if(sel.length) bits.push(`${sel.length} row(s) selected — click a tag in the tag bar to toggle it on them ( Esc clears )`);
     else if(armed) bits.push(`painting “${armed}” — click rows to toggle it ( Esc to stop )`);
   }
-  $("#paintnote").textContent = bits.join("   ·   ");
+  const note = $("#paintnote");
+  note.textContent = note.title = bits.join("   ·   ");
 }
 const hasTag = (it,v) => (it.tags||[]).some(t=>lc(t)===lc(v));
 function selectedItems(){
@@ -902,7 +1097,7 @@ function toggleTagOnSelection(value){
   renderPaintbar(); renderCounts();
   toast(`${all?"Removed":"Added"} “${value}” ${all?"from":"on"} ${items.length} row(s)`);
 }
-function renderAll(){ renderColHead(); renderBoard(); renderStage(); renderCounts(); renderPaintbar(); }
+function renderAll(){ labelFold(); renderColHead(); renderBoard(); renderStage(); renderCounts(); renderPaintbar(); }
 function repaintLinks(){
   $$(".row").forEach(row=>{
     const f = findItem(row.dataset.key);
@@ -942,9 +1137,6 @@ function toast(msg, ms, undoLabel, onUndo){
   t.classList.add("show");
   if(onUndo) $("#undobtn").onclick = ()=>{ t.classList.remove("show"); onUndo(); };
   clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), ms||3200);
-}
-function syncHeadOffset(){
-  document.documentElement.style.setProperty("--headh", document.querySelector("header").offsetHeight + "px");
 }
 
 // ---- the staging shelf ----------------------------------------------------
@@ -1002,12 +1194,12 @@ function sbadgeHtml(it){
 // The shelf's own grid, built the same way the board's is ( gridTemplate ) so
 // the two line up column for column.
 function stageGridTemplate(){
-  const n = DOC.columns.length;
-  const min = n > 3 ? "112px" : "150px";
+  const n = baseCols();
   // Same two tracks go when the board is view-only -- the checkbox and the
   // per-row buttons -- so the shelf keeps lining up with the list above it.
-  return (LOCKED?"":`24px `)+`minmax(${n>3?"200px":"240px"},2.3fr) minmax(160px,1fr) `+
-         DOC.columns.map(()=>`minmax(${min},1.1fr)`).join(" ")+(LOCKED?"":` 118px`);
+  return tracks((LOCKED ? [] : [[24]]).concat([ [n>3?200:240, "2.3fr"], [160, "1fr"] ])
+    .concat(shownCols().map(c=>colTrack(c, n)))
+    .concat(LOCKED ? [] : [[118]]), 9);
 }
 function srowHtml(it){
   return `<div class="srow" data-key="${esc(it.key)}">`+
@@ -1022,8 +1214,7 @@ function srowHtml(it){
     // The notes columns, exactly as the board draws them : reading a reference
     // is when you have something to say about it, and a note typed here rides
     // onto the list with the row ( it is the same row -- same `fields` ).
-    DOC.columns.map(c=>`<div class="notecell"><textarea data-field="${esc(c.id)}" `+
-      `placeholder="${esc(c.label)}…" spellcheck="false"${RO()}>${esc((it.fields||{})[c.id]||"")}</textarea></div>`).join("")+
+    shownCols().map(c=>`<div class="notecell">${cellHtml(it, c)}</div>`).join("")+
     (LOCKED?"":`<div class="stools">`+
       `<button data-act="sadd" title="Add just this one">＋ Add</button>`+
       `<button class="delbtn" data-act="sdrop" title="Throw this one away ( undoable )">🗑</button>`+
@@ -1043,7 +1234,9 @@ function renderStage(){
               field: a.dataset ? a.dataset.field : null,
               title: a.classList.contains("stitle"),
               start: a.selectionStart, end: a.selectionEnd };
-  document.documentElement.style.setProperty("--sgrid", stageGridTemplate());
+  const sg = stageGridTemplate();
+  document.documentElement.style.setProperty("--sgrid", sg.css);
+  document.documentElement.style.setProperty("--sgridmin", (sg.min + 22) + "px");   // + the row's own padding
   box.classList.toggle("show", staged().length > 0);
   box.innerHTML = staged().length
     ? stageHeadHtml() + `<div class="srows">` + staged().map(srowHtml).join("") + `</div>`
@@ -1151,12 +1344,14 @@ function stageRefs(refs, label){
   toast(`${label}: ${refs.length} read · ${fresh.length} staged`+(skipped?` · ${skipped}`:""), 6000);
   if(!fresh.length) return;
   // Same courtesy the board gives a paper added from search : one that turns out
-  // to be in the library arrives pre-tagged from its ` prma modalities ` stamp.
+  // to be in the library arrives pre-tagged from its ` prma modalities ` stamp,
+  // with its Code / Datasets cells filled in ( see prefill ).
   fetchMeta(fresh.map(it=>it.key), true).then(()=>{
     let n = 0;
     fresh.forEach(it=>{
       const m = META[it.key];
       if(!it.tags.length && m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); m.mods.forEach(rememberTag); n++; }
+      if(prefill(it, m).length) n++;
     });
     if(n) markDirty();
     renderStage(); renderPaintbar();
@@ -1206,7 +1401,11 @@ $("#stage").addEventListener("input", e=>{
   const it = findStage(row.dataset.key);
   if(it && it.title !== e.target.value){ it.title = e.target.value; markDirty(); }
 });
-$("#stage").addEventListener("focusout", e=>{ if(e.target.matches("textarea[data-field]")) captureStageField(e.target); });
+$("#stage").addEventListener("focusout", e=>{
+  if(!e.target.matches("textarea[data-field]")) return;
+  captureStageField(e.target);
+  syncCellLink(e.target);
+});
 
 // ---- importing a reference list -------------------------------------------
 // A bibliography -- the list at the end of a review, a .docx a collaborator
@@ -1302,21 +1501,211 @@ function insertIndex(){
   }
   return DOC.items.length;
 }
-async function addPaper(hit){
+// ---- a free-text cell, with its links live ---------------------------------
+// The Code and Datasets columns ARE lists of URLs, and a Note or a Methods
+// summary often has one in it. A textarea can't hold a link, so a cell that
+// HAS one is drawn twice : the textarea, and a copy of its text laid exactly
+// over it with the URLs as real anchors.
+//
+// The overlay ignores the mouse everywhere except on those anchors, so clicking
+// the text still lands the caret in the box underneath and typing, selecting
+// and deleting are exactly what they were. The textarea's own text is invisible
+// while the caret is elsewhere ( you are reading the overlay's copy ) and comes
+// back the moment you are in the box, which is also when the overlay steps
+// aside -- see .cellbox.linked in the stylesheet, and the .editing pair below.
+//
+// Only a cell that actually contains a link gets one -- five hundred rows
+// shouldn't carry two thousand overlays for the sake of a few dozen URLs -- and
+// the document is untouched : `fields` holds the same plain text it always did,
+// which is what the CSV export writes out.
+const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"'`\u00a0]+/gi;
+const hasLink = t => { const re = new RegExp(URL_RE.source, "i"); return re.test(String(t||"")); };
+// A URL at the end of a sentence swallows the punctuation after it. A closing
+// bracket is kept only when the URL opened one ( wikipedia, docs.rs, … ).
+function trimUrl(u){
+  let end = u.length;
+  for(;;){
+    const c = u[end-1];
+    if(end && ".,;:!?'\"".includes(c)){ end--; continue; }
+    if(end && ")]}".includes(c)){
+      const open = { ")":"(", "]":"[", "}":"{" }[c], body = u.slice(0, end);
+      const n = ch => body.split(ch).length - 1;
+      if(n(c) > n(open)){ end--; continue; }   // more closers than openers : not ours
+      break;                                   // balanced -- the URL opened it
+    }
+    break;
+  }
+  return u.slice(0, end);
+}
+function linkifyCell(text){
+  const s = String(text||""), re = new RegExp(URL_RE.source, "gi");
+  let out = "", at = 0, m;
+  while((m = re.exec(s))){
+    const raw = trimUrl(m[0]);
+    if(!raw) continue;                       // nothing left once the punctuation goes
+    const href = /^www\./i.test(raw) ? "https://" + raw : raw;
+    out += esc(s.slice(at, m.index))+
+      `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" `+
+      `title="${esc(href)} — opens in a tab behind this one">${esc(raw)}</a>`;
+    at = m.index + raw.length;
+    re.lastIndex = at;                       // the punctuation we gave back is text
+  }
+  return out + esc(s.slice(at));
+}
+// One cell of a row or of a staged row -- the same box on both, so a note typed
+// on the shelf and the same note on the board look and behave identically.
+function cellHtml(it, c){
+  const v = String((it.fields||{})[c.id] || "");
+  const linked = hasLink(v);
+  return `<div class="cellbox${linked?" linked":""}">`+
+    `<textarea data-field="${esc(c.id)}" placeholder="${esc(c.label)}…" spellcheck="false"${RO()}>${esc(v)}</textarea>`+
+    (linked ? `<div class="lnk" aria-hidden="true">${linkifyCell(v)}</div>` : "")+
+  `</div>`;
+}
+// Which cell the caret is in. One pair for both surfaces ( the board draws the
+// same cell on the shelf ), and never for a locked board, where nothing is
+// being edited and the links should just stay live.
+const isCell = el => el && el.matches && el.matches("textarea[data-field]:not([readonly])");
+document.addEventListener("focusin",  e=>{ if(isCell(e.target)) e.target.parentElement.classList.add("editing"); });
+document.addEventListener("focusout", e=>{ if(isCell(e.target)) e.target.parentElement.classList.remove("editing"); });
+
+// Redraw one cell's overlay from what is in its box NOW -- creating it for a URL
+// you just typed, removing it for the one you just deleted. Called when you
+// leave a cell and wherever something writes into one ( see refreshFields ).
+function syncCellLink(ta){
+  const box = ta.parentElement;
+  if(!box || !box.classList.contains("cellbox")) return;
+  const want = hasLink(ta.value);
+  let lnk = box.querySelector(".lnk");
+  box.classList.toggle("linked", want);
+  if(!want){ if(lnk) lnk.remove(); return; }
+  if(!lnk){
+    lnk = document.createElement("div");
+    lnk.className = "lnk";
+    lnk.setAttribute("aria-hidden", "true");
+    box.appendChild(lnk);
+  }
+  lnk.innerHTML = linkifyCell(ta.value);
+  lnk.scrollTop = ta.scrollTop;
+}
+
+// ---- links in a cell of text -----------------------------------------------
+// The Code and Datasets cells hold LINKS -- the repo, the archive record, the
+// dataset's home page -- one per line, whether they came from the Google Sheet
+// ( where each is a short label with the link behind it ) or from the scans
+// ( prefill ). A cell is plain text, so a link is written as its URL -- and as
+// "label — URL" when the label says something the URL doesn't :
+//   alexhuth/sensimetrics_filter  ->  https://github.com/alexhuth/sensimetrics_filter
+//   zenodo 8349726                ->  https://doi.org/10.5281/zenodo.8349726
+//   UK Biobank                    ->  https://www.ukbiobank.ac.uk/
+//   Moth Radio Hour / Huth-LeBel story data  ->  that, " — ", its OpenNeuro link
+// A label "says nothing more" when every word of it is already in the URL
+// ( foldText, /static/common.js ). The sheet's "hf: " is its shorthand for
+// Hugging Face, and a www or an http is spelling, not a word.
+function linkLine(label, url){
+  label = String(label||"").trim();
+  const u = foldText(url);
+  const words = label.normalize("NFKD").toLowerCase().replace(/^hf:/, "")
+    .split(/[^a-z0-9]+/).filter(w=>w && !/^(www|https?)$/.test(w));
+  return words.every(w=>u.includes(w)) ? url : `${label} — ${url}`;
+}
+// A sheet cell whose lines carry links ( runs of [ text, url|null ] off
+// /api/sheet/csv -- see src/db/gsheet.py ), as its text with the links written
+// in, line for line. A line with no link stays exactly as it was.
+function linkedCell(runs){
+  const lines = [[]];
+  runs.forEach(([text, url])=>String(text||"").split("\n").forEach((piece, k)=>{
+    if(k) lines.push([]);
+    if(piece) lines[lines.length-1].push([piece, url||""]);
+  }));
+  return lines.map(segs=>{
+    const urls = Array.from(new Set(segs.map(s=>s[1]).filter(Boolean)));
+    if(urls.length > 1) return segs.map(([t,u])=>u ? linkLine(t, u) : t).join("");
+    const text = segs.map(s=>s[0]).join("");
+    return urls.length ? linkLine(text, urls[0]) : text;
+  }).join("\n");
+}
+
+// ---- Code / Datasets, filled in for you -----------------------------------
+// A paper added from search arrives with its Code and Datasets cells already
+// written : the repos /code shows for it, and the archive records and named
+// collections /datasets shows -- a name with the home page it links to there.
+// Same scans ( ` prma code ` , ` prma datasets ` ), read through
+// /api/paper-meta, written as links the way linkLine writes them. Only an
+// EMPTY cell is written, so nothing you typed is ever replaced.
+const FILL_COLS = { code: /^code$/i, datasets: /^datasets?$/i };
+function fillCol(re){
+  const c = DOC.columns.find(c=>re.test(c.id)) || DOC.columns.find(c=>re.test(c.label));
+  return c ? c.id : null;
+}
+// One line each, first spelling wins : the scans often find the same link
+// twice ( the abstract and the full text both print it ).
+function cellText(list){
+  const seen = new Set(), out = [];
+  list.forEach(v=>{
+    v = String(v||"").trim();
+    if(v && !seen.has(lc(v))){ seen.add(lc(v)); out.push(v); }
+  });
+  return out.join("\n");
+}
+// Writes what `m` ( a /api/paper-meta entry asked for with links ) has into
+// `it`'s Code / Datasets cells, wherever they're empty. Returns the ids of the
+// cells it wrote, so a caller can redraw just those.
+function prefill(it, m){
+  if(!m || !m.code) return [];
+  const named = n => typeof n === "string" ? { name:n, url:"" } : (n || {});
+  const want = {
+    code:     cellText(m.code.map(l=>l.url)),
+    datasets: cellText((m.data||[]).map(l=>l.url)
+      .concat((m.names||[]).map(named).map(n=>n.url ? linkLine(n.name, n.url) : n.name))),
+  };
+  const f = it.fields = it.fields || {}, wrote = [];
+  Object.keys(want).forEach(k=>{
+    const id = fillCol(FILL_COLS[k]);
+    if(id && want[k] && !String(f[id]||"").trim()){ f[id] = want[k]; wrote.push(id); }
+  });
+  return wrote;
+}
+// The boxes for cells prefill wrote after the row was drawn. A folded column
+// has no box ; its text is there when you unfold it.
+function refreshFields(it, ids){
+  const row = rowEl(it.key);
+  ids.forEach(id=>{
+    const ta = row && row.querySelector(`textarea[data-field="${cssEsc(id)}"]`);
+    if(ta){ ta.value = it.fields[id]; syncCellLink(ta); }   // Code / Datasets arrive as links
+  });
+}
+// `at` is where a hit dragged into the list was dropped ; without it the paper
+// lands wherever the "add to…" dropdown says, and the page scrolls to it.
+async function addPaper(hit, at){
   if(guard()) return;
   if(findItem(hit.key)){ toast("Already on the board"); return; }
   const it = newItem(hit);
   const m  = META[hit.key];
   if(m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); }  // pre-tagged from the Methods stamp
-  DOC.items.splice(insertIndex(), 0, it);
+  prefill(it, m);
+  DOC.items.splice(at == null ? insertIndex() : Math.min(at, DOC.items.length), 0, it);
   markDirty(); renderBoard(); renderCounts(); renderPaintbar();
   const el = rowEl(it.key);
-  if(el){ el.classList.add("flash"); el.scrollIntoView({ block:"center", behavior:"smooth" }); }
+  if(el){
+    el.classList.add("flash");
+    if(at == null){
+      // Added from the search box and landing out of sight : the search comes
+      // along to where the paper lands ( see floatTools ), so the next one is a
+      // keystroke away -- and dropping it now, before the scroll, is what lets
+      // the scroll land the row below it.
+      const r = el.getBoundingClientRect();
+      if(document.activeElement === $("#q") && (r.top < 0 || r.bottom > innerHeight)) floatTools(true);
+      el.scrollIntoView({ block:"center", behavior:"smooth" });
+    }
+  }
   const got = await fetchMeta([it.key], true);
   const gm = got[it.key];
   if(gm && !it.tags.length && gm.mods && gm.mods.length){
     it.tags = gm.mods.slice(); sortTags(it); markDirty(); refreshTags(it.key); renderPaintbar(); renderCounts();
   }
+  const wrote = prefill(it, gm);
+  if(wrote.length){ markDirty(); refreshFields(it, wrote); }
   if(hits.length) renderResults();
 }
 function removeItem(key){
@@ -1417,14 +1806,17 @@ async function runSearch(){
 }
 function renderResults(){
   if(!hits.length){
-    $("#results").innerHTML = `<div class="rhint">Nothing close to that${hitMode==="title"?" in any title":""}.</div>`;
+    $("#results").innerHTML = hitMode === "recent"
+      ? `<div class="rhint">${esc(recentNote || "Nothing has been added to your library yet.")}</div>`
+      : `<div class="rhint">Nothing close to that${hitMode==="title"?" in any title":""}.</div>`;
     $("#results").classList.add("show");
     return;
   }
-  const hint = hitFuzzy
+  const hint = hitMode === "recent" ? recentHint()
+    : hitFuzzy
     ? `<div class="rhint" style="color:var(--warn)">Nothing came close — these are the least-far-off titles</div>`
     : hitMode === "title"
-      ? `<div class="rhint">${hits.length} closest title${hits.length===1?"":"s"} · ↵ or double-click adds ( tagged from its Methods stamp ) · or drag a hit into the list</div>`
+      ? `<div class="rhint">${hits.length} closest title${hits.length===1?"":"s"} · ↵ or double-click adds ( tagged, Code + Datasets filled in ) · or drag a hit into the list</div>`
       : `<div class="rhint">${hits.length} of ${hitTotal} · best match first · ↵ or double-click adds · or drag a hit into the list</div>`;
   $("#results").innerHTML = hint+
     hits.map((h,i)=>{
@@ -1435,13 +1827,102 @@ function renderResults(){
         `<div style="flex:1;min-width:0">`+
           `<div class="ht">${esc(h.title||h.key)}</div>`+
           `<div class="hm">${h.year?esc(h.year):""}${h.journal?" · "+esc(h.journal):""}`+
-            `${h.cited_by!=null?` · ${h.cited_by} cites`:""} ${mods}</div>`+
+            `${h.cited_by!=null?` · ${h.cited_by} cites`:""}`+
+            `${hitMode==="recent"?recentBadges(h):""} ${mods}</div>`+
         `</div>`+
         (f ? `<div class="in">✓ #${f.idx+1}</div>` : `<button class="add" data-i="${i}">＋ Add</button>`)+
       `</div>`;
     }).join("");
   $("#results").classList.add("show");
 }
+
+// ---- recently added -------------------------------------------------------
+// The other way to find the paper you want : not by remembering enough of its
+// title to search for, but because you saved it into Zotero thirty seconds ago.
+//
+// /api/recent reads the reference manager ITSELF -- not output/cache/papers/,
+// not the dashboard index -- which is the whole reason this exists. A paper
+// only reaches the search above after a snapshot has pushed it into the papers
+// store and a reindex has read it, so until then searching for it finds
+// nothing and the board can't have it. This path has it immediately, keyed the
+// way the pipeline will key it, so the row you add now is the same row once
+// everything else catches up.
+//
+// The hits go into the SAME `hits` array the search fills, so ＋ Add, ↵,
+// double-click, dragging a hit into the list and the arrow keys are all the
+// ones that were already there.
+const RECENT_KEY = "prma-sort-recent-n";
+const RECENT_NS  = [ 10, 25, 50 ];
+let recentN = 10, recentNote = "", recentBusy = false;
+try { recentN = Math.max(1, +localStorage.getItem(RECENT_KEY) || 10); } catch(e){}
+
+// "added 2h ago" — how recent a thing is, which is the only part of an added
+// stamp anyone reads here. The server sends UTC without a zone ( SQLite's
+// 'YYYY-MM-DD HH:MM:SS' ), so say so before parsing.
+function ago(stamp){
+  const t = Date.parse(String(stamp||"").replace(" ", "T") + "Z");
+  if(!t) return "";
+  const m = Math.max(0, (Date.now() - t) / 60000);
+  if(m < 2)    return "just now";
+  if(m < 60)   return `${Math.round(m)}m ago`;
+  if(m < 1440) return `${Math.round(m/60)}h ago`;
+  const d = Math.round(m/1440);
+  return d < 30 ? `${d}d ago` : String(stamp).slice(0,10);
+}
+// When it landed, and -- for the papers this is really for -- whether the rest
+// of prma has caught up with it yet. in_library false means the index has never
+// seen it : it's addable here, but nothing has read its PDF, so it arrives with
+// no modality tags and empty Code / Datasets cells until the pipeline runs.
+function recentBadges(h){
+  const m = META[h.key];
+  const when = ago(h.added);
+  // No separator before the badge : .hm is a flex row with a gap , so a " · "
+  // ending the text run is left dangling at the end of a line whenever the
+  // badge wraps under it.
+  const raw = m && m.in_library === false
+    ? `<span class="nyet" title="Not in the search index yet — nothing has read this paper, so it adds with no tags and empty Code / Datasets cells. Both fill themselves in once \` prma reindex \` has run.">not indexed yet</span>` : "";
+  return (when ? ` · ${esc(when)}` : "") + raw;
+}
+function recentHint(){
+  const more = RECENT_NS.filter(n=>n!==recentN)
+    .map(n=>`<a href="#" data-recent-n="${n}">${n}</a>`).join(" · ");
+  return `<div class="rhint">last ${hits.length} added to your library · ↵ or double-click adds · `+
+    `or drag one into the list &nbsp;&nbsp;show ${more}</div>`;
+}
+async function showRecent(){
+  if(recentBusy) return;
+  recentBusy = true;
+  const b = $("#recentbtn"), label = b.textContent;
+  b.textContent = "🆕 …";
+  let d;
+  try { d = await (await fetch(`/api/recent?limit=${recentN}`)).json(); }
+  catch(e){ d = { results: [], note: "Couldn't reach the server." }; }
+  finally { recentBusy = false; b.textContent = label; }
+  hits = d.results || []; hitIdx = 0; hitTotal = hits.length;
+  hitFuzzy = false; hitMode = "recent"; recentNote = d.note || "";
+  renderResults();
+  // The stamp and the links a row would be filled in from -- and, for a paper
+  // the index has never heard of, the in_library:false that says so. Landing
+  // after the list has been put away must not raise it again.
+  fetchMeta(hits.map(h=>h.key), true).then(()=>{
+    if(hitMode === "recent" && $("#results").classList.contains("show")) renderResults();
+  });
+}
+$("#recentbtn").addEventListener("click", ()=>{
+  // A second press puts it away, the way the button that opened it should.
+  if(hitMode === "recent" && $("#results").classList.contains("show")){ closeResults(); return; }
+  showRecent();
+});
+// "show 25 · 50" in the panel's own hint line, rather than another select in a
+// row that is already full. The choice is this browser's, like the search mode.
+$("#results").addEventListener("click", e=>{
+  const a = e.target.closest("[data-recent-n]");
+  if(!a) return;
+  e.preventDefault();
+  recentN = +a.dataset.recentN;
+  try { localStorage.setItem(RECENT_KEY, String(recentN)); } catch(e){}
+  showRecent();
+});
 function closeResults(){ $("#results").classList.remove("show"); hits = []; }
 function moveHit(delta){
   if(!hits.length) return;
@@ -1546,19 +2027,7 @@ document.addEventListener("drop", e=>{
   if(!t){ dragKey = dragHit = null; return; }
   e.preventDefault();
   if(dragKey) moveTo(dragKey, t.index);
-  else if(dragHit){
-    const hit = dragHit;
-    if(findItem(hit.key)) toast("Already on the board");
-    else {
-      const it = newItem(hit);
-      const m = META[hit.key];
-      if(m && m.mods){ it.tags = m.mods.slice(); sortTags(it); }
-      DOC.items.splice(Math.min(t.index, DOC.items.length), 0, it);
-      markDirty(); renderBoard(); renderCounts(); renderPaintbar();
-      fetchMeta([it.key], true);
-      if(hits.length) renderResults();
-    }
-  }
+  else if(dragHit) addPaper(dragHit, t.index);
   dragKey = dragHit = null;
 });
 document.addEventListener("dragend", ()=>{
@@ -1610,14 +2079,23 @@ $("#board").addEventListener("click", e=>{
     } else selectRow(row.dataset.key, e);
   }
 });
-$("#board").addEventListener("click", e=>{
-  const a = e.target.closest(".mdlink");
+// Links that open BEHIND this tab : the rendered Markdown, and every URL a
+// free-text cell turned into a link ( see linkifyCell ). Opening a repo or a
+// dataset record from a row you are in the middle of reading is not leaving the
+// board -- you want the tab waiting for you, not in front of you -- so it is
+// window.open + blur + focus back here rather than a plain target=_blank.
+// A modified click is left alone : ⌘ / Ctrl / middle-click already mean this,
+// and shift means a window.
+function openBehind(e){
+  const a = e.target.closest(".mdlink, .lnk a");
   if(!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button!==0) return;
   e.preventDefault();
   const w = window.open(a.href, "_blank");
   if(w){ try { w.blur(); } catch(err){} }
   window.focus();
-});
+}
+$("#board").addEventListener("click", openBehind);
+$("#stage").addEventListener("click", openBehind);
 // Notes + custom columns : written into the document on every keystroke, and
 // again on blur ( belt and braces -- anything that ever ends up in the box ends
 // up in the file ).
@@ -1660,7 +2138,23 @@ $("#board").addEventListener("focusin",  e=>{ if(e.target.matches(".numin")) e.t
 
 $("#board").addEventListener("input",  e=>{ if(e.target.matches("textarea[data-field]")) captureField(e.target); });
 $("#board").addEventListener("change", e=>{ if(e.target.matches("textarea[data-field]")) captureField(e.target); });
-$("#board").addEventListener("focusout", e=>{ if(e.target.matches("textarea[data-field]")) captureField(e.target); });
+$("#board").addEventListener("focusout", e=>{
+  if(!e.target.matches("textarea[data-field]")) return;
+  captureField(e.target);
+  // Leaving the box is when the link overlay is redrawn : a URL you just typed
+  // becomes a link, one you just deleted stops being one. Not on every
+  // keystroke -- the overlay is out of sight while you are in the box.
+  syncCellLink(e.target);
+});
+// A cell whose text is taller than its box scrolls ; the copy laid over it has
+// to scroll with it or the two come apart. Captured, because scroll doesn't
+// bubble. Both surfaces, since the shelf draws the same cell.
+[ "#board" , "#stage" ].forEach(sel=>$(sel).addEventListener("scroll", e=>{
+  const ta = e.target;
+  if(!ta.matches || !ta.matches("textarea[data-field]")) return;
+  const lnk = ta.nextElementSibling;
+  if(lnk && lnk.classList.contains("lnk")) lnk.scrollTop = ta.scrollTop;
+}, true));
 
 // chip inputs -> autocomplete
 document.addEventListener("focusin", e=>{ if(e.target.matches(".chipin:not(#newtag)")) acOpen(e.target); });
@@ -1848,6 +2342,7 @@ $("#colhead").addEventListener("click", e=>{
   if(DOC.columns.length===1){ toast("Keep at least one column"); return; }
   if(!confirm(`Delete the “${col.label}” column and everything typed in it?`)) return;
   DOC.columns = DOC.columns.filter(x=>x.id!==col.id);
+  DOC.options.fold_cols = (DOC.options.fold_cols||[]).filter(id=>id!==col.id);
   DOC.items.forEach(it=>{ delete it.fields[col.id]; });
   staged().forEach(it=>{ if(it.fields) delete it.fields[col.id]; });
   markDirty(); renderAll();
@@ -1884,8 +2379,11 @@ $("#results").addEventListener("dblclick", e=>{
   e.preventDefault();
   addPaper(hits[+h.dataset.i]);
 });
-document.addEventListener("click", e=>{ if(!e.target.closest(".searchwrap")) closeResults(); });
+// Clicking away puts the hits list down -- but not the button that raises it :
+// its own handler would otherwise be undone by this one a moment later.
+document.addEventListener("click", e=>{ if(!e.target.closest(".searchwrap,#recentbtn")) closeResults(); });
 $("#filter").addEventListener("input", applyFilter);
+$("#filter").addEventListener("search", applyFilter);   // the ✕ ( and Esc ) clearing it
 // Two filters, ANDed : the text box, and the set of tags picked in the tag bar
 // ( 🔎 Filter ). A row hidden by either drops out of the selection too, so the
 // chips never tag a paper you can't see.
@@ -1896,14 +2394,16 @@ function matchesTags(it){
   return filterAll ? want.every(w=>have.includes(w)) : want.some(w=>have.includes(w));
 }
 function applyFilter(){
-  const q = lc($("#filter").value.trim());
+  const q = $("#filter").value.trim();
   let shown = 0, pruned = false;
   $$(".row").forEach(row=>{
     const f = findItem(row.dataset.key);
     if(!f) return;
-    const hay = q ? lc([ f.it.title, f.it.key, f.it.doi, (f.it.tags||[]).join(" "),
-      Object.values(f.it.fields||{}).join(" ") ].join(" ")) : "";
-    const hide = (q && !hay.includes(q)) || !matchesTags(f.it);
+    // textHas ( /static/common.js ) : a title pasted from a PDF -- curly quotes,
+    // a line break -- still finds the row.
+    const hay = q ? [ f.it.title, f.it.key, f.it.doi, (f.it.tags||[]).join(" "),
+      Object.values(f.it.fields||{}).join(" ") ].join(" ") : "";
+    const hide = (q && !textHas(hay, q)) || !matchesTags(f.it);
     row.classList.toggle("hide", hide);
     if(hide){ if(SEL.delete(row.dataset.key)) pruned = true; }
     else shown++;
@@ -1920,7 +2420,7 @@ $("#tagfilter").addEventListener("click", ()=>{
   $("#tagfilter").classList.toggle("on", filtering);
   $("#tagfilter").textContent = filtering ? "🔎 Filtering" : "🔎 Filter";
   $("#tagfilterany").style.display = filtering ? "" : "none";
-  applyFilter(); renderPaintbar(); syncHeadOffset();
+  applyFilter(); renderPaintbar();
 });
 $("#tagfilterany").addEventListener("click", ()=>{
   filterAll = !filterAll;
@@ -2039,36 +2539,85 @@ $("#pulltiers").addEventListener("click", async ()=>{
     toast(`Pulled ${n} paper(s) from the tier list`);
   });
 });
-$("#toggleTheme").addEventListener("click", ()=>{
-  const next = document.documentElement.dataset.theme==="dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("prma-theme", next); } catch(e){}
-  labelTheme();
-});
-function labelTheme(){ $("#toggleTheme").textContent = document.documentElement.dataset.theme==="dark" ? "☀ Light" : "🌙 Dark"; }
+// Labels the header button and persists a flip ( /static/common.js ). One
+// setting shared by every prma page.
+initTheme();
+
+// ---- the header : a pinned bar, and the tools that scroll away ------------
+// A long list needs the window, so only the bar ( <header> ) is pinned : the
+// board, its counts, the links to the other pages, the note on what you're in
+// the middle of, save state. Everything else is #tools -- what happens to the
+// board, the search, the tag bar. At the top of the page it sits under the bar
+// as part of the page, so it scrolls away with the list instead of riding over
+// it.
+//
+// / brings the search back from anywhere down the list : #tools drops down over
+// the list -- its slot keeps its height, so nothing under it moves -- and puts
+// itself away the moment you scroll the list by hand ( unless you're typing in
+// it ), on Esc, or when you scroll back up to where it lives. A search you're
+// in the middle of follows you the same way : adding a paper scrolls to its
+// row, and the next one is likely a keystroke away.
+const TOOLS = $("#tools"), SLOT = $("#toolslot");
+const toolsOpen = () => TOOLS.classList.contains("float");
+const toolsAway = () => SLOT.getBoundingClientRect().top < $("header").getBoundingClientRect().bottom - 1;
+const typingInTools = () => TOOLS.contains(document.activeElement) &&
+  /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+function floatTools(on){
+  if(on === toolsOpen()) return;
+  if(on){ SLOT.style.height = SLOT.offsetHeight + "px"; TOOLS.classList.add("float"); }
+  else  { TOOLS.classList.remove("float"); SLOT.style.height = ""; }
+  // Whatever scrolls a row into view while they're down -- adding a paper,
+  // sending a row to a number -- has to land it below them, not under them.
+  // Layout values, not the box on screen : that's still sliding in.
+  document.documentElement.style.scrollPaddingTop = on ? (TOOLS.offsetTop + TOOLS.offsetHeight + 8) + "px" : "";
+}
+let toolsFrame = 0;
+window.addEventListener("scroll", ()=>{
+  if(toolsFrame) return;
+  toolsFrame = requestAnimationFrame(()=>{
+    toolsFrame = 0;
+    if(toolsOpen()){ if(!toolsAway()) floatTools(false); }
+    else if(toolsAway() && $("#results").classList.contains("show") && document.activeElement === $("#q")) floatTools(true);
+  });
+}, { passive:true });
+// Put away by the list being scrolled BY HAND -- a wheel or a swipe outside the
+// tools -- not by any scroll at all : adding a paper scrolls to its row, and
+// that shouldn't take the search away from under you.
+function stowTools(e){
+  if(!toolsOpen() || TOOLS.contains(e.target) || typingInTools()) return;
+  closeResults();
+  floatTools(false);
+}
+window.addEventListener("wheel", stowTools, { passive:true });
+window.addEventListener("touchmove", stowTools, { passive:true });
 
 document.addEventListener("keydown", e=>{
   if(e.key==="Escape"){
+    // The hits list goes first, then the tools if / brought them down ; the next Esc is
+    // the one that stops painting or clears the selection. Typing in the search
+    // box, its own handler has already closed the list by the time this runs --
+    // this is the one that reaches a list raised by 🆕 Recently added, where
+    // the focus is on a button rather than in the box.
+    if($("#results").classList.contains("show")){ closeResults(); return; }
+    if(toolsOpen()){ floatTools(false); return; }
     if(armed){ armed = null; renderPaintbar(); }
     else clearSelection();
   }
   if(e.key==="/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){
-    e.preventDefault(); $("#q").focus(); $("#q").select();
+    e.preventDefault();
+    if(toolsAway()) floatTools(true);
+    $("#q").focus({ preventScroll:true }); $("#q").select();
   }
   if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); }
 });
 window.addEventListener("beforeunload", e=>{ if(dirty){ e.preventDefault(); e.returnValue = ""; } });
-window.addEventListener("resize", syncHeadOffset);
 
 // ---- CSV ------------------------------------------------------------------
 // #, DOI_or_Key, Title, Year, Tags, <columns…>, MD_File. Anything else in an
 // imported file becomes its own free-text column, so the hand-made sheets ( and
 // the tier page's exports, Tier column and all ) come in without losing
 // anything ; Modalities / Section_Tags columns merge into the tag list.
-const csvCell = v => {
-  const s = (v==null ? "" : String(v));
-  return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
-};
+/* csvCell is in /static/common.js -- one copy for both boards , /code and /datasets. */
 function toCSV(){
   const head = [ "#","DOI_or_Key","Title","Year","Tags" ]
     .concat(DOC.columns.map(c=>c.label)).concat([ "MD_File" ]);
@@ -2082,13 +2631,11 @@ function toCSV(){
   });
   return lines.join("\n");
 }
+// saveCSV ( /static/common.js ) , not a hand-rolled anchor : it is the one
+// place the UTF-8 BOM goes on, and without it Excel reads every em dash this
+// board writes into a Datasets cell as ` ‚Äî `.
 $("#exportbtn").addEventListener("click", ()=>{
-  const blob = new Blob([ toCSV() ], { type:"text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `prma-sort-${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a); a.click();
-  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  saveCSV(toCSV(), `prma-sort-${new Date().toISOString().slice(0,10)}.csv`);
 });
 function parseCSV(text){
   const rows = []; let row = [], field = "", q = false, i = 0;
@@ -2130,7 +2677,7 @@ function docFromCSV(rows, merge){
   });
   const doc = merge
     ? JSON.parse(JSON.stringify(DOC))
-    : { version:1, updated_at:"", options:{ auto_move: !!DOC.options.auto_move }, columns:[], items:[],
+    : { version:1, updated_at:"", options: JSON.parse(JSON.stringify(DOC.options)), columns:[], items:[],
         // "Replace everything" replaces the LIST. The staging shelf is not the
         // list -- it is references you haven't triaged yet -- so it survives ,
         // the same way the tag vocabulary below does.
@@ -2168,44 +2715,429 @@ function docFromCSV(rows, merge){
   }));
   return { doc, added, updated };
 }
+// ---- importing : a CSV file, or a Google Sheet by its link ----------------
+// Two ways in, one importer. A board export ( it always carries MD_File ) or a
+// hand-made sheet gets the merge / replace choice it always had. The shared
+// Google Sheet -- this board's export grown with papers of its own and the
+// Methods summary / Datasets / Code columns -- never takes anything away ( see
+// mergeSheet ) : it brings papers, tags and text in, and changes what's already
+// here only where you say so, column by column. Read by its link it brings the
+// links behind its cells too ( applyLinks ) ; a CSV download has only the text.
 $("#importbtn").addEventListener("click", ()=>{
-  const inp = document.createElement("input");
-  inp.type = "file"; inp.accept = ".csv,text/csv";
-  inp.onchange = async ()=>{
-    const file = inp.files && inp.files[0];
-    if(!file) return;
-    let rows;
-    try { rows = parseCSV(await file.text()); }
-    catch(e){ toast("Could not read that file"); return; }
-    if(rows.length < 2){ toast("That CSV has no rows"); return; }
-    sheet(`
-      <h3>Import ${rows.length-1} row(s) from ${esc(file.name)}</h3>
-      <p>Columns found: ${rows[0].filter(Boolean).map(h=>`<kbd>${esc(h)}</kbd>`).join(" ")}</p>
-      <p><b>Tags</b> / <b>Modalities</b> columns merge into each paper's tag list; everything else
-         becomes its own free-text column. Rows already on the board are updated in place, and the
-         file's row order becomes the list order.</p>
-      <div class="btns">
-        <button data-act="cancel">Cancel</button>
-        <button data-act="merge">Merge into this board</button>
-        <button data-act="replace">Replace everything</button>
-      </div>`, act=>{
-      if(act==="cancel" || !act) return;
-      const r = docFromCSV(rows, act==="merge");
-      DOC = r.doc;
-      markDirty(); renderAll();
-      fetchMeta(DOC.items.map(it=>it.key), true).then(()=>{
-        let n = 0;
-        DOC.items.forEach(it=>{
-          const m = META[it.key];
-          if(!it.tags.length && m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); m.mods.forEach(rememberTag); n++; }
-        });
-        if(n){ markDirty(); renderAll(); }
-        toast(`Imported — ${r.added} added, ${r.updated} updated${n?`, ${n} auto-tagged`:""}`, 4200);
-      });
-    });
+  if(guard()) return;
+  sheet(`
+    <h3>Import a CSV or a Google Sheet</h3>
+    <p>Paste a <b>Google Sheets link</b> — the sheet has to be shared as <i>Anyone with the link</i>
+       — or drop a <kbd>.csv</kbd>. By its link a sheet brings in the <b>links behind its cells</b>
+       too; a sheet downloaded with <i>File → Download → CSV</i> carries only their text.</p>
+    <input type="text" id="sheeturl" autocomplete="off" spellcheck="false"
+      placeholder="https://docs.google.com/spreadsheets/d/…" value="${esc(DOC.options.sheet_url||"")}">
+    <div class="drop" id="csvdrop">or drop a <b>.csv</b> here, or <a href="#" id="csvpick">choose a file</a></div>
+    <div class="btns">
+      <button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="fetch">Read the sheet</button>
+    </div>`, act=>{
+    if(act !== "fetch") return;
+    const url = (($("#sheeturl")||{}).value || "").trim();
+    if(!url){ toast("Paste a sheet link, or drop a .csv"); return; }
+    fetchSheet(url);
+  });
+  const pick = $("#csvpick"), drop = $("#csvdrop"), inp = $("#sheeturl");
+  inp.onkeydown = ev=>{
+    if(ev.key !== "Enter") return;
+    ev.preventDefault();
+    $("#overlay").classList.remove("show");
+    if(inp.value.trim()) fetchSheet(inp.value.trim());
   };
-  inp.click();
+  pick.onclick = ev=>{
+    ev.preventDefault();
+    const fi = document.createElement("input");
+    fi.type = "file"; fi.accept = ".csv,text/csv";
+    fi.onchange = ()=>{ const f = fi.files && fi.files[0]; if(f) csvFile(f); };
+    fi.click();
+  };
+  // Same as the refs panel's drop : the page's own drag handlers bail on a drag
+  // they didn't start, so only the browser's "open the file" default to beat.
+  drop.ondragover  = ev=>{ ev.preventDefault(); ev.stopPropagation(); drop.classList.add("over"); };
+  drop.ondragleave = ()=> drop.classList.remove("over");
+  drop.ondrop = ev=>{
+    ev.preventDefault(); ev.stopPropagation(); drop.classList.remove("over");
+    const f = ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if(f) csvFile(f);
+  };
+  inp.focus(); inp.select();
 });
+function importFailed(what, why){
+  sheet(`<h3>Could not read ${esc(what)}</h3><p>${esc(why)}</p>
+    <div class="btns"><button data-act="ok">OK</button></div>`);
+}
+// The server fetches it ( src/db/gsheet.py ) -- docs.google.com sends the page
+// no CORS headers, so the browser can't.
+async function fetchSheet(url){
+  toast("Reading the sheet…", 20000);
+  let d;
+  try {
+    d = await (await fetch("/api/sheet/csv", { method:"POST",
+      headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ url }) })).json();
+  } catch(e){ toast("Could not reach the server", 4000); return; }
+  $("#toast").classList.remove("show");
+  if(!d || !d.ok){ importFailed("that sheet", (d && d.error) || "no answer from the server"); return; }
+  importRows(d.rows || parseCSV(d.csv || ""), "the Google Sheet", url,
+    { links: d.links || null, why: d.links_error || (d.links ? "" : "the server sent none") });
+}
+async function csvFile(f){
+  $("#overlay").classList.remove("show");
+  let rows;
+  try { rows = parseCSV(await f.text()); }
+  catch(e){ importFailed(f.name, "it isn't a text file"); return; }
+  importRows(rows, f.name, "");
+}
+// The Google Sheet's own columns. A file carrying any of them -- and no MD_File,
+// which every prma export writes -- is that sheet, downloaded.
+const H_SHEET = /^(methods?[_ ]?summary|methods?[_ ]?evidence|added[_ ]?by|datasets?|code)$/i;
+// ... and the ones left out of an add-only import unless you tick them : the
+// sheet's Notes are somebody else's notes, not this board's.
+const H_SKIP  = /^(notes?|added[_ ]?by|methods?[_ ]?evidence)$/i;
+function importRows(rows, name, url, got){
+  if(rows.length < 2){ importFailed(name, "there are no rows in it"); return; }
+  const head = rows[0].map(h=>String(h||"").trim());
+  const sheetish = !head.some(h=>H_MD.test(h)) && head.some(h=>H_SHEET.test(h));
+  if(url || sheetish) sheetImport(rows, name, url, applyLinks(rows, got));
+  else csvImport(rows, name);
+}
+// The links behind a sheet's cells, written into its rows' text ( linkedCell )
+// before anything is compared or merged -- so the dialog's counts and the
+// import itself both see the linked text. Only in the free-text columns : the
+// ones that say which paper a row IS stay as they read, since a title that
+// links to its publisher is still just the title. Returns what the import
+// dialog says about them : { byCol : { column index : cells }, why }.
+function applyLinks(rows, got){
+  const byCol = {};
+  if(!got || !got.links) return { byCol, why: (got && got.why) || "" };
+  const free = new Set(sheetColumns(rows[0].map(h=>String(h||"").trim())).extra.map(x=>x.i));
+  got.links.forEach((cells, r)=>{
+    if(!r || !cells || !rows[r]) return;
+    Object.keys(cells).forEach(j=>{
+      if(!free.has(+j)) return;
+      rows[r][j] = linkedCell(cells[j]);
+      byCol[j] = (byCol[j]||0) + 1;
+    });
+  });
+  return { byCol, why: "" };
+}
+function csvImport(rows, name){
+  sheet(`
+    <h3>Import ${rows.length-1} row(s) from ${esc(name)}</h3>
+    <p>Columns found: ${rows[0].filter(Boolean).map(h=>`<kbd>${esc(h)}</kbd>`).join(" ")}</p>
+    <p><b>Tags</b> / <b>Modalities</b> columns merge into each paper's tag list; everything else
+       becomes its own free-text column. Rows already on the board are updated in place, and the
+       file's row order becomes the list order. <b>Column by column…</b> instead lets you say,
+       for each column, whether it only fills empty cells here or overwrites them — and never
+       removes anything.</p>
+    <div class="btns">
+      <button data-act="cancel">Cancel</button>
+      <button data-act="addonly">Column by column…</button>
+      <button data-act="merge">Merge into this board</button>
+      <button data-act="replace">Replace everything</button>
+    </div>`, act=>{
+    if(act==="cancel" || !act) return;
+    if(act==="addonly"){ sheetImport(rows, name, "", applyLinks(rows)); return; }
+    const r = docFromCSV(rows, act==="merge");
+    DOC = r.doc;
+    markDirty(); renderAll();
+    autoTagImported(DOC.items).then(n=>
+      toast(`Imported — ${r.added} added, ${r.updated} updated${n?`, ${n} auto-tagged`:""}`, 4200));
+  });
+}
+// An imported row that arrived with no tags at all takes its ` prma modalities `
+// stamp, the same courtesy a paper added from search gets.
+async function autoTagImported(items){
+  await fetchMeta(items.map(it=>it.key), true);
+  let n = 0;
+  items.forEach(it=>{
+    const m = META[it.key];
+    if(!(it.tags||[]).length && m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); m.mods.forEach(rememberTag); n++; }
+  });
+  if(n){ markDirty(); renderAll(); }
+  return n;
+}
+function sheetColumns(head){
+  const ix = { key:-1, doi:-1, title:-1, year:-1, tags:[], extra:[] };
+  head.forEach((h,i)=>{
+    if(H_KEY.test(h)) ix.key = i;
+    else if(H_DOI.test(h)) ix.doi = i;
+    else if(H_TITLE.test(h)) ix.title = i;
+    else if(H_YEAR.test(h)) ix.year = i;
+    else if(H_TAGS.test(h)) ix.tags.push(i);
+    else if(H_MD.test(h) || H_NUM.test(h)) { /* derived — not stored */ }
+    else if(h) ix.extra.push({ i, label:h });
+  });
+  return ix;
+}
+// Onto a copy of `doc` -- the caller swaps it in, so the dialog can dry-run it
+// for its counts and the toast can undo it by swapping back :
+//   * a paper the sheet has and the board hasn't is added ( key, DOI, title --
+//     every way this board already knows a paper, see haveIndex ) ;
+//   * a paper both have takes the sheet's text in each chosen column, the way
+//     that column's mode says :
+//       fill -- only where ITS cell is empty ; a cell with anything in it is
+//               left exactly as it is, and counted ;
+//       over -- wherever the two differ, the sheet's text replaces this one's ;
+//     and its tags the way how.tags says : merge adds the ones it's missing,
+//     replace makes them the sheet's. Either way the sheet has to SAY
+//     something : an empty cell there never clears one here, and a row with
+//     no tags there never strips a paper's tags here ;
+//   * a paper waiting on the staging shelf that the sheet lists moves onto the
+//     list, where the sheet says it belongs ;
+//   * nothing is removed : a paper only this board has stays, riding with the
+//     row above it when the sheet's order is taken.
+// how = { cols:[ { i:header index, mode:"fill"|"over" }… ], tags:""|"merge"|"replace",
+//         order:"sheet"|"append", url }
+// n.col[ header index ] / n.tagGain / n.tagDiffer count, for papers already
+// here, what each choice WOULD touch whichever mode it's in -- what the dialog
+// labels its choices with.
+function mergeSheet(src, rows, how){
+  const doc  = JSON.parse(JSON.stringify(src));
+  const head = rows[0].map(h=>String(h||"").trim());
+  const ix   = sheetColumns(head);
+  doc.options = doc.options || {};
+  doc.staging = doc.staging || [];
+  // A chosen column lands in the board's column of the same name when there is
+  // one ( Notes -> Notes ) ; anything new is added FOLDED, so the board keeps its
+  // width until you ask for them.
+  const modes = new Map(how.cols.map(c=>[ c.i, c.mode ]));
+  const take = ix.extra.filter(x=>modes.has(x.i)).map(x=>{
+    const have = doc.columns.find(c=>c.id===slug(x.label) || lc(c.label)===lc(x.label));
+    if(have) return { i:x.i, id:have.id, mode:modes.get(x.i) };
+    let id = slug(x.label) || "col";
+    while(doc.columns.some(c=>c.id===id)) id += "-2";
+    doc.columns.push({ id, label:x.label });
+    doc.options.fold_cols = (doc.options.fold_cols||[]).concat(id);
+    doc.items.concat(doc.staging).forEach(it=>{ (it.fields = it.fields||{})[id] = ""; });
+    return { i:x.i, id, mode:modes.get(x.i) };
+  });
+  // "fmri" in the sheet is the board's "fMRI" : a tag takes the spelling the
+  // board already uses, so importing never splits one tag into two.
+  const canon = new Map(tagOptions().map(v=>[lc(v), v]));
+  const tagName = t => { if(!canon.has(lc(t))) canon.set(lc(t), t); return canon.get(lc(t)); };
+  // A key that IS a DOI answers as a DOI too : otherwise a sheet row carrying
+  // only that DOI would mint a second row under the same key, and the server
+  // keeps the first of two -- which, in the sheet's order, could be the new one.
+  const known = new Map();
+  const index = it=>{
+    const put = k => { if(k && !known.has(k)) known.set(k, it); };
+    put(lc(it.key));
+    if(it.doi) put("doi:"+lc(it.doi));
+    if(/^10\./.test(it.key||"")) put("doi:"+lc(it.key));
+    const t = ntitle(it.title);
+    if(t) put("t:"+t);
+  };
+  doc.items.forEach(index);          // the list first : it wins a tie with the shelf
+  doc.staging.forEach(index);
+  const onList = new Set(doc.items), onShelf = new Set(doc.staging);
+  const cell = (r,i) => (i>=0 && i<r.length) ? String(r[i]).trim() : "";
+  const seq = [], took = new Set();
+  const n = { added:0, have:0, shelf:0, filled:0, replaced:0, kept:0, tagged:0,
+              col:{}, tagGain:0, tagDiffer:0 };
+  rows.slice(1).forEach(r=>{
+    const key = cell(r, ix.key), title = cell(r, ix.title);
+    const doi = cell(r, ix.doi) || (/^10\./.test(key) ? key : "");
+    if(!key && !doi && !title) return;
+    let it = (key && known.get(lc(key))) || (doi && known.get("doi:"+lc(doi)))
+          || (title && known.get("t:"+ntitle(title))) || null;
+    if(it && took.has(it)) return;                  // the sheet lists it twice : first one wins
+    const year = parseInt(cell(r, ix.year), 10);
+    if(it){
+      n.have++;
+      if(onShelf.has(it)) n.shelf++;
+      if(!it.title && title) it.title = title;
+      if(it.year == null && !isNaN(year)) it.year = year;
+      if(!it.doi && doi) it.doi = doi;
+    } else {
+      it = { key: key || doi || ("loose-" + (slug(title) || Math.random().toString(36).slice(2,9))),
+             title, authors:"", doi, wid:"", pdf:"", year: isNaN(year) ? null : year, journal:"",
+             tags:[], fields: Object.fromEntries(doc.columns.map(c=>[c.id,""])), added_at: nowISO() };
+      n.added++;
+      index(it);
+    }
+    took.add(it);
+    const here = onList.has(it) || onShelf.has(it);
+    if(how.tags){
+      it.tags = it.tags || [];
+      const want = [];
+      ix.tags.forEach(i=>splitList(cell(r,i)).map(tagName).forEach(t=>{ if(!hasTag({ tags:want },t)) want.push(t); }));
+      const gain = want.filter(t=>!hasTag(it,t));
+      const differ = gain.length > 0 || (want.length > 0 && it.tags.some(t=>!hasTag({ tags:want },t)));
+      if(here){ if(gain.length) n.tagGain++; if(differ) n.tagDiffer++; }
+      if(how.tags === "replace" && differ){ it.tags = want; if(here) n.tagged++; }
+      else if(how.tags === "merge" && gain.length){ it.tags = it.tags.concat(gain); if(here) n.tagged++; }
+      sortTags(it);
+    }
+    take.forEach(c=>{
+      const v = cell(r, c.i), f = it.fields = it.fields || {};
+      if(!v) return;
+      const was = String(f[c.id]||"").trim(), st = n.col[c.i] = n.col[c.i] || { fill:0, differ:0 };
+      if(!was){ f[c.id] = v; if(here){ st.fill++; n.filled++; } }
+      else if(was !== v){
+        st.differ++;
+        if(c.mode === "over"){ f[c.id] = v; n.replaced++; } else n.kept++;
+      }
+    });
+    seq.push(it);
+  });
+  doc.staging = doc.staging.filter(it=>!took.has(it));
+  if(how.order === "sheet"){
+    // The sheet's order, with every paper only this board has kept right under
+    // whichever of its old neighbours above it the sheet also has ( or at the
+    // top, when none of them are ) -- moved, never dropped.
+    const lead = [], under = new Map();
+    let anchor = null;
+    doc.items.forEach(it=>{
+      if(took.has(it)){ anchor = it; return; }
+      if(!anchor){ lead.push(it); return; }
+      if(!under.has(anchor)) under.set(anchor, []);
+      under.get(anchor).push(it);
+    });
+    doc.items = lead.concat(...seq.map(it=>[ it ].concat(under.get(it) || [])));
+  } else {
+    doc.items = doc.items.concat(seq.filter(it=>!onList.has(it)));
+  }
+  if(how.url) doc.options.sheet_url = how.url;
+  // The whole promise of this import, checked rather than assumed : every row
+  // that was on the list still is, and no two rows share a key.
+  const all = doc.items.concat(doc.staging);
+  const listed = new Set(doc.items.map(it=>it.key));
+  const ok = doc.items.length === src.items.length + n.added + n.shelf
+          && doc.staging.length === (src.staging||[]).length - n.shelf
+          && src.items.every(it=>listed.has(it.key))
+          && new Set(all.map(it=>it.key)).size === all.length;
+  return { doc, n, ok, fresh: seq.filter(it=>!onList.has(it) && !onShelf.has(it)) };
+}
+// What each choice in the import dialog would do to the papers already here,
+// in words, off the dry run's counts ( mergeSheet's n.col / n.tagGain /
+// n.tagDiffer ).
+function modeNote(mode, st){
+  if(!mode) return "not brought in";
+  const bits = [ `${st.fill} empty here get filled` ];
+  if(st.differ) bits.push(mode === "over" ? `${st.differ} that differ get overwritten`
+                                          : `${st.differ} that differ stay as they are`);
+  return bits.join(" · ");
+}
+function tagNote(mode, n){
+  return !mode ? "not brought in"
+    : mode === "replace" ? `${n.tagDiffer} paper(s) here get the sheet's tags instead of their own`
+                         : `${n.tagGain} paper(s) here gain the tags they're missing`;
+}
+// How many of the papers already on the list the sheet's order would MOVE :
+// all of them but the longest run the two orders already agree on ( a longest
+// increasing subsequence over where each one sits now ) -- so one paper
+// dragged from the bottom to the top counts as one, not as the whole list.
+function orderMoves(rows){
+  const now = new Map(DOC.items.map((it,i)=>[ it.key, i ]));
+  const seq = mergeSheet(DOC, rows, { cols:[], tags:"", order:"sheet" }).doc.items
+    .map(it=>now.get(it.key)).filter(i=>i != null);
+  const tails = [];
+  seq.forEach(x=>{
+    let lo = 0, hi = tails.length;
+    while(lo < hi){ const m = (lo + hi) >> 1; if(tails[m] < x) lo = m + 1; else hi = m; }
+    tails[lo] = x;
+  });
+  return seq.length - tails.length;
+}
+function sheetImport(rows, name, url, lk){
+  if(guard()) return;
+  const head = rows[0].map(h=>String(h||"").trim());
+  const ix = sheetColumns(head);
+  if(ix.key < 0 && ix.doi < 0 && ix.title < 0){
+    importFailed(name, "it has no DOI / key or Title column to match papers on");
+    return;
+  }
+  // One dry run with everything in : a column's counts don't depend on what the
+  // others are set to, so this labels every choice the dialog offers.
+  const dry = mergeSheet(DOC, rows, { cols: ix.extra.map(x=>({ i:x.i, mode:"fill" })),
+                                      tags:"merge", order:"append" }).n;
+  const stat = i => dry.col[i] || { fill:0, differ:0 };
+  const moves = orderMoves(rows);
+  const opts = (list, on) => list.map(([v,l])=>`<option value="${v}"${v===on?" selected":""}>${l}</option>`).join("");
+  const COL_MODES = [ ["", "leave out"], ["fill", "fill empty cells"], ["over", "overwrite"] ];
+  const TAG_MODES = [ ["", "leave out"], ["merge", "add missing"], ["replace", "replace"] ];
+  const choices = (ix.tags.length
+      ? [`<b>Tags</b><select data-tags>${opts(TAG_MODES, "merge")}</select><span class="cc">${esc(tagNote("merge", dry))}</span>`] : [])
+    .concat(ix.extra.map(x=>{
+      const on = H_SKIP.test(x.label) ? "" : "fill";
+      return `<b>${esc(x.label)}</b><select data-mode="${x.i}">${opts(COL_MODES, on)}</select>`+
+        `<span class="cc">${esc(modeNote(on, stat(x.i)))}</span>`;
+    }));
+  const linked = Object.keys(lk.byCol).map(i=>`${esc(head[i])} ${lk.byCol[i]}`);
+  const linkNote = !url
+      ? `<p>A downloaded CSV has only the text of its cells — import the sheet by its <b>link</b> to
+         bring in the links behind them too.</p>`
+    : linked.length
+      ? `<p>🔗 <b>The links behind the cells came in too</b> — ${linked.join(" · ")} cells — each linked
+         line as its full URL, with its label in front where the label says something the URL doesn't.</p>`
+    : lk.why
+      ? `<p class="warn">⚠ The links behind the cells couldn't be read ( ${esc(lk.why)} ) — this brings
+         in their text only.</p>` : "";
+  sheet(`
+    <h3>Import from ${esc(name)}</h3>
+    <p><b>${dry.added}</b> new paper(s) · <b>${dry.have - dry.shelf}</b> already on the board`+
+      (dry.shelf ? ` · <b>${dry.shelf}</b> on the staging shelf, which move onto the list` : "")+`.
+       New papers come in with everything below that isn't left out. For the papers already here
+       you choose what the sheet may change — and <b>nothing is ever removed</b>.</p>
+    ${linkNote}
+    <div class="sub">What the sheet brings in</div>
+    <div class="colmodes">${choices.join("") || `<span>Only the papers themselves — there are no other columns.</span>`}</div>
+    <p><b>Overwrite</b> takes the sheet's word only where it has one: an empty cell there never
+       clears one here, and the toast undoes the whole import. A column this board doesn't have
+       yet arrives <b>folded away</b> — <kbd>▸ Show Extra Columns</kbd> in the action row brings
+       it out.</p>
+    <div class="sub">Order</div>
+    <label class="opt"><input type="radio" name="sheetorder" value="append" checked>
+      <div><b>Keep this board's order</b> <span>— the new papers go on the end, in the sheet's order.</span></div></label>
+    <label class="opt"><input type="radio" name="sheetorder" value="sheet">
+      <div><b>Use the sheet's order</b> <span>— ${moves
+        ? `<b class="warnb">moves ${moves} of the ${DOC.items.length} papers here</b> to match it`
+        : "it already matches this board's"}. A paper only this board has stays under the row
+      it's under now.</span></div></label>
+    <div class="btns">
+      <button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="add">Import</button>
+    </div>`, act=>{
+    if(act !== "add") return;
+    const cols = $$("#sheet select[data-mode]").filter(s=>s.value).map(s=>({ i:+s.dataset.mode, mode:s.value }));
+    const tags = ($("#sheet select[data-tags]")||{}).value || "";
+    const ord  = ($("#sheet input[name=sheetorder]:checked")||{}).value || "append";
+    applySheet(rows, { cols, tags, order: ord, url });
+  }, true);
+  // Each choice says what it would do as you make it -- an overwrite turns its
+  // note amber, so the columns that will change things here stand out.
+  $$("#sheet select[data-mode], #sheet select[data-tags]").forEach(s=>{
+    s.onchange = ()=>{
+      const cc = s.nextElementSibling;
+      cc.textContent = s.dataset.tags != null ? tagNote(s.value, dry) : modeNote(s.value, stat(+s.dataset.mode));
+      cc.classList.toggle("over", s.value === "over" || s.value === "replace");
+    };
+  });
+}
+function applySheet(rows, how){
+  if(guard()) return;
+  const r = mergeSheet(DOC, rows, how);
+  if(!r.ok){ importFailed("that sheet", "the merge came out short of what this board already holds, so nothing was changed. Nothing has been saved."); return; }
+  const before = DOC;
+  DOC = r.doc;
+  DOC.items.concat(DOC.staging).forEach(it=>(it.tags||[]).forEach(rememberTag));
+  SEL.clear();
+  markDirty(); renderAll();
+  const k = r.n;
+  const msg = `Added ${k.added} new paper(s)`+(k.shelf?`, ${k.shelf} off the shelf`:"")+
+    ` · ${k.have - k.shelf} already here`+
+    (k.tagged ? `, ${k.tagged} ${how.tags === "replace" ? "had their tags replaced" : "gained tags"}` : "")+
+    (k.filled ? `, ${k.filled} cell(s) filled` : "")+
+    (k.replaced ? `, ${k.replaced} overwritten` : "")+
+    (k.kept ? ` · ${k.kept} cell(s) kept as they were` : "");
+  toast(msg, 12000, "Undo", ()=>{ DOC = before; markDirty(); renderAll(); toast("Import undone"); });
+  if(r.fresh.length) autoTagImported(r.fresh);
+}
 
 // ---- overlay + help -------------------------------------------------------
 function sheet(html, onAct, wide){
@@ -2226,12 +3158,36 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
     <li><b>One list, in your order</b>, numbered as you see it. Grab a row's <kbd>⠿</kbd> to drag it,
         or <b>type a number</b> into its box and press <kbd>↵</kbd> to send it straight to that
         position. Everything renumbers itself.</li>
+    <li><b>Two rows of tools, then the tags.</b> One row for what happens to the board — papers
+        in, papers out, the order, what tagging does, the columns, and what you're looking at
+        ( <kbd>🆕 Recently added</kbd>, <kbd>Filter the list…</kbd> ) — and one for finding a
+        paper. The links to the other pages, <kbd>?</kbd> and <kbd>🌙</kbd> ride up in the pinned
+        bar, which had a window's worth of space next to the save stamp doing nothing.</li>
+    <li><b>Only the top bar stays put</b> — the board, its counts, the other pages, the note on
+        what's filtered or selected, save state. The tools and the tag bar scroll away with the
+        list, so a long list gets the whole window. <kbd>/</kbd> brings the search back down over
+        the list from anywhere without losing your place, and a search you're in the middle of
+        follows you as you add from it; it goes away again when you scroll by hand ( unless
+        you're typing in it ), on <kbd>Esc</kbd>, or when you scroll back up to it.</li>
     <li><b>Search</b> ( <kbd>/</kbd> ) <b>matches titles</b>: type any piece of a title and the
         closest titles come back, best first — nothing has to match exactly, so a typo, a missing
         word or two words the wrong way round still land the paper ( pasting a DOI works too ).
         Switch the dropdown to <kbd>full text</kbd> for the dashboard's boolean search over whole
         papers. <kbd>↵</kbd> or a <b>double-click</b> adds the highlighted hit, already tagged from
-        its <code>prma modalities</code> stamp. Drag a hit in to drop it at an exact position.</li>
+        its <code>prma modalities</code> stamp, with its <b>Code</b> and <b>Datasets</b> filled in
+        from what <a href="/code">/code</a> and <a href="/datasets">/datasets</a> found for it — one
+        link per line, a named dataset as <kbd>name — its home page</kbd>. Only empty cells are
+        written. Drag a hit in to drop it at an exact position.</li>
+    <li><b>🆕 Recently added</b> is the other way to find a paper: the newest papers in your
+        reference manager, newest first, in the same hits list the search uses — so add them the
+        same way ( <kbd>↵</kbd>, a double-click, <kbd>＋ Add</kbd>, or drag one in ). It reads
+        <b>Zotero itself</b>, not the search index, which is the point: a paper reaches the search
+        above only after a snapshot has filed it and <code>prma reindex</code> has read it, and
+        until then searching for it finds nothing. This has it the moment you save it. One that
+        hasn't been through the pipeline yet says <kbd>not indexed yet</kbd> and comes in without
+        tags and with empty Code / Datasets cells — they fill themselves in once it has. Ten by
+        default; <kbd>show 25</kbd> / <kbd>50</kbd> in the list asks for more, and that choice is
+        this browser's.</li>
     <li><b>Where adds land</b> is the dropdown next to the search box: the bottom, the top, or
         <i>after last sorted</i> — right below the last row you placed by hand, so the part you've
         already ranked stays put and new papers queue under it.</li>
@@ -2243,6 +3199,9 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         <kbd>Esc</kbd> clears. A row's tags are always shown alphabetically, so a paper reads the
         same way every time. Tags you make are saved with the board and are still here after a
         restart.</li>
+    <li>The tag bar's own controls — <kbd>+ new tag</kbd>, <kbd>🔎 Filter</kbd>,
+        <kbd>🎨 Colors</kbd> — sit at the <b>end</b> of the chips rather than in front of them,
+        so they take whatever is left of the last line of chips instead of a line of their own.</li>
     <li><b>Rearrange the tag bar</b> by dragging a chip along it — put the modalities together,
         your own judgements next to each other, whatever grouping you think in. The order is
         saved with the board, so it's the same in every browser you open it in. A plain click
@@ -2259,13 +3218,40 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         the shelf</b>: the row flashes wherever it landed but the page doesn't chase it, so a pass
         down an imported list is one pass. A reference that turns out to be a paper you
         already have is matched to it ( <kbd>in library</kbd> ), arrives with all its links and
-        is pre-tagged from its Methods stamp; one matched on the title alone is flagged
+        is pre-tagged from its Methods stamp, Code and Datasets filled in the same way; one
+        matched on the title alone is flagged
         <kbd>fuzzy</kbd> so you can check it. The shelf is saved with the board, so a reload
         doesn't lose it.</li>
+    <li><b>⇩ Import CSV / Sheet</b> takes a <kbd>.csv</kbd> — this board's own export still merges
+        or replaces as it always did — or a <b>Google Sheet</b>: paste its link ( the sheet has to
+        be shared as <i>Anyone with the link</i> ). By its link a sheet brings in the <b>links
+        behind its cells</b> too — each linked line as its full URL, with its label in front where
+        the label says more than the URL does ( a dataset's name ) — where the CSV it downloads as
+        carries only the text. Papers this board hasn't got are added. For the ones it has, you
+        choose per column — <b>fill empty cells</b> ( the default ), <b>overwrite</b>, or leave it
+        out; the sheet's Notes stay out unless you pick them — and for tags <b>add missing</b> or
+        <b>replace</b>. Each choice says how many cells it would change before you import.
+        Overwrite takes the sheet's word only where it has one, and nothing is ever removed. Then
+        whether the list keeps <b>its own order</b> ( the default — new papers go on the end ) or
+        takes the sheet's, which the dialog counts in papers moved before you choose it. Import
+        again whenever the sheet changes: the link is remembered with the board, so it's one
+        click, and the toast undoes it.</li>
+    <li><b>Folded columns</b>: the columns a sheet brings in — Methods summary, Datasets, Code —
+        hold paragraphs, so they arrive folded away. <kbd>▸ Show Extra Columns</kbd>, at the end
+        of the action row, brings them out and the board scrolls sideways, with the number and the
+        paper held in place; <kbd>◂ Hide Extra Columns</kbd> folds them again. Which way round is
+        a setting of this browser, not of the board.</li>
     <li><b>Only show some of them</b>: <kbd>🔎 Filter</kbd> turns the tag bar into a filter — click
         tags and the board narrows to the papers carrying them ( <kbd>any</kbd> / <kbd>all</kbd>
-        switches whether one is enough ). The text box next to the search narrows further, on
-        anything typed anywhere in a row. Press <kbd>🔎</kbd> again to see everything.</li>
+        switches whether one is enough ). <kbd>Filter the list…</kbd>, at the end of the action
+        row, narrows further on anything typed anywhere in a row. Press <kbd>🔎</kbd> again to
+        see everything.</li>
+    <li><b>Links in a cell are live.</b> Any URL you type — or that <kbd>＋ Add</kbd> and the sheet
+        import write into <b>Code</b> and <b>Datasets</b> — is drawn as a link, and clicking it
+        opens the page <b>in a tab behind this one</b>, so you can open three repos in a row
+        without losing your place. The cell is still an ordinary box of text: click the words
+        rather than the link and the caret lands where you clicked, type and delete exactly as
+        before, and what gets saved and exported is the plain text you typed, links and all.</li>
     <li><b>Colours</b>: every tag gets its own pastel, so a row's chips are a pattern you can read
         at a glance. A new tag takes the next unused colour by itself ; <kbd>🎨 Colours</kbd> is
         where you change them, and they're saved with the board.</li>
@@ -2292,8 +3278,7 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
   </ul>
   <div class="btns"><button data-act="ok">Got it</button></div>`));
 
-labelTheme();
-syncHeadOffset();
+trackHeadHeight();     // --headh, for the column head pinned under the bar ( /static/common.js )
 try { $("#smode").value = localStorage.getItem("prma-search-mode") || "title"; } catch(e){}
 labelMode();
 // A server that isn't there yet -- still starting, or restarting after a crash
@@ -2304,7 +3289,7 @@ function boot(){
   loadDoc().then(()=>{
     labelAutoMove();
     $("#addwhere").value = DOC.options.add_where || "bottom";
-    syncHeadOffset(); pollRev();
+    pollRev();
     offerDraft();     // anything the last session couldn't get to the server
   }).catch(()=>{
     $("#savestate").textContent = "server not answering — retrying";

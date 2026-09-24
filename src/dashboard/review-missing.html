@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · review-missing</title>
+<!-- The chrome every prma page shares : the pre-paint theme restore ( so nothing
+     flashes ) , then the palette and the header / button / link styling. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
+<!-- The look of a screened paper list , shared with /review : the chipbar , the
+     criteria disclosure , the expandable paper row and the uniform field grid.
+     Both pages screen papers against the same three criteria and both draw the
+     result the same way ; only the pool differs. -->
+<link rel="stylesheet" href="/static/review.css">
+<!--
+  The /review-missing page : the same three criteria , run over the papers you
+  do NOT have.
+
+  /review is the read of a judgement -- every paper somebody put on /sort or
+  picked a figure from, screened against its own full text. This is the read of
+  a POOL nobody has judged : the dashboard's "All missing" tab, every work your
+  library cites plus every work that cites it, ~140,000 papers, screened on the
+  only text that exists for them -- a title and an OpenAlex abstract.
+
+  THE ONE THING THIS PAGE MUST NOT DO IS LOOK LIKE /review. It reads the same
+  because it IS the same renderer, and that is a hazard: a row here has been
+  screened on 1,500 characters, not 50,000. So the calibration sits at the TOP of
+  the page in numbers rather than in a footnote — how much of what it lets
+  through the full-text screen also included, and how much of what the full-text
+  screen included it finds — and the word on every count is CANDIDATES, never
+  "included". Those numbers come out of the document (meta.screen), and the
+  recall half of them is re-measured on every build, so the page can never end up
+  advertising a score the screen no longer earns.
+
+  WHAT IS DIFFERENT FROM /review, and why:
+
+    only filled fields are drawn.  An abstract states a backbone and almost
+      never a TR. Drawing forty-five boxes that say "the abstract does not say
+      it" buries the three that do, so a group renders what it HAS and then
+      says how many it hasn't. ( /review draws all of them, correctly: there,
+      a blank is a fact about a paper somebody read. )
+
+    the excluded are a tally, not a table.  97,000 rows is the pool again.
+      What is listed instead is the NEAR MISSES — papers that satisfied two
+      criteria and failed exactly one — which is /review's "borderline" idea
+      at this scale, and where a false negative hides.
+
+    connectivity leads.  Every row says how many of YOUR papers connect to it.
+      That is the one thing this pool knows that a literature search does not,
+      and it is the default sort: forty of your papers cite this and you have
+      never read it.
+
+  Paper bodies are built ON EXPAND, like /review's, for the same reason.
+-->
+<style>
+  /* ---- what this page has that /review does not ---------------------------
+     A permanent explainer ( not a dismissible banner : the caveat does not stop
+     being true once you have read it ) , the pool badges , the connectivity
+     stamp on each row , and the near-miss table. */
+  .calib {
+    border:1px solid var(--note-line); background:var(--note-bg); border-radius:10px;
+    padding:13px 16px; margin-bottom:15px; font-size:12.5px; line-height:1.6;
+  }
+  .calib b { font-size:13px; }
+  .calib .nums { display:flex; gap:22px; flex-wrap:wrap; margin:9px 0 7px; }
+  .calib .nums div { color:var(--muted); }
+  .calib .nums b { color:var(--fg); font-size:16px; font-variant-numeric:tabular-nums; display:block; }
+  .calib .say { color:var(--muted); }
+  .calib a { color:var(--accent); }
+
+  /* How many of your papers connect to this one -- the number this pool is
+     ranked by , so it sits where the eye lands first rather than in a tooltip. */
+  .conn {
+    flex:none; text-align:center; width:40px; padding-top:1px;
+    font-variant-numeric:tabular-nums;
+  }
+  .conn b { display:block; font-size:14px; font-weight:600; }
+  .conn span { display:block; font-size:9.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; }
+  .conn.zero b { color:var(--muted); font-weight:400; }
+
+  .tag.pool { background:var(--pri2); color:var(--pri2-fg); }
+
+  /* A group that drew only its filled fields says what it left out. */
+  .blk .unstated { color:var(--faint); font-size:11.5px; margin-top:6px; font-style:italic; }
+
+  /* The exclusion tally : a reason , a count , and a bar you can compare by eye. */
+  .tally { display:grid; grid-template-columns:1fr auto; gap:3px 12px; font-size:12.5px; align-items:center; }
+  .tally .r { color:var(--prose); }
+  .tally .n { color:var(--muted); font-variant-numeric:tabular-nums; text-align:right; }
+  .tally .bar { grid-column:1 / -1; height:4px; border-radius:3px; background:var(--panel2); overflow:hidden; margin-bottom:5px; }
+  .tally .bar i { display:block; height:100%; background:var(--edge); }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma · review-missing</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the search dashboard — the same pool this page screens, unscreened">← Dashboard</a>
+    <a class="navlink" href="/review" title="The same three criteria over the papers you DO have, screened on their full text">✎ Review</a>
+    <a class="navlink" href="/sort" title="The list — one numbered list you drag into order">⬒ Sort</a>
+    <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for">{ } Code</a>
+    <a class="navlink" href="/datasets" title="The public data every paper stands on">⛁ Datasets</a>
+    <button id="export-json" title="Download the candidates currently shown, as JSON">⇧ JSON</button>
+    <button id="export-csv"  title="Download the candidates currently shown, one row each, as CSV">⇧ CSV</button>
+    <button id="rebuild" title="Re-screen the whole missing pool as it stands now ( minutes )">↻ Rebuild</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+  <div class="controls" id="controls" hidden>
+    <input type="search" id="q" placeholder="Search title, author, model, dataset…  ( / )" autocomplete="off">
+    <div class="chipbar" id="pri-chips"><span class="lbl">Priority</span></div>
+    <div class="sep"></div>
+    <div class="chipbar" id="flag-chips"></div>
+    <div class="grow"></div>
+    <select id="sortby" title="Order of the candidate list. 'Connections' is how many of your own papers cite this work or are cited by it — the one ranking this pool has that a literature search does not.">
+      <option value="conn">Connections to your library</option>
+      <option value="priority">Priority, then connections</option>
+      <option value="cites">Citations (OpenAlex)</option>
+      <option value="year">Year, newest first</option>
+      <option value="year-asc">Year, oldest first</option>
+      <option value="published">Publication date, newest</option>
+      <option value="title">Title A–Z</option>
+      <option value="model">Model name</option>
+    </select>
+  </div>
+</header>
+
+<main>
+  <div id="banner"></div>
+  <div id="calib"></div>
+  <div class="chipbar" id="task-chips" hidden></div>
+  <details class="crit" id="crit"><summary>Inclusion criteria — read from a title and an abstract, nothing more</summary><ol id="crit-list"></ol></details>
+  <div id="main"></div>
+</main>
+
+<footer id="footer"></footer>
+
+<!-- $ , esc , fmt , when , PROXY , doiLinks() , initTheme() , csvText , saveBlob ,
+     stamp -- the helpers every prma page used to write out for itself. Loaded
+     before the page script , so they are plain globals below ; nothing here may
+     redeclare them. -->
+<script src="/static/common.js"></script>
+<script>
+
+let DOC = null;          // the whole review-missing document
+let STATUS = {};         // availability / build progress , polled
+let VIEW = [];           // the candidates currently shown
+let HAY  = new WeakMap();// paper -> its lowercase search haystack
+let poll = null;
+
+/* ---- filter state ------------------------------------------------------- */
+const activePri  = new Set();   // priority numbers
+const activeTask = new Set();   // task_category strings
+const activeFlag = new Set();   // "refs" | "cb" | "both" | "data" | "pdf" | "code"
+let query = "";
+let sortBy = "conn";
+
+/* ---- links --------------------------------------------------------------
+   NOT /review's link row, and deliberately not built out of its paperAnchors()
+   either. Every anchor there answers "where is the copy I hold" — the PDF the
+   server streams, the md ` prma md ` rendered, the figure montage. This page's
+   rows are papers you do NOT hold, so the only honest links are the ones that
+   go and GET it: the publisher, the same through the library proxy, the
+   open-access PDF when OpenAlex knows of one, and the OpenAlex record itself.
+
+   DOI + Proxy come from /static/common.js, so they are the same two anchors
+   pointing at the same proxy as every other prma surface. */
+function links(p){
+  const out = doiLinks(p.doi);
+  if(p.pdf) out.push(`<a href="${esc(p.pdf)}" target="_blank" rel="noopener" title="Open-access PDF, per OpenAlex">PDF</a>`);
+  if(p.wid) out.push(`<a href="https://openalex.org/${esc(p.wid)}" target="_blank" rel="noopener" title="The OpenAlex record this row was read from">OA</a>`);
+  return out.join("");
+}
+
+/* Where a paper sits relative to your library. "In bibliographies" means your
+   papers cite it; "Newer / citing" means it cites your papers. The dashboard
+   names these two pools in exactly these words, so a paper reads the same on
+   both pages. */
+const POOL_LABEL = { references:"in bibliographies", cited_by:"newer / citing" };
+function poolTags(p){
+  return (p.pools||[]).map(k =>
+    `<span class="tag pool" title="${k === "references"
+      ? "Papers you have collected cite this one"
+      : "This paper cites papers you have collected"}">${esc(POOL_LABEL[k]||k)}</span>`).join("");
+}
+
+/* ---- the one field renderer ---------------------------------------------
+   The same uniform shape /review's field() reads, drawn the same way, with one
+   difference that matters: a field with no value is NOT drawn. On /review a
+   blank cell is a fact about a paper somebody has read end to end. Here it
+   almost always means the abstract simply wasn't the place that number was
+   going to be, and forty-five of those would bury the three fields an abstract
+   really does state. fieldGroup() below says how many it left out, so the
+   silence is counted rather than hidden. */
+function field(name, f){
+  const label = name.replace(/_/g," ");
+  const has = (f.evidence && f.evidence.length) || (f.values && f.values.length > 1) || f.inferred_from || f.note;
+  const src = f.source === "inferred-from-dataset"
+    ? `<span class="badge inferred" title="${esc(f.inferred_from||"")}">from dataset</span>`
+    : (f.counts && Object.keys(f.counts).length > 1)
+      ? `<span class="badge" title="The abstract states more than one value for this — click to see them all">${Object.keys(f.counts).length} values</span>` : "";
+  let ev = "";
+  if(has){
+    const parts = [];
+    if(f.inferred_from) parts.push(`<div class="why">${esc(f.inferred_from)}</div>`);
+    if(f.note)          parts.push(`<div class="why">${esc(f.note)}</div>`);
+    if(f.values && f.values.length > 1){
+      parts.push(`<div class="alt">also stated: ${f.values.slice(1).map(v =>
+        esc(v) + (f.counts && f.counts[v] > 1 ? ` (×${f.counts[v]})` : "")).join(" · ")}</div>`);
+    }
+    (f.evidence||[]).forEach(q => parts.push(`<q>${esc(q)}</q>`));
+    ev = `<div class="ev">${parts.join("")}</div>`;
+  }
+  return `<div class="f${has?" has":""}"><div class="k">${esc(label)}</div>`
+       + `<div class="v">${esc(f.value)}${src}</div>${ev}</div>`;
+}
+
+function fieldGroup(title, cols, block, note){
+  const filled = cols.filter(c => (block[c]||{}).value);
+  if(!filled.length){
+    return `<div class="blk"><h4>${esc(title)}</h4>`
+         + `<div class="unstated">The abstract states none of these ${cols.length} fields. `
+         + `That is normal — they live in a methods section, which is not on this page.</div></div>`;
+  }
+  const cells = filled.map(c => field(c, block[c])).join("");
+  const gap   = cols.length - filled.length;
+  return `<div class="blk"><h4>${esc(title)} <span style="color:var(--muted);font-weight:400">— ${filled.length} of ${cols.length} stated</span></h4>`
+       + (note ? `<div class="prose" style="margin-bottom:7px;color:var(--muted);font-size:12px">${note}</div>` : "")
+       + `<div class="fields">${cells}</div>`
+       + (gap ? `<div class="unstated">${gap} other field${gap===1?"":"s"} the abstract does not state.</div>` : "")
+       + `</div>`;
+}
+
+/* ---- one paper ---------------------------------------------------------- */
+function paperHead(p){
+  const tags = poolTags(p)
+    + (p.datasets_used||[]).map(d =>
+        `<span class="tag ds" title="Public dataset this abstract names">${esc(d)}</span>`).join("");
+  const pri = p.priority <= 3 ? `pri p${p.priority}` : "pri";
+  const n = p.lib_cites || 0;
+  const meta = [
+    p.cited_by ? `${fmt(p.cited_by)} cite${p.cited_by === 1 ? "" : "s"}` : "",
+    p.published ? esc(String(p.published).slice(0,10)) : "",
+  ].filter(Boolean).join(" · ");
+  return `<div class="hd">`
+    + `<div class="num">${p.n}</div>`
+    + `<div class="conn${n?"":" zero"}" title="${n} paper${n===1?"":"s"} in your library connect to this work">`
+      + `<b>${fmt(n)}</b><span>conn</span></div>`
+    + `<div class="${pri}" title="${esc(DOC.meta.priority_legend[String(p.priority)]||"")}">P${p.priority}</div>`
+    + `<div class="who">`
+      + `<div class="t">${esc(p.title||p.key)}${p.year?`<span class="yr">${esc(p.year)}</span>`:""}</div>`
+      + `<div class="sub">`
+        + (p.authors ? `${esc(p.authors)} · ` : "")
+        + (p.model_name ? `<span class="model">${esc(p.model_name)}</span> · ` : "")
+        + `${esc(p.task_category)}`
+        + (p.attention_role && p.attention_role !== "unspecified" ? ` · <span class="role">${esc(p.attention_role)}</span>` : "")
+      + `</div>`
+      + (tags ? `<div class="tagline">${tags}</div>` : "")
+    + `</div>`
+    + `<div class="lk"><div class="links">${links(p)}</div>`
+      + (meta ? `<div class="meta">${meta}</div>` : "")
+    + `</div>`
+  + `</div><div class="body"></div>`;
+}
+
+/* Built on first expand, never up front — see the note at the top of the file. */
+function paperBody(p){
+  const G = DOC.meta.field_groups, out = [];
+
+  if(p.abstract){
+    // The abstract is the ENTIRE evidence base for this row, so it is the first
+    // thing in the body rather than the fourth, and it is not clamped: on
+    // /review the abstract is a reminder of a paper you have, here it is the
+    // paper. Where it came back from the dashboard index rather than from
+    // OpenAlex it arrives lowercased ( see missing.split_haystack ) — that
+    // changed no verdict, but it is visible, so it is labelled instead of
+    // quietly presented as how the authors wrote it.
+    out.push(`<div class="blk"><h4>Abstract`
+      + (p.abstract_source === "index"
+          ? ` <span style="color:var(--muted);font-weight:400">— normalised to lower case by the dashboard index; OpenAlex has no separate copy of this one to quote from</span>` : "")
+      + `</h4><div class="prose">${esc(p.abstract)}</div></div>`);
+  }
+
+  out.push(fieldGroup("Model architecture", G.architecture, p.architecture));
+  out.push(fieldGroup("fMRI acquisition", G.acquisition, p.acquisition,
+    "An abstract essentially never states scanner settings. Where this one names a public dataset your own corpus has a consensus for, the value is filled from that and marked <em>from dataset</em> — the same table /review mined, so the two pages agree about what NSD's TR is."));
+  out.push(fieldGroup("Preprocessing", G.preprocessing, p.preprocessing));
+
+  const s = p.screening || {};
+  out.push(`<div class="blk"><h4>Why it got through</h4><div class="scores">`
+    + `<span>fMRI evidence <b>${fmt(s.fmri_evidence_methods)}</b></span>`
+    + `<span>rival modality <b>${fmt(s.rival_modality_methods)}</b></span>`
+    + `<span>attention hits <b>${fmt(s.attention_hits_methods)}</b></span>`
+    + `<span>pretrained transformers <b>${fmt(s.pretrained_transformer_hits)}</b></span>`
+    + `<span>decoding score <b>${fmt(s.decoding_score)}</b></span>`
+    + `<span>read from <b>${fmt(s.abstract_chars)}</b> chars</span>`
+    + (s.attention_attributed_to_authors ? `<span style="color:var(--green)">attention attributed to the authors</span>` : "")
+    + (s.multimodal ? `<span style="color:var(--warn)">multimodal — check it really is fMRI-led</span>` : "")
+    + `</div>`
+    + (s.attention_evidence ? `<div class="prose" style="margin-top:8px;font-size:12px"><q style="color:var(--prose)">${esc(s.attention_evidence)}</q></div>` : "")
+    + (s.task_evidence ? `<div class="prose" style="margin-top:6px;font-size:12px"><q style="color:var(--prose)">${esc(s.task_evidence)}</q></div>` : "")
+    + `<div class="scores" style="margin-top:8px">`
+      + `<span>reached you through: ${(p.pools||[]).map(k => esc(POOL_LABEL[k]||k)).join(" + ")||"—"}</span>`
+      + `<span>${fmt(p.lib_cites||0)} of your papers connect to it</span>`
+      + `<span>OpenAlex <code>${esc(p.wid)}</code></span>`
+    + `</div></div>`);
+
+  return out.join("");
+}
+
+/* ---- filtering + sorting ------------------------------------------------ */
+function matches(p){
+  if(activePri.size  && !activePri.has(p.priority)) return false;
+  if(activeTask.size && !activeTask.has(p.task_category)) return false;
+  if(activeFlag.has("refs") && !(p.pools||[]).includes("references")) return false;
+  if(activeFlag.has("cb")   && !(p.pools||[]).includes("cited_by")) return false;
+  if(activeFlag.has("both") && (p.pools||[]).length < 2) return false;
+  if(activeFlag.has("conn") && !(p.lib_cites > 1)) return false;
+  if(activeFlag.has("data") && !(p.datasets_used||[]).length) return false;
+  if(activeFlag.has("pdf")  && !p.pdf) return false;
+  if(!query) return true;
+  return (HAY.get(p) || "").includes(query);
+}
+
+/* Connections first, because that is the ranking this pool has and /review does
+   not. Everything else is the same key set the rest of prma orders lists by.
+   Ties always fall back to the document's own order, which is already ranked. */
+const SORTS = {
+  "conn":          (a,b) => a.n - b.n,       // the document is already in this order
+  "priority":      (a,b) => a.priority - b.priority || a.n - b.n,
+  "cites":         (a,b) => (b.cited_by||0) - (a.cited_by||0) || a.n - b.n,
+  "year":          (a,b) => (+b.year||0) - (+a.year||0) || a.n - b.n,
+  "year-asc":      (a,b) => (+a.year||9999) - (+b.year||9999) || a.n - b.n,
+  "published":     (a,b) => String(b.published||"").localeCompare(String(a.published||"")) || a.n - b.n,
+  "title":         (a,b) => (a.title||"").localeCompare(b.title||""),
+  "model":         (a,b) => (a.model_name||"~~~").localeCompare(b.model_name||"~~~") || a.n - b.n,
+};
+
+function apply(){
+  VIEW = (DOC.papers||[]).filter(matches).sort(SORTS[sortBy] || SORTS.conn);
+  renderCandidates();
+  $("#shown") && ($("#shown").textContent = fmt(VIEW.length));
+  $("#inc-n") && ($("#inc-n").textContent = fmt(VIEW.length));
+}
+
+/* ---- rendering ---------------------------------------------------------- */
+function renderCandidates(){
+  const host = $("#candidate-list");
+  if(!host) return;
+  if(!VIEW.length){ host.innerHTML = `<div class="empty">Nothing matches those filters.</div>`; return; }
+  host.innerHTML = VIEW.map(p =>
+    `<article class="paper" data-key="${esc(p.key)}">${paperHead(p)}</article>`).join("");
+}
+
+function chip(text, n, on, data){
+  const attrs = Object.entries(data).map(([k,v]) => `data-${k}="${esc(v)}"`).join(" ");
+  return `<span class="chip${on?" on":""}" ${attrs}>${esc(text)}<span class="c">${fmt(n)}</span></span>`;
+}
+
+function renderControls(){
+  const P = DOC.papers || [];
+  const byPri = {}, byTask = {};
+  P.forEach(p => { byPri[p.priority] = (byPri[p.priority]||0)+1;
+                   byTask[p.task_category] = (byTask[p.task_category]||0)+1; });
+
+  $("#pri-chips").innerHTML = `<span class="lbl">Priority</span>` + Object.keys(byPri)
+    .sort((a,b)=>a-b)
+    .map(k => chip("P"+k, byPri[k], activePri.has(+k), { pri:k })).join("");
+  $("#pri-chips").querySelectorAll(".chip").forEach(c =>
+    c.title = DOC.meta.priority_legend[c.dataset.pri] || "");
+
+  $("#task-chips").innerHTML = `<span class="lbl">Task</span>` + Object.keys(byTask)
+    .sort((a,b) => byTask[b]-byTask[a])
+    .map(k => chip(k, byTask[k], activeTask.has(k), { task:k })).join("");
+
+  const n = f => P.filter(f).length;
+  $("#flag-chips").innerHTML =
+      chip("In bibliographies", n(p => (p.pools||[]).includes("references")), activeFlag.has("refs"), { flag:"refs" })
+    + chip("Newer / citing",    n(p => (p.pools||[]).includes("cited_by")),   activeFlag.has("cb"),   { flag:"cb" })
+    + chip("Both",              n(p => (p.pools||[]).length > 1),             activeFlag.has("both"), { flag:"both" })
+    + chip("Cited by 2+ of yours", n(p => p.lib_cites > 1),                   activeFlag.has("conn"), { flag:"conn" })
+    + chip("Names data",        n(p => (p.datasets_used||[]).length),         activeFlag.has("data"), { flag:"data" })
+    + chip("Open-access PDF",   n(p => !!p.pdf),                              activeFlag.has("pdf"),  { flag:"pdf" });
+
+  $("#controls").hidden = false;
+  $("#task-chips").hidden = false;
+}
+
+function renderCounts(){
+  const c = (DOC.meta.counts)||{};
+  const cut = (c.included_all||0) - (c.included||0);
+  $("#counts").innerHTML =
+      `<span><b id="shown">${fmt(c.included)}</b> of <b>${fmt(c.included)}</b> candidates</span>`
+    + (cut ? `<span title="Ranked by connections to your library before the cap, so what was dropped is the least connected">+${fmt(cut)} past the cap</span>` : "")
+    + `<span><b>${fmt(c.candidates)}</b> in the pool</span>`
+    + `<span title="Papers that satisfied two of the three criteria and failed exactly one. `
+    +  `The list below shows the ${fmt(Math.min(c.borderline, (DOC.meta.caps||{}).near_misses||0))} most connected of them."`
+    +  `><b>${fmt(c.borderline)}</b> near misses</span>`
+    + (DOC.meta.generated ? `<span>built ${when(DOC.meta.generated)}</span>` : "");
+}
+
+/* ---- the calibration panel ----------------------------------------------
+   Permanent, and above the list rather than under it. Everything below is a
+   screening decision made from ~1,500 characters; a reader who does not know
+   that will read this page as /review, which it is not. */
+function renderCalib(){
+  const s = (DOC.meta.screen)||{}, c = (DOC.meta.counts)||{};
+  // The recall is re-measured on every build ( missing.measure_recall ), so it
+  // is this screen's score against the review as it stands today, not a number
+  // written down once. Precision is not recomputable — it needs the papers
+  // /review threw out, and an excluded row carries no abstract to re-screen —
+  // so it is shown with its own basis rather than borrowing recall's.
+  const pct = v => v == null ? "—" : Math.round(v*100) + "%";
+  $("#calib").innerHTML = `<div class="calib">`
+    + `<b>These are candidates, not a review.</b>`
+    + `<div class="nums">`
+      + `<div title="${esc(s.precision_basis||"")}"><b>${pct(s.precision)}</b>`
+        + `of what this lets through, <a href="/review">/review</a> also included</div>`
+      + `<div title="${esc(s.recall_basis||"")}"><b>${pct(s.recall)}</b>`
+        + `of what /review included, this finds`
+        + (s.recall_total ? ` <span style="font-size:11px">(${fmt(s.recall_found)}/${fmt(s.recall_total)})</span>` : "")
+        + `</div>`
+      + `<div><b>${fmt(c.with_text)}</b>abstracts screened</div>`
+      + `<div><b>${fmt(c.no_abstract)}</b>had no abstract to screen</div>`
+    + `</div>`
+    + `<div class="say">`
+    + (s.recall_total
+        ? `The recall was re-measured while this page was built — the same screen run again over the ${fmt(s.recall_total)} papers /review included, on their abstracts alone — so it is this screen's score today, not a number written down once. `
+        : `No built <a href="/review">/review</a> to measure against yet, so the recall is unknown here. `)
+    + `The misses are not a threshold that needs tuning: most are papers whose abstract never names an architecture at all — `
+    + `it says “a deep learning model” and leaves the transformer to a methods section nobody here has read. `
+    + `Nothing recovers a word the abstract does not contain, so <b>what this page misses, it misses silently</b>. `
+    + `The <a href="#nearmiss">near misses</a> below are the shortlist of papers that failed exactly one criterion.</div>`
+  + `</div>`;
+}
+
+function renderCriteria(){
+  $("#crit-list").innerHTML = (DOC.meta.criteria||[]).map(c => `<li>${esc(c)}</li>`).join("");
+}
+
+/* ---- near misses --------------------------------------------------------
+   /review lists every paper it dropped, because 329 rows is a table you can
+   read. Here the same list is the pool again, so what gets listed is the papers
+   that satisfied two criteria and failed exactly one — the same instinct as
+   /review's "borderline" flag, at a scale where it is the only version of that
+   list worth printing. */
+const MISS_TIP = {
+  "names no architecture": "fMRI and a decoding task both held. The abstract simply never names a model — this is the single biggest class of miss, and the one worth opening.",
+  "no decoding verb":      "fMRI and a transformer both held, but nothing in the abstract says the model reads brain data and produces content.",
+  "modality contested":    "A decoding transformer paper that names fMRI — but names EEG / MEG / ECoG more often. Often genuinely multimodal.",
+};
+function renderNearMisses(){
+  const rows = (DOC.near_misses||[]).filter(e => {
+    if(!query) return true;
+    return ((e.title||"") + " " + (e.authors||"") + " " + e.key).toLowerCase().includes(query);
+  });
+  const byKind = {};
+  (DOC.near_misses||[]).forEach(e => { byKind[e.missing] = (byKind[e.missing]||0)+1; });
+  const c = (DOC.meta.counts)||{}, caps = (DOC.meta.caps)||{};
+  const cut = (c.borderline||0) - (DOC.near_misses||[]).length;
+
+  return `<div class="section-title" id="nearmiss"><span class="n">${fmt(rows.length)}</span> near misses`
+    + `<span style="font-weight:400">— two criteria held, one did not. Ranked by connections to your library`
+    + (cut ? `; ${fmt(cut)} further ones past the cap of ${fmt(caps.near_misses||0)}` : "") + `.</span></div>`
+    + `<div class="chipbar" style="margin-bottom:9px">`
+      + Object.keys(byKind).sort((a,b)=>byKind[b]-byKind[a]).map(k =>
+          `<span class="chip" style="cursor:default" title="${esc(MISS_TIP[k]||"")}">${esc(k)}<span class="c">${fmt(byKind[k])}</span></span>`).join("")
+    + `</div>`
+    + `<div class="tbl"><table><thead><tr>`
+      + `<th>Title</th><th>Year</th><th>What was missing</th><th title="Papers in your library that connect to this one">Conn.</th>`
+      + `<th>fMRI</th><th>Rival</th><th>Attn</th><th>Decode</th><th></th>`
+    + `</tr></thead><tbody>`
+    + rows.map(e => {
+        const s = e.screening || {};
+        const lk = doiLinks(e.doi);
+        if(e.pdf) lk.push(`<a href="${esc(e.pdf)}" target="_blank" rel="noopener">PDF</a>`);
+        if(e.wid) lk.push(`<a href="https://openalex.org/${esc(e.wid)}" target="_blank" rel="noopener">OA</a>`);
+        return `<tr><td>${esc(e.title||e.key)}`
+          + `<div style="color:var(--muted);font-size:11px;margin-top:2px">`
+            + (e.authors ? esc(e.authors) + " · " : "") + esc(e.best_task_guess) + `</div></td>`
+          + `<td class="num">${esc(e.year||"")}</td>`
+          + `<td><span class="pill border" title="${esc(MISS_TIP[e.missing]||"")}">${esc(e.missing)}</span></td>`
+          + `<td class="num">${fmt(e.lib_cites)}</td>`
+          + `<td class="num">${fmt(s.fmri_evidence_methods)}</td>`
+          + `<td class="num">${fmt(s.rival_modality_methods)}</td>`
+          + `<td class="num">${fmt(s.attention_hits_methods)}</td>`
+          + `<td class="num">${fmt(s.decoding_score)}</td>`
+          + `<td class="nowrap lk">${lk.join("")}</td></tr>`;
+      }).join("")
+    + `</tbody></table></div>`;
+}
+
+/* ---- what was thrown out, as a tally ------------------------------------ */
+function renderTally(){
+  const t = (DOC.meta.exclusion_tally)||{};
+  const keys = Object.keys(t).sort((a,b) => t[b]-t[a]);
+  if(!keys.length) return "";
+  const max = t[keys[0]] || 1;
+  return `<div class="section-title"><span class="n">${fmt(keys.reduce((s,k)=>s+t[k],0))}</span> screened out`
+    + `<span style="font-weight:400">— counted rather than listed: at this scale the list of what was dropped is the pool again.</span></div>`
+    + `<div class="tbl" style="padding:13px 16px"><div class="tally">`
+    + keys.map(k => `<div class="r">${esc(k)}</div><div class="n">${fmt(t[k])}</div>`
+        + `<div class="bar"><i style="width:${(100*t[k]/max).toFixed(1)}%"></i></div>`).join("")
+    + `</div></div>`;
+}
+
+function renderDatasets(){
+  const rows = DOC.dataset_reference || [];
+  if(!rows.length) return "";
+  return `<div class="section-title"><span class="n">${fmt(rows.length)}</span> dataset acquisition values`
+    + `<span style="font-weight:400">— borrowed whole from <a class="navlink" style="padding:1px 6px" href="/review">/review</a>, which mined them from the full text of papers you hold. This is what fills an acquisition blank above.</span></div>`
+    + `<div class="tbl"><table><thead><tr>`
+      + `<th>Dataset</th><th>Parameter</th><th>Consensus</th><th>Papers</th><th>Other values seen</th>`
+    + `</tr></thead><tbody>`
+    + rows.map(r => `<tr><td>${esc(r.Dataset)}</td><td class="nowrap">${esc(r.Parameter)}</td>`
+        + `<td><b>${esc(r.Consensus_Value)}</b></td><td class="num">${fmt(r.N_Papers_Reporting)}</td>`
+        + `<td style="color:var(--muted)">${esc(r.Other_Reported_Values||"—")}</td></tr>`).join("")
+    + `</tbody></table></div>`;
+}
+
+function renderAll(){
+  renderCounts(); renderCalib(); renderCriteria(); renderControls();
+  $("#main").innerHTML =
+      `<div class="section-title"><span class="n" id="inc-n">${fmt((DOC.papers||[]).length)}</span> candidates`
+    + `<span style="font-weight:400">— click a paper to open it; click any field to see the sentence it was read out of.</span></div>`
+    + `<div id="candidate-list"></div>`
+    + `<div id="nearmiss-host"></div>`
+    + `<div id="tally-host"></div>`
+    + `<div id="datasets-host"></div>`;
+  apply();
+  $("#nearmiss-host").innerHTML = renderNearMisses();
+  $("#tally-host").innerHTML    = renderTally();
+  $("#datasets-host").innerHTML = renderDatasets();
+  renderFooter();
+}
+
+function renderFooter(){
+  const m = DOC.meta || {}, s = m.sources || {}, n = m.notes || {};
+  $("#footer").innerHTML =
+      `Everything on this page is derived. The pool is the dashboard's own index `
+    + `(<code>${esc(s.dashboard_index||"output/cache/dashboard_index.json.gz")}</code>) — the "All missing" tab on `
+    + `<a class="navlink" style="padding:1px 6px" href="/">the dashboard</a>, screened rather than browsed. `
+    + `Nothing here reaches the network and nothing here is typed by hand.`
+    + `<br><br><b>${esc(n.blank_cells||"")}</b> ${esc(n.evidence||"")} ${esc(n.inferred||"")} ${esc(n.excluded||"")}`
+    + `<br><br>Rebuilt with the Rebuild button, or <code>prma review-missing</code>. `
+    + `Run <code>prma reindex</code> first if you have added papers — the pool is only as current as the index. `
+    + `The full-text sibling of this page is <a class="navlink" style="padding:1px 6px" href="/review">/review</a>.`;
+}
+
+/* ---- banner : nothing built / building / stale --------------------------- */
+function renderBanner(){
+  const b = $("#banner");
+  if(STATUS.building){
+    const pct = STATUS.total ? Math.round(100 * STATUS.done / STATUS.total) : 0;
+    b.className = "banner";
+    b.innerHTML = `<div class="msg"><b>Screening the missing pool…</b>`
+      + `<span>${esc(STATUS.stage||"working")}${STATUS.total?` — ${fmt(STATUS.done)} of ${fmt(STATUS.total)}`:""}. `
+      + `That is every paper connected to your library that isn't in it; it takes minutes. You can leave the page open.</span>`
+      + `<div class="track"><div class="done" style="width:${STATUS.total?pct:6}%"></div></div></div>`;
+    return;
+  }
+  if(!STATUS.available){
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>Nothing has been screened yet.</b>`
+      + `<span>Reading ~100,000 abstracts takes minutes, so it is never done on the way to serving this page. `
+      + `It needs the dashboard index — if you have never run <code>prma reindex</code>, do that first.</span></div>`
+      + `<button id="build-now">Screen the pool now</button>`;
+    $("#build-now").addEventListener("click", startRebuild);
+    return;
+  }
+  if(STATUS.error){
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>The last run failed.</b><span>${esc(STATUS.error)}</span></div>`;
+    return;
+  }
+  if(STATUS.stale){
+    // Stale means any input moved: the dashboard index (papers added, and the
+    // references they brought with them), the built /review whose dataset table
+    // fills the acquisition blanks, or the screening code itself — add a pattern
+    // to the vocabulary and every verdict on this page is potentially different,
+    // which is exactly what stale means. missing.signature() watches all three.
+    b.className = "banner warn";
+    b.innerHTML = `<div class="msg"><b>Something this was screened from has moved since.</b>`
+      + `<span>The library index, the <a href="/review">/review</a> it borrows dataset values from, or the screen itself `
+      + `has changed since ${when(STATUS.generated)} — so what you are looking at is not what a run today would find.</span></div>`
+      + `<button id="rebuild-2">↻ Re-screen</button>`;
+    $("#rebuild-2").addEventListener("click", startRebuild);
+    return;
+  }
+  b.className = ""; b.innerHTML = "";
+}
+
+/* ---- export --------------------------------------------------------------
+   Exports carry what is ON SCREEN, filters and all. saveBlob / csvText / stamp
+   are in /static/common.js. */
+$("#export-json").addEventListener("click", () => {
+  if(!DOC) return;
+  saveBlob(new Blob([JSON.stringify({
+    source: "prma review-missing", generated: new Date().toISOString(),
+    meta: DOC.meta, count: VIEW.length, papers: VIEW,
+  }, null, 1)], { type:"application/json" }), `prma-review-missing-${stamp()}.json`);
+});
+
+$("#export-csv").addEventListener("click", () => {
+  if(!DOC) return;
+  const G = DOC.meta.field_groups;
+  const flat = [].concat(G.architecture, G.acquisition, G.preprocessing);
+  const head = ["#","Connections","Priority","Model_Name","Title","First_Author","Year",
+                "Publication_Date","OA_Citations","DOI","OpenAlex_ID","Pools","Task",
+                "Attention_Role","Datasets_Named","OA_PDF"].concat(flat);
+  const rows = VIEW.map(p => {
+    const groups = Object.assign({}, p.architecture, p.acquisition, p.preprocessing);
+    return [ p.n, p.lib_cites, p.priority, p.model_name, p.title, p.authors, p.year,
+             p.published, p.cited_by, p.doi, p.wid, (p.pools||[]).join("; "),
+             p.task_category, p.attention_role, (p.datasets_used||[]).join("; "), p.pdf ]
+      .concat(flat.map(c => (groups[c]||{}).value || ""));
+  });
+  saveCSV(csvText(head, rows), `prma-review-missing-${stamp()}.csv`);
+});
+
+/* ---- fetching ------------------------------------------------------------ */
+async function fetchDoc(){
+  const r = await fetch("/api/review-missing");
+  const d = await r.json();
+  STATUS = { available:d.available, building:d.building, stage:d.stage, done:d.done,
+             total:d.total, error:d.error, generated:d.generated, stale:d.stale };
+  if(d.papers){
+    DOC = { meta:d.meta, papers:d.papers, near_misses:d.near_misses,
+            dataset_reference:d.dataset_reference };
+    // One lowercase haystack per paper, built once — the search box runs over
+    // every candidate on every keystroke. Kept OUTSIDE the paper objects: they
+    // are what the JSON export hands back, and a search index is not part of
+    // the document. The abstract is IN it here, because on this page the
+    // abstract is the whole of what was read.
+    HAY = new WeakMap();
+    DOC.papers.forEach(p => HAY.set(p,
+      [ p.title, p.authors, p.model_name, p.doi, p.wid, p.task_category, p.attention_role,
+        (p.datasets_used||[]).join(" "), p.abstract ]
+      .filter(Boolean).join(" ").toLowerCase()));
+    renderAll();
+  } else {
+    $("#main").innerHTML = "";
+    $("#calib").innerHTML = "";
+  }
+  renderBanner();
+  $("#rebuild").disabled = !!STATUS.building;
+}
+
+async function pollStatus(){
+  try {
+    const r = await fetch("/api/review-missing/version");
+    const s = await r.json();
+    const landed = STATUS.building && !s.building;
+    STATUS = s;
+    renderBanner();
+    $("#rebuild").disabled = !!s.building;
+    if(landed){ clearInterval(poll); poll = null; await fetchDoc(); }
+    else if(!s.building && poll){ clearInterval(poll); poll = null; }
+  } catch(e){ /* server went away ; the next click will say so */ }
+}
+
+async function startRebuild(){
+  $("#rebuild").disabled = true;
+  STATUS = Object.assign({}, STATUS, { building:true, stage:"starting", done:0, total:0 });
+  renderBanner();
+  try { await fetch("/api/review-missing/rebuild", { method:"POST" }); }
+  catch(e){ STATUS.building = false; STATUS.error = String(e); renderBanner(); return; }
+  if(!poll) poll = setInterval(pollStatus, 1500);
+}
+
+$("#rebuild").addEventListener("click", startRebuild);
+
+/* Labels the header button and persists a flip ( /static/common.js ). The theme
+   is one setting shared by every prma page. */
+initTheme();
+
+/* ---- interaction --------------------------------------------------------- */
+document.addEventListener("click", e => {
+  const f = e.target.closest(".f.has");
+  if(f){ f.classList.toggle("open"); e.stopPropagation(); return; }
+  if(e.target.closest(".lk a") || e.target.closest("a")) return;   // links are links
+
+  const art = e.target.closest(".paper");
+  if(art && e.target.closest(".hd")){
+    const body = art.querySelector(".body");
+    if(!art.classList.contains("open") && !body.dataset.built){
+      const p = (DOC.papers||[]).find(x => x.key === art.dataset.key);
+      if(p){ body.innerHTML = paperBody(p); body.dataset.built = "1"; }
+    }
+    art.classList.toggle("open");
+    if(art.classList.contains("open")){
+      const top = art.getBoundingClientRect().top;
+      const hdr = document.querySelector("header").offsetHeight;
+      if(top < hdr) window.scrollBy({ top: top - hdr - 8, behavior:"smooth" });
+    }
+    return;
+  }
+
+  const c = e.target.closest(".chip");
+  if(!c || !c.dataset) return;
+  if(c.dataset.pri){       const v = +c.dataset.pri;  activePri.has(v)  ? activePri.delete(v)  : activePri.add(v); }
+  else if(c.dataset.task){ const v = c.dataset.task;  activeTask.has(v) ? activeTask.delete(v) : activeTask.add(v); }
+  else if(c.dataset.flag){ const v = c.dataset.flag;  activeFlag.has(v) ? activeFlag.delete(v) : activeFlag.add(v); }
+  else return;
+  c.classList.toggle("on");
+  apply();
+});
+
+let qTimer = null;
+$("#q").addEventListener("input", e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => {
+    query = e.target.value.trim().toLowerCase();
+    apply();
+    $("#nearmiss-host").innerHTML = renderNearMisses();
+  }, 140);
+});
+$("#sortby").addEventListener("change", e => { sortBy = e.target.value; apply(); });
+
+document.addEventListener("keydown", e => {
+  if(e.key === "/" && document.activeElement !== $("#q")){
+    e.preventDefault(); $("#q").focus();
+  }
+  if(e.key === "Escape" && document.activeElement === $("#q")){
+    $("#q").value = ""; $("#q").blur(); query = ""; apply();
+    $("#nearmiss-host").innerHTML = renderNearMisses();
+  }
+});
+
+fetchDoc();
+</script>
+</body>
+</html>

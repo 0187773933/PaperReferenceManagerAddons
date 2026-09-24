@@ -90,38 +90,57 @@ _DOI_PATH_HINTS = (
 # A URL with an explicit scheme or a leading www. ...
 _URL_RE = re.compile( r"(?i)\b(?:https?://|www\.)[^\s<>\"'()\[\]{}]+" )
 
-# ... plus bare host/path mentions of the known code hosts ( ` github.com/u/r `
-# with no scheme , common in OCR text ). Built from _HOST_LABELS so the two
-# stay in sync , minus suffix-only hosts that are NEVER the registrable host
+# ... plus bare host/path mentions of the known hosts ( ` github.com/u/r ` with
+# no scheme , common in OCR text ). Built FROM the host table so the two stay in
+# sync , minus suffix-only hosts that are NEVER the registrable host
 # ( ` github.io ` is always ` <user>.github.io ` -- matching it bare would drop
 # the subdomain and yield a broken URL ; it's still classified for scheme'd URLs ).
 _BARE_ONLY_SUFFIXES = { "github.io" }
-_BARE_RE = re.compile(
-	r"(?i)\b(?:" +
-	"|".join( re.escape( h ) for h , _ in _HOST_LABELS if h not in _BARE_ONLY_SUFFIXES ) +
-	r")/[^\s<>\"'()\[\]{}]+"
-)
+
+
+def build_bare_re( host_labels ):
+	"""The bare-host regex for a ( host , label ) table. Public because
+	` prma datasets ` scans the SAME text against a DIFFERENT table ( data
+	archives rather than code forges ) and must not carry a second copy of the
+	URL machinery -- see src/tasks/datasets.py ."""
+	return re.compile(
+		r"(?i)\b(?:" +
+		"|".join( re.escape( h ) for h , _ in host_labels if h not in _BARE_ONLY_SUFFIXES ) +
+		r")/[^\s<>\"'()\[\]{}]+"
+	)
+
+
+_BARE_RE = build_bare_re( _HOST_LABELS )
 
 # Characters that are almost always sentence punctuation trailing a URL , not
 # part of it. Stripped from each captured candidate's tail.
 _TRAILING = ".,;:!?'\"”’)>]}»"
 
 
-def _classify_host( host , path ):
-	"""Map a URL's host ( + path , for doi.org archives ) to a source label ,
-	or None if it isn't a code / data host we care about."""
-	host = ( host or "" ).lower()
-	if host.startswith( "www." ):
-		host = host[ 4: ]
-	for suffix , label in _HOST_LABELS:
-		if host == suffix or host.endswith( "." + suffix ):
-			return label
-	if host == "doi.org" or host.endswith( ".doi.org" ):
-		p = ( path or "" ).lower()
-		for hint , label in _DOI_PATH_HINTS:
-			if hint in p:
+def make_classifier( host_labels , doi_hints ):
+	"""Build the ( host , path ) -> source-label function for a host table.
+	First match wins , which is why the tables order specific subdomains above
+	the bare host. Public for the same reason build_bare_re is : ` prma datasets `
+	classifies against data archives instead of code forges."""
+	def classify( host , path ):
+		host = ( host or "" ).lower()
+		if host.startswith( "www." ):
+			host = host[ 4: ]
+		for suffix , label in host_labels:
+			if host == suffix or host.endswith( "." + suffix ):
 				return label
-	return None
+		if host == "doi.org" or host.endswith( ".doi.org" ):
+			p = ( path or "" ).lower()
+			for hint , label in doi_hints:
+				if hint in p:
+					return label
+		return None
+	return classify
+
+
+# Map a URL's host ( + path , for doi.org archives ) to a code / data host
+# label , or None when it isn't one we care about.
+_classify_host = make_classifier( _HOST_LABELS , _DOI_PATH_HINTS )
 
 
 def _clean_url( raw ):
@@ -158,19 +177,25 @@ def _is_plausible( url , path ):
 	return bool( ( path or "" ).strip( "/" ) )
 
 
-def extract_links_tagged( *labeled_texts ):
+def extract_links_tagged( *labeled_texts , classify=None , bare_re=None ):
 	"""Scan ( found_in , text ) pairs for code / data links. Returns a de-duped
 	list ( first-seen order ) of { 'url' , 'source' , 'found_in' } dicts , where
 	`found_in` is the source blob the link was first seen in ( 'abstract' ,
 	'ocr' , ... ). De-duped on the normalized URL ( case-insensitive ) , first
 	occurrence wins. OCR-split URLs are rejoined ( see _iter_candidates ) and
-	still-broken fragments dropped ( see _is_plausible )."""
+	still-broken fragments dropped ( see _is_plausible ).
+
+	`classify` / `bare_re` default to the CODE tables above ; ` prma datasets `
+	passes its own pair so both scans share this one implementation of the hard
+	part -- the OCR line-break repair , the plausibility test and the de-dup."""
+	classify = classify or _classify_host
+	bare_re  = bare_re  if bare_re is not None else _BARE_RE
 	seen  = set()
 	links = []
 	for found_in , text in labeled_texts:
 		if not text:
 			continue
-		for m in _iter_candidates( text ):
+		for m in _iter_candidates( text , bare_re ):
 			url = _clean_url( m )
 			if not url:
 				continue
@@ -178,7 +203,7 @@ def extract_links_tagged( *labeled_texts ):
 				parsed = urlparse( url )
 			except Exception:
 				continue
-			label = _classify_host( parsed.netloc , parsed.path )
+			label = classify( parsed.netloc , parsed.path )
 			if not label:
 				continue
 			if not _is_plausible( url , parsed.path ):
@@ -255,11 +280,11 @@ def _stitch( text , end , token ):
 	return token
 
 
-def _iter_candidates( text ):
+def _iter_candidates( text , bare_re=None ):
 	"""Yield raw URL-ish substrings from `text` ( scheme/www. matches first ,
 	then bare known-host matches ) , each rejoined across OCR line breaks via
 	_stitch. Overlaps are fine -- _clean_url normalizes and the caller de-dupes."""
-	for rx in ( _URL_RE , _BARE_RE ):
+	for rx in ( _URL_RE , bare_re if bare_re is not None else _BARE_RE ):
 		for m in rx.finditer( text ):
 			yield _stitch( text , m.end() , m.group( 0 ) )
 
@@ -324,6 +349,35 @@ def paper_code_links( args , key , paper ):
 	abstract = _paper_abstract( args , doi )
 	ocr_text = _ocr_fulltext( paper )
 	return extract_links_tagged( ( "abstract" , abstract ) , ( "ocr" , ocr_text ) )
+
+
+def display_links( paper ):
+	"""What a BROWSER needs off paper[ 'code' ] : the stored links compacted down
+	to { url , source } pairs , ready for codeLinks() in
+	src/dashboard/static/common.js to render.
+
+	The one reader for this field. The dashboard's In-Library "Code" column and
+	the /code page ( both off the entry src/dashboard/indexer.py pins ) and the
+	/review document ( src/review/build.py ) all go through here , so those
+	surfaces can't drift into finding different code for the same paper -- which
+	is the whole reason a paper only gets scanned once , here in ` prma code ` ,
+	and never re-derived per page.
+
+	[] when the paper hasn't been scanned or had no links. Where ` resolve_github `
+	repaired an OCR-mangled name we emit the corrected `resolved_url` and carry
+	the original as `raw` , so the page can flag the repair instead of quietly
+	sending you somewhere the paper never said."""
+	out = []
+	for l in ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []:
+		raw = l.get( "url" )
+		if not raw:
+			continue
+		fixed = l.get( "resolved_url" )
+		entry = { "url": fixed or raw , "source": l.get( "source" ) }
+		if fixed and fixed != raw:
+			entry[ "raw" ] = raw
+		out.append( entry )
+	return out
 
 
 # ---------------------------------------------------------------------------

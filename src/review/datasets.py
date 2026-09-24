@@ -39,6 +39,120 @@ DATASETS = {
 	'Nifty/Neuromark ICA templates': [r'\bNeuroMark\b'],
 }
 
+# Where each of those collections LIVES -- the page a reader would actually go
+# to. Keyed by the same names as DATASETS above , because a dataset's home is a
+# fact about the dataset , not about any one surface : /datasets links the badges
+# it draws through here , and anything else that shows a dataset name can too.
+#
+# Every URL below was checked against the source itself , not remembered : the
+# OpenNeuro accessions against OpenNeuro's own API ( ds001246 = "Generic Object
+# Decoding ( fMRI on ImageNet )" , ds001506 = "Deep Image Reconstruction" ,
+# ds002345 = "Narratives" , ds000224 = "The Midnight Scan Club ( MSC ) dataset" ,
+# ds003020 = the passive natural-language listening data , ds004496 = the
+# large-scale naturalistic-scene data ) and the OSF node against OSF's ( crwz7 =
+# "Toward a universal decoder of linguistic meaning from brain activation" ).
+# A wrong link is worse than none , so anything added here should be checked the
+# same way ; a name with no entry simply renders unlinked.
+HOMES = {
+	'HCP (Human Connectome Project)'         : 'https://www.humanconnectome.org/' ,
+	'HCP-EP / HCP-D / HCP-A'                 : 'https://www.humanconnectome.org/' ,
+	'NSD (Natural Scenes Dataset)'           : 'https://naturalscenesdataset.org/' ,
+	'ABIDE'                                  : 'https://fcon_1000.projects.nitrc.org/indi/abide/' ,
+	'ADHD-200'                               : 'https://fcon_1000.projects.nitrc.org/indi/adhd200/' ,
+	'ADNI'                                   : 'https://adni.loni.usc.edu/' ,
+	'UK Biobank'                             : 'https://www.ukbiobank.ac.uk/' ,
+	'ABCD'                                   : 'https://abcdstudy.org/' ,
+	'BOLD5000'                               : 'https://bold5000-dataset.github.io/website/' ,
+	'THINGS-fMRI'                            : 'https://things-initiative.org/' ,
+	'Algonauts'                              : 'http://algonauts.csail.mit.edu/' ,
+	'CNeuroMod / Courtois'                   : 'https://www.cneuromod.ca/' ,
+	'StudyForrest'                           : 'https://www.studyforrest.org/' ,
+	'Forrest Gump 7T'                        : 'https://www.studyforrest.org/' ,
+	'REST-meta-MDD'                          : 'http://rfmri.org/REST-meta-MDD' ,
+	'SRPBS / Japanese multi-site'            : 'https://bicr-resource.atr.jp/srpbsopen/' ,
+	'OpenNeuro / ds00xxxx'                   : 'https://openneuro.org/' ,
+	'Nifty/Neuromark ICA templates'          : 'https://trendscenter.org/data/' ,
+	'Generic Object Decoding (Kamitani)'     : 'https://openneuro.org/datasets/ds001246' ,
+	'Deep Image Reconstruction (Shen)'       : 'https://openneuro.org/datasets/ds001506' ,
+	'Narratives (Nastase)'                   : 'https://openneuro.org/datasets/ds002345' ,
+	'MSC (Midnight Scan Club)'               : 'https://openneuro.org/datasets/ds000224' ,
+	'Moth Radio Hour / Huth-LeBel story data': 'https://openneuro.org/datasets/ds003020' ,
+	'NOD (Natural Object Dataset)'           : 'https://openneuro.org/datasets/ds004496' ,
+	'Pereira et al. 2018'                    : 'https://osf.io/crwz7/' ,
+}
+
+
+def home(name):
+	"""Where a detected dataset lives, or '' when we have no checked URL for it."""
+	return HOMES.get(name, '')
+
+
+# What each collection IS , in one line. A list of names like ` SRPBS ` ,
+# ` REST-meta-MDD ` , ` NOD ` tells you nothing about what you are looking at ,
+# and /datasets shows one row per collection -- so the row has to be able to say
+# it. Deliberately WHAT and WHO , not how many : subject counts and scanner
+# details drift between releases , and this file is not the place anyone should
+# be reading them from ( the acquisition consensus below is , and it cites the
+# corpus for every value ). A name with no entry simply shows no description.
+DESCRIPTIONS = {
+	'HCP (Human Connectome Project)':
+		'Large-scale multimodal MRI of healthy young adults — the field\'s default resting-state and task reference.' ,
+	'HCP-EP / HCP-D / HCP-A':
+		'The Connectome lifespan and early-psychosis extensions — development, aging and clinical cohorts on HCP protocols.' ,
+	'NSD (Natural Scenes Dataset)':
+		'7T fMRI of eight subjects viewing tens of thousands of COCO images — the standard for image reconstruction work.' ,
+	'ABIDE':
+		'Aggregated resting-state fMRI from autism and control participants, pooled across many independent sites.' ,
+	'ADHD-200':
+		'Multi-site resting-state fMRI of children and adolescents with ADHD alongside typically-developing controls.' ,
+	'ADNI':
+		'Longitudinal MRI, PET, genetics and clinical follow-up on Alzheimer\'s disease and mild cognitive impairment.' ,
+	'UK Biobank':
+		'Population-scale UK cohort pairing brain MRI with genetics, health records and lifestyle measures.' ,
+	'ABCD':
+		'Longitudinal US study following adolescent brain development with repeated imaging and behavioural batteries.' ,
+	'BOLD5000':
+		'fMRI of subjects viewing 5,000 real-world scene images drawn from COCO, ImageNet and SUN.' ,
+	'THINGS-fMRI':
+		'Responses to the THINGS image database, which spans thousands of everyday object concepts.' ,
+	'Algonauts':
+		'A recurring challenge pairing brain responses to naturalistic images or video with model predictions.' ,
+	'CNeuroMod / Courtois':
+		'Deeply-sampled individuals scanned for many hours each on movies, video games and audio.' ,
+	'StudyForrest':
+		'Extensive 3T and 7T fMRI of participants hearing and watching the film Forrest Gump.' ,
+	'Forrest Gump 7T':
+		'The high-field arm of StudyForrest — 7T responses to the film\'s audio-visual narrative.' ,
+	'REST-meta-MDD':
+		'Aggregated resting-state fMRI from major-depression patients and controls across Chinese sites.' ,
+	'SRPBS / Japanese multi-site':
+		'Japanese multi-site resting-state fMRI spanning several psychiatric diagnoses and healthy controls.' ,
+	'OpenNeuro / ds00xxxx':
+		'The open BIDS archive itself — a paper citing a bare ds###### accession is pointing here.' ,
+	'Nifty/Neuromark ICA templates':
+		'TReNDS\'s spatially-constrained ICA templates, for extracting comparable networks across studies.' ,
+	'Generic Object Decoding (Kamitani)':
+		'fMRI while subjects viewed ImageNet objects — the classic object-decoding benchmark.' ,
+	'Deep Image Reconstruction (Shen)':
+		'Kamitani-lab fMRI of seen and imagined images, built for reconstructing what was viewed.' ,
+	'Narratives (Nastase)':
+		'A large collection of fMRI datasets in which subjects listened to spoken stories.' ,
+	'MSC (Midnight Scan Club)':
+		'Ten subjects scanned repeatedly across many sessions, for individual-level network mapping.' ,
+	'Moth Radio Hour / Huth-LeBel story data':
+		'Hours of fMRI per subject during passive listening to natural spoken stories.' ,
+	'NOD (Natural Object Dataset)':
+		'Large-scale fMRI of many subjects viewing naturalistic object images.' ,
+	'Pereira et al. 2018':
+		'fMRI of sentence and concept reading, built to train a general decoder of linguistic meaning.' ,
+}
+
+
+def describe(name):
+	"""One line on what a detected dataset is, or '' when we have none."""
+	return DESCRIPTIONS.get(name, '')
+
+
 # parameters we try to attach to a dataset name
 PARAM_RX = {
 	'TR': re.compile(r'\b(?:TR|repetition time)\s*(?:\([A-Z]+\))?\s*[=:of ]{1,4}\s*(\d+(?:\.\d+)?)\s*(ms|msec|s\b|sec|seconds?)?', re.I),
@@ -52,12 +166,18 @@ PARAM_RX = {
 }
 
 
-def detect(text):
-	"""Which public datasets does this paper use?  Returns list of names."""
+def detect(text, min_hits=2):
+	"""Which public datasets does this paper use?  Returns list of names.
+
+	min_hits is the bar for believing a mention. Two is right for a full paper --
+	50,000 characters in which "HCP" turns up once in a sentence about somebody
+	else's work is not a paper that uses HCP. It is wrong for an ABSTRACT, which
+	names its data once and moves on, so /review-missing passes 1.
+	"""
 	out = []
 	for name, pats in DATASETS.items():
 		n = sum(len(re.findall(p, text)) for p in pats)
-		if n >= 2:
+		if n >= min_hits:
 			out.append(name)
 	return out
 

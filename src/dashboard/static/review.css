@@ -1,0 +1,224 @@
+/* ---------------------------------------------------------------------------
+   review.css -- the look of a SCREENED PAPER LIST. Loaded by /review and by
+   /review-missing , after /static/common.css and before each page's own
+   <style> , so a page can still override any of it.
+
+   The two pages ask the same question of two different pools -- the papers you
+   curated , and the papers you have never seen -- and answer it with the same
+   furniture : a filter chipbar , a criteria disclosure , an expandable paper
+   row with a priority stamp , and the uniform field grid whose every cell opens
+   to the verbatim sentence it was parsed from. That furniture was written for
+   /review first ; this is it lifted out whole the second page needed it , so
+   there is one place to change how a screened paper looks.
+
+   What is NOT here : the base palette , the header , the buttons and .navlink
+   ( /static/common.css ) , and anything only one of the two pages has.
+
+   The colour vocabulary below is declared in FOUR blocks , not one -- light ,
+   dark , and each again under the pastel skin -- because a hex typed into a
+   rule is a colour that only works in one theme.
+--------------------------------------------------------------------------- */
+
+/* The colour vocabulary -- a field's background , the pill colours , the "the
+   paper does not say" grey. The base palette ( --bg , --fg , --accent and
+   friends ) comes from /static/common.css ; only what a review page needs on
+   top of it is spelled out here. */
+:root {
+  --field:#f2f5ef; --edge:#a8c2b1; --prose:#2b3439; --faint:#8e9a93;
+  --sel:#d8e9de; --sel-fg:#08442a;
+  --ds:#dcefe9;  --ds-fg:#0f5c4d;
+  --mod:#e8e2f4; --mod-fg:#4a3480;
+  --cur:#f4e7cf; --cur-fg:#7a5715;
+  --pri1:#d5ecdd; --pri1-fg:#046a38;
+  --pri2:#dbe7f5; --pri2-fg:#1d4f7c;
+  --pri3:#e6e9e4; --pri3-fg:#5a6560;
+  --note-bg:#fdf6e6; --note-line:#e0c893;
+}
+:root[data-theme="dark"] {
+  --field:#141c22; --edge:#3d5147; --prose:#cfd6d0; --faint:#6b7a73;
+  --sel:#33422f; --sel-fg:#f0dfb8;
+  --ds:#1a2f2c;  --ds-fg:#7fd4c4;
+  --mod:#2a2438; --mod-fg:#c3a8f0;
+  --cur:#3a2f13; --cur-fg:#f8e08e;
+  --pri1:#1b3f2c; --pri1-fg:#8fd0a0;
+  --pri2:#22323f; --pri2-fg:#8ec8ff;
+  --pri3:#242f2c; --pri3-fg:#a9b6cc;
+  --note-bg:#1e1a11; --note-line:#4a3a1a;
+}
+:root[data-skin="pastel"] {
+  --field:#f4f6f9; --edge:#b3c6de; --prose:#2b3038; --faint:#98a1ad;
+  --sel:#dbe9fb; --sel-fg:#0d47a1;
+  --ds:#dcf0ec;  --ds-fg:#0f5c4d;
+  --mod:#e9e3f6; --mod-fg:#4a3480;
+  --cur:#fdeacd; --cur-fg:#a8560a;
+  --pri1:#dcf0e2; --pri1-fg:#046A38;
+  --pri2:#dde9f9; --pri2-fg:#1a4f8a;
+  --pri3:#e8ebef; --pri3-fg:#5b6470;
+  --note-bg:#fff7e8; --note-line:#f0d7a8;
+}
+:root[data-skin="pastel"][data-theme="dark"] {
+  --field:#1f242e; --edge:#38506b; --prose:#c8cfda; --faint:#5b6472;
+  --sel:#1d3550; --sel-fg:#cfe6ff;
+  --ds:#1a2b2b;  --ds-fg:#7fd4c4;
+  --mod:#2b2338; --mod-fg:#c3a8f0;
+  --cur:#3a2a13; --cur-fg:#ffb454;
+  --pri1:#1b3f2c; --pri1-fg:#5fd99a;
+  --pri2:#1d3550; --pri2-fg:#8ec8ff;
+  --pri3:#2a2f3d; --pri3-fg:#a9b6cc;
+  --note-bg:#1e1a11; --note-line:#4a3a1a;
+}
+/* Everything EVERY prma page shares -- body , header , buttons , .navlink , the
+   search box -- is in /static/common.css. What is left here is where a review
+   page differs from it : a tighter header , a narrower search box. */
+header { padding:11px 18px 9px; }
+.titlebar { gap:12px; }
+.counts { gap:13px; }
+input[type=search] { border-radius:7px; padding:7px 11px; min-width:230px; }
+select {
+  background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+  border-radius:7px; padding:7px 9px; font-size:13px;
+}
+
+/* ---- filter chips ---- */
+.controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:9px; }
+.chipbar { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+.chipbar .lbl { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-right:2px; }
+.chip {
+  background:var(--chip); border:1px solid transparent; color:var(--fg);
+  border-radius:11px; padding:2px 9px; font-size:12px; cursor:pointer; user-select:none;
+  white-space:nowrap;
+}
+.chip:hover { border-color:var(--line); }
+.chip.on { background:var(--sel); border-color:var(--accent); color:var(--sel-fg); }
+.chip .c { color:var(--muted); font-variant-numeric:tabular-nums; margin-left:5px; font-size:11px; }
+.chip.on .c { color:inherit; opacity:.72; }
+.sep { width:1px; align-self:stretch; background:var(--line); margin:0 3px; }
+
+main { padding:16px 18px 60px; max-width:1180px; margin:0 auto; }
+#task-chips { margin-bottom:14px; }
+
+/* ---- banner ( empty / building / stale ) ---- */
+.banner {
+  border:1px solid var(--line); border-radius:10px; background:var(--panel);
+  padding:14px 16px; margin-bottom:16px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+}
+.banner.warn { border-color:var(--note-line); background:var(--note-bg); }
+.banner .msg { flex:1; min-width:260px; }
+.banner .msg b { display:block; margin-bottom:3px; }
+.banner .msg span { color:var(--muted); font-size:12.5px; }
+.track { height:8px; border-radius:5px; background:var(--panel2); overflow:hidden; width:100%; margin-top:9px; }
+.track .done { background:var(--accent); height:100%; transition:width .3s ease; }
+
+/* ---- criteria ---- */
+details.crit { margin-bottom:14px; }
+details.crit > summary {
+  cursor:pointer; color:var(--muted); font-size:12px; list-style:none;
+  text-transform:uppercase; letter-spacing:.5px;
+}
+details.crit > summary::-webkit-details-marker { display:none; }
+details.crit > summary::before { content:"▸ "; }
+details.crit[open] > summary::before { content:"▾ "; }
+details.crit ol { margin:9px 0 0; padding-left:22px; color:var(--muted); font-size:12.5px; }
+details.crit li { margin-bottom:6px; }
+
+/* ---- paper rows ---- */
+.section-title {
+  color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.5px;
+  margin:24px 0 10px; display:flex; align-items:baseline; gap:9px;
+}
+.section-title .n { color:var(--fg); font-weight:600; }
+.paper { border:1px solid var(--line); border-radius:9px; background:var(--panel); margin-bottom:7px; }
+.paper.open { border-color:var(--edge); }
+.hd { display:flex; gap:11px; padding:10px 12px; cursor:pointer; align-items:flex-start; }
+.hd:hover { background:var(--panel2); border-radius:9px; }
+.paper.open .hd { border-radius:9px 9px 0 0; }
+.hd .num { color:var(--muted); font-variant-numeric:tabular-nums; width:34px; flex:none; text-align:right; font-size:12px; padding-top:2px; }
+.pri {
+  flex:none; font-size:11px; font-weight:700; border-radius:5px; padding:2px 6px; margin-top:1px;
+  background:var(--chip); color:var(--muted);
+}
+.pri.p1 { background:var(--pri1); color:var(--pri1-fg); }
+.pri.p2 { background:var(--pri2); color:var(--pri2-fg); }
+.pri.p3 { background:var(--pri3); color:var(--pri3-fg); }
+.who { flex:1; min-width:0; }
+.who .t { font-weight:600; }
+.who .t .yr { color:var(--muted); font-weight:400; font-variant-numeric:tabular-nums; margin-left:7px; font-size:12.5px; }
+.who .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+.who .sub .model { color:var(--mod-fg); font-weight:600; }
+.who .sub .role { color:var(--muted); }
+.who .tagline { margin-top:5px; display:flex; gap:5px; flex-wrap:wrap; }
+.tag { font-size:11px; padding:1px 7px; border-radius:9px; background:var(--chip); color:var(--muted); }
+.tag.ds { background:var(--ds); color:var(--ds-fg); }
+.tag.mod { background:var(--mod); color:var(--mod-fg); }
+.tag.cur { background:var(--cur); color:var(--cur-fg); }
+.lk { flex:none; white-space:nowrap; padding-top:2px; text-align:right; }
+.lk a { color:var(--accent); text-decoration:none; margin-left:9px; font-size:12.5px; }
+.lk a:hover { text-decoration:underline; }
+.lk .meta { color:var(--muted); font-size:11.5px; margin-top:4px; font-variant-numeric:tabular-nums; }
+
+/* ---- expanded body ---- */
+.body { display:none; padding:2px 12px 14px 57px; border-top:1px solid var(--line); }
+.paper.open .body { display:block; }
+.blk { margin-top:13px; }
+.blk > h4 {
+  margin:0 0 7px; font-size:11px; color:var(--muted); font-weight:600;
+  text-transform:uppercase; letter-spacing:.5px;
+}
+.prose { color:var(--prose); font-size:13px; }
+.prose.clamp { max-height:74px; overflow:hidden; position:relative; cursor:pointer; }
+.prose.clamp::after {
+  content:""; position:absolute; left:0; right:0; bottom:0; height:34px;
+  background:linear-gradient(transparent,var(--panel));
+}
+.notes { color:var(--cur-fg); font-size:13px; }
+.caps { color:var(--prose); font-size:12.5px; }
+.caps div { margin-bottom:5px; }
+
+/* ---- the uniform field grid ---- */
+.fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(268px,1fr)); gap:5px; }
+.f {
+  background:var(--field); border:1px solid transparent; border-radius:7px;
+  padding:6px 9px; font-size:12.5px; min-width:0;
+}
+.f.has { cursor:pointer; }
+.f.has:hover { border-color:var(--line); }
+.f .k { color:var(--muted); font-size:11px; }
+.f .v { margin-top:1px; word-break:break-word; }
+.f .v.none { color:var(--faint); font-style:italic; }
+.f .badge {
+  font-size:10px; padding:0 5px; border-radius:8px; margin-left:6px; vertical-align:1px;
+  background:var(--chip); color:var(--muted);
+}
+.f .badge.curated  { background:var(--cur); color:var(--cur-fg); }
+.f .badge.inferred { background:var(--ds); color:var(--ds-fg); }
+.f .ev { display:none; margin-top:7px; border-top:1px solid var(--line); padding-top:7px; }
+.f.open { border-color:var(--edge); }
+.f.open .ev { display:block; }
+.f .ev .alt { color:var(--muted); font-size:11.5px; margin-bottom:6px; }
+.f .ev q {
+  display:block; color:var(--prose); font-size:11.5px; line-height:1.5;
+  border-left:2px solid var(--line); padding-left:8px; margin-bottom:6px;
+}
+.f .ev q::before, .f .ev q::after { content:""; }
+.f .ev .why { color:var(--ds-fg); font-size:11.5px; }
+
+.scores { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+.scores b { color:var(--fg); font-variant-numeric:tabular-nums; }
+
+/* ---- excluded + dataset tables ---- */
+table { width:100%; border-collapse:collapse; font-size:13px; }
+.tbl { border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+thead th {
+  text-align:left; color:var(--muted); font-weight:600; font-size:11.5px;
+  padding:7px 12px; border-bottom:1px solid var(--line); background:var(--panel); white-space:nowrap;
+}
+tbody td { padding:7px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover { background:var(--panel); }
+td.num, td.nowrap { width:1%; white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums; }
+.pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; background:var(--chip); color:var(--muted); }
+.pill.border { background:var(--cur); color:var(--cur-fg); }
+
+.empty { color:var(--muted); padding:44px; text-align:center; }
+code { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:12px; }
+footer { color:var(--muted); font-size:12px; padding:26px 18px 40px; max-width:1180px; margin:0 auto; line-height:1.6; }

@@ -88,6 +88,43 @@ SORT_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 REVIEW_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "review.html" )
 
+# The SAME three criteria , run over the papers you do NOT have : the dashboard's
+# "All missing" pool ( works your library cites , and works that cite it ) ,
+# screened on the only text there is for them -- a title and an OpenAlex abstract
+# ( src/review/missing.py ). High precision , low recall by construction , and the
+# page says so in those words. Served at GET /review-missing ; its document comes
+# from GET /api/review-missing .
+REVIEW_MISSING_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "review-missing.html" )
+
+# The other cross-cutting view of the library : every paper ` prma code ` found a
+# SOURCE-CODE / DATA repo for , with a column for each curated surface that holds
+# it ( review / sort / tiers / picked figures ) , so "papers that ship code AND
+# are in the review" is a sort rather than a search. Served at GET /code ; its
+# rows come from GET /api/code and the xlsx from POST /api/code/export.xlsx .
+CODE_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "code.html" )
+
+# Its sibling for the OTHER half of "what does this paper stand on" : every
+# PUBLIC DATASET ` prma datasets ` found -- the archive records a paper links
+# ( OpenNeuro / NeuroVault / DANDI / OSF / Zenodo / Hugging Face / ... ) and the
+# collections it only NAMES ( HCP , NSD , ABIDE , ... ) -- against the same four
+# curated surfaces. Served at GET /datasets ; rows from GET /api/datasets , the
+# workbook from POST /api/datasets/export.xlsx .
+DATASETS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "datasets.html" )
+
+# The chrome the pages above SHARE : the palette + header styling
+# ( common.css ) , the helpers they all used to redeclare ( common.js ) and the
+# pre-paint theme restore ( boot.js ). Served verbatim under GET /static/ so
+# each page links one line instead of carrying its own drifting copy.
+#
+# The two figure reports are deliberately NOT in on this : ` prma images ` writes
+# them to output/ as standalone files that have to work opened straight off
+# disk , with no server to fetch /static/ from.
+STATIC_DIR = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "static" )
+
 
 class _RequestLog:
 	"""Thread-safe ring of recent /exists queries + running totals, read by the
@@ -562,25 +599,36 @@ class BoardState:
 
 
 class ReviewState:
-	"""The /review document -- read from disk , rebuilt in the background.
+	"""A screened document -- read from disk , rebuilt in the background.
 
-	Unlike everything else the server holds , this one is DERIVED and EXPENSIVE :
-	it is a regex pass over every candidate paper's full text , which is minutes
-	on a few hundred papers ( see src/review/build.py ). So it is never built on
-	the request that noticed it was stale. The request gets whatever is on disk ,
-	plus a flag saying the boards have moved since ; a rebuild happens on its own
-	thread , and the page watches its progress and re-fetches when it lands.
+	Unlike everything else the server holds , these are DERIVED and EXPENSIVE :
+	a regex pass over every candidate , which is minutes ( see
+	src/review/build.py ). So one is never built on the request that noticed it
+	was stale. The request gets whatever is on disk , plus a flag saying the
+	inputs have moved since ; a rebuild happens on its own thread , and the page
+	watches its progress and re-fetches when it lands.
 
 	One rebuild at a time , enforced here : the page polls , and two overlapping
 	full-library passes would only fight each other for the same CPU.
 
-	Staleness is the mtimes of the two curated surfaces the review is built FROM
-	( the sort board and the /images selection ) , stamped into the document at
-	build time -- two stat() calls per poll , no parse. Editing either board is
-	what makes the review out of date , so that is exactly the right signal."""
+	TWO SURFACES , ONE CLASS. `module` is whichever builder this instance drives ,
+	and both expose the same five functions ( load / save / build / signature /
+	is_stale ) :
 
-	def __init__( self , args ):
+	  src/review/build.py    -> /review          the two curated boards , full text
+	  src/review/missing.py  -> /review-missing  the OpenAlex pool , abstracts only
+
+	Staleness is the mtimes of whatever that builder reads , stamped into the
+	document at build time -- a handful of stat() calls per poll , no parse.
+	Editing a board is what makes /review out of date ; a ` prma reindex ` that
+	finds new references is what makes /review-missing out of date. Each builder
+	watches its own inputs , so each says so at exactly the right moment."""
+
+	def __init__( self , args , module=None , name="review" ):
+		from ..review import build as review_build
 		self.args     = args
+		self.module   = module or review_build
+		self.name     = name    # what this surface calls itself in the logs
 		self._lock    = threading.Lock()
 		self.doc      = None
 		self.building = False
@@ -590,13 +638,19 @@ class ReviewState:
 		self.error    = ""
 		self.built_at = ""
 
+	def build_kwargs( self ):
+		"""Extra keyword arguments for this surface's build(). Empty for /review ,
+		which reads everything it needs off disk ; /review-missing overrides it to
+		hand its builder the pools the server is already holding rather than make
+		it re-read a 154 MB index ( see MissingReviewState )."""
+		return {}
+
 	def load( self ):
-		"""Read the persisted review ( call at startup ). Never raises."""
-		from ..review import build as review_build
+		"""Read the persisted document ( call at startup ). Never raises."""
 		try:
-			doc = review_build.load( self.args )
+			doc = self.module.load( self.args )
 		except Exception as e:
-			print( f"review :: could not load the built review ( {e} )" )
+			print( f"{self.name} :: could not load the built document ( {e} )" )
 			doc = None
 		with self._lock:
 			self.doc      = doc
@@ -604,10 +658,9 @@ class ReviewState:
 		return doc is not None
 
 	def stale( self ):
-		"""Have the boards moved since this review was built ( or was it never )?"""
-		from ..review import build as review_build
+		"""Have the inputs moved since this was built ( or was it never )?"""
 		try:
-			return review_build.is_stale( self.args , self.doc )
+			return self.module.is_stale( self.args , self.doc )
 		except Exception:
 			return False
 
@@ -655,24 +708,22 @@ class ReviewState:
 		return self.status()
 
 	def _build( self ):
-		from ..review import build as review_build
-
 		def progress( stage , done , total ):
 			with self._lock:
 				self.stage , self.done , self.total = stage , done , total
 
 		try:
-			doc = review_build.build( self.args , progress=progress )
-			doc[ "meta" ][ "input_signature" ] = review_build.signature( self.args )
-			review_build.save( self.args , doc )
+			doc = self.module.build( self.args , progress=progress , **self.build_kwargs() )
+			doc[ "meta" ][ "input_signature" ] = self.module.signature( self.args )
+			self.module.save( self.args , doc )
 			with self._lock:
 				self.doc      = doc
 				self.built_at = doc[ "meta" ][ "generated" ]
 				self.error    = ""
 			c = doc[ "meta" ][ "counts" ]
-			print( f"review :: rebuilt -- {c[ 'included' ]} included / {c[ 'candidates' ]} candidates" )
+			print( f"{self.name} :: rebuilt -- {c[ 'included' ]} included / {c[ 'candidates' ]} candidates" )
 		except Exception as e:
-			print( f"review :: rebuild failed ( {e} )" )
+			print( f"{self.name} :: rebuild failed ( {e} )" )
 			with self._lock:
 				self.error = str( e )
 		finally:
@@ -681,12 +732,43 @@ class ReviewState:
 				self.stage    = ""
 
 
+class MissingReviewState( ReviewState ):
+	"""/review-missing : the same screen over the papers you do NOT have.
+
+	Everything about how it is served is identical to /review -- serve the last
+	build , say when it is stale , rebuild on a thread while the page watches --
+	so all of that is inherited. The one difference is where the candidates come
+	from : the dashboard's own index , which this process is already holding in
+	memory. Handing those pools to the builder saves it re-reading a 154 MB
+	gzipped index off disk to arrive at the same rows.
+
+	When the dashboard index is NOT ready ( nobody has opened the dashboard yet
+	this run ) the pools are left out and the builder loads them from disk on its
+	own thread , which is exactly what ` prma review-missing ` does."""
+
+	def __init__( self , args , dash ):
+		from ..review import missing as review_missing
+		super().__init__( args , module=review_missing , name="review-missing" )
+		self.dash = dash
+
+	def build_kwargs( self ):
+		d = self.dash
+		if d is None or getattr( d , "status" , "" ) != "ready":
+			return {}
+		# _apply_pools swaps these lists wholesale rather than mutating them , so
+		# reading the attribute hands back one consistent pool ( the same thing
+		# _code_rows does with dash.library ).
+		return { "pools": { "references": d.references , "cited_by": d.cited_by } }
+
+
 class PaperMeta:
 	"""The per-row lookup both board pages ask for : which links a paper can
 	offer ( PDF / figures / MD / Methods ) and -- on request -- the modality
 	stamp ` prma modalities ` already pinned on it , which is what lets a freshly
 	added row arrive pre-tagged fMRI / EEG instead of blank ( and , on /sort ,
-	drop straight into the section that says so ).
+	drop straight into the section that says so ). Also on request : the code
+	and data the scans found for it , which /sort writes into a new row's Code /
+	Datasets cells.
 
 	Everything but the stamp comes off the in-memory dashboard index and is
 	free ; the stamp costs one paper-record read -- a few hundred KB -- so it is
@@ -744,12 +826,12 @@ class PaperMeta:
 		self._mods[ key ] = ( mtime , used , inferred , stale )
 		return used , inferred , stale
 
-	def meta( self , keys , want_mods=False ):
+	def meta( self , keys , want_mods=False , want_links=False ):
 		"""What a page needs to draw a row it only knows the KEY of : the library
 		identity ( title / DOI / year ) , which links exist for it , and
-		optionally the modality stamp. Keys that aren't library papers come back
-		with in_library=false and nothing else -- the page already holds their
-		title / DOI from the search hit that added them."""
+		optionally the modality stamp and the code / data links. Keys that aren't
+		library papers come back with in_library=false and nothing else -- the
+		page already holds their title / DOI from the search hit that added them."""
 		lib , out = self._lib_index() , {}
 		for key in ( keys or [] )[ :500 ]:
 			if not isinstance( key , str ) or not key:
@@ -779,6 +861,18 @@ class PaperMeta:
 				entry[ "mods" ]     = used
 				entry[ "inferred" ] = inferred
 				entry[ "stale" ]    = stale
+			if want_links:
+				# Exactly what /code and /datasets show for the paper , off the same
+				# index entry they read ( see _code_rows / _dataset_rows ) : the
+				# repos ` prma code ` found , and the archive records + named
+				# collections ` prma datasets ` found -- a name with the home page
+				# /datasets links it to. On request only -- carried on the
+				# whole-board lookup every page load makes , they'd nearly double it
+				# for rows that never read them.
+				entry[ "code" ]  = row.get( "code_links" ) or []
+				entry[ "data" ]  = row.get( "dataset_links" ) or []
+				entry[ "names" ] = [ { "name": n , "url": ds_vocab.home( n ) }
+					for n in ( row.get( "dataset_names" ) or [] ) ]
 			out[ key ] = entry
 		return out
 
@@ -865,12 +959,36 @@ def _review_state( review ):
 	return f"{n} included papers" + ( " ; STALE -- boards moved since" if st.get( "stale" ) else "" )
 
 
+def _load_review_missing_html():
+	"""Read the missing-review page fresh on each request. Falls back to a stub."""
+	try:
+		return REVIEW_MISSING_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>review-missing.html not found</h1><pre>{e}</pre>"
+
+
 def _load_review_html():
 	"""Read the review page fresh on each request. Falls back to a stub."""
 	try:
 		return REVIEW_HTML_PATH.read_text( encoding="utf-8" )
 	except Exception as e:
 		return f"<h1>review.html not found</h1><pre>{e}</pre>"
+
+
+def _load_code_html():
+	"""Read the code page fresh on each request. Falls back to a stub."""
+	try:
+		return CODE_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>code.html not found</h1><pre>{e}</pre>"
+
+
+def _load_datasets_html():
+	"""Read the datasets page fresh on each request. Falls back to a stub."""
+	try:
+		return DATASETS_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>datasets.html not found</h1><pre>{e}</pre>"
 
 
 # Serializes status recomputes so a flurry of /status loads can't kick off
@@ -1088,6 +1206,526 @@ def _errors_payload( args ):
 	}
 
 
+# ---------------------------------------------------------------------------
+# /code : every paper ` prma code ` found a repo for , against the curation
+# ---------------------------------------------------------------------------
+# The question this page exists to answer is a JOIN : which papers that ship
+# code are also ones I kept. Every side of it is already in memory --
+#
+#   the links      the dashboard index's library rows ( indexer.py pins
+#                  `code_links` on each , read through code.display_links , so
+#                  this is the same list the In-Library "Code" column shows )
+#   the sort board BoardState.doc     ( src/db/sortboard.py )
+#   the tier list  BoardState.doc     ( src/db/tiers.py )
+#   the review     ReviewState.doc    ( output/cache/review.json )
+#   the figures    FigureSelectionState ( output/cache/images-state.json )
+#
+# -- so the payload is a dict merge , not a library walk : no paper record is
+# re-read and nothing is re-derived. That is deliberate. ` prma code ` is the
+# one place a paper is scanned ( see src/tasks/code.py ) , and every surface
+# reads what it pinned , so no two pages can disagree about what code a paper
+# has.
+#
+# One row per LIBRARY paper -- the ones with an EMPTY `code` list included too ,
+# because "in the review , ships nothing" is a question worth asking and the
+# page's Has-code chip is one click either way. Papers on a board that aren't in
+# the library have never been scanned , so they have no answer to give and are
+# left out ( the page's footer says so ).
+
+
+def _fig_counts( state ):
+	"""paper key -> how many of its figures are picked , off one figure report's
+	curation. Figure ids are "<paper-key>#figure-<N>" ( see src/db/figure_state.py )
+	and a paper key never contains '#' , so the split is unambiguous."""
+	counts = {}
+	for fid in ( ( state.snapshot() if state else {} ).get( "selected" ) or [] ):
+		key = str( fid ).rsplit( "#" , 1 )[ 0 ]
+		if key:
+			counts[ key ] = counts.get( key , 0 ) + 1
+	return counts
+
+
+def _sort_where( doc ):
+	"""paper key -> ( "list" | "staged" , tags ) off the sort board. The list is
+	read first so a key that somehow appears in both reads as placed."""
+	out = {}
+	for where , rows in ( ( "list" , ( doc or {} ).get( "items" ) ) ,
+	                      ( "staged" , ( doc or {} ).get( "staging" ) ) ):
+		for row in ( rows or [] ):
+			key = ( row or {} ).get( "key" )
+			if key and key not in out:
+				out[ key ] = ( where , list( row.get( "tags" ) or [] ) )
+	return out
+
+
+def _tier_where( doc ):
+	"""paper key -> ( tier label , tags ) off the tier list. The staging shelf
+	reads as "" , the same as the sort board's does , so a shelved paper doesn't
+	claim a rank it was never given."""
+	out = {}
+	for tier in ( ( doc or {} ).get( "tiers" ) or [] ):
+		label = tier.get( "label" ) or tier.get( "id" ) or ""
+		for row in ( tier.get( "items" ) or [] ):
+			key = ( row or {} ).get( "key" )
+			if key and key not in out:
+				out[ key ] = ( label , list( row.get( "tags" ) or [] ) +
+					list( row.get( "mods" ) or [] ) )
+	for row in ( ( doc or {} ).get( "staging" ) or [] ):
+		key = ( row or {} ).get( "key" )
+		if key and key not in out:
+			out[ key ] = ( "" , list( row.get( "tags" ) or [] ) +
+				list( row.get( "mods" ) or [] ) )
+	return out
+
+
+def _review_where( doc ):
+	"""paper key -> ( "included" | "excluded" , detail ) off the built review.
+	`detail` is the task category for an included paper and the exclusion reason
+	for a dropped one -- the one word each side has to say about why it is
+	there. Keys the review never saw are absent ( the paper had no extracted
+	text , or is on neither surface the review reads )."""
+	out = {}
+	for p in ( ( doc or {} ).get( "papers" ) or [] ):
+		key = ( p or {} ).get( "key" )
+		if key:
+			out[ key ] = ( "included" , p.get( "task_category" ) or "" )
+	for p in ( ( doc or {} ).get( "excluded" ) or [] ):
+		key = ( p or {} ).get( "key" )
+		if key and key not in out:
+			out[ key ] = ( "excluded" , p.get( "exclusion_reason" ) or "" )
+	return out
+
+
+def _code_rows( dash , sort_board , tiers_board , review , figstate ):
+	"""One row per library paper : its identity , the code links ` prma code `
+	pinned , and where the four curated surfaces have it. The rows the /code
+	page draws and the workbook it exports are both built from this , so the
+	sheet can never say something the table didn't."""
+	srt   = _sort_where(  ( sort_board.snapshot()  if sort_board  else {} ).get( "doc" ) )
+	tier  = _tier_where(  ( tiers_board.snapshot() if tiers_board else {} ).get( "doc" ) )
+	rev   = _review_where( getattr( review , "doc" , None ) )
+	figs  = _fig_counts( ( figstate or {} ).get( "images" ) )
+	mfigs = _fig_counts( ( figstate or {} ).get( "method-images" ) )
+
+	rows = []
+	for e in ( getattr( dash , "library" , None ) or [] ):
+		key = e.get( "key" )
+		if not key:
+			continue
+		links     = e.get( "code_links" ) or []
+		s_where , s_tags = srt.get(  key , ( "" , [] ) )
+		t_where , t_tags = tier.get( key , ( "" , [] ) )
+		r_where , r_why  = rev.get(  key , ( "" , "" ) )
+		rows.append( {
+			"key":        key ,
+			"title":      e.get( "title" ) or "(untitled)" ,
+			"doi":        e.get( "doi" ) or "" ,
+			"year":       e.get( "year" ) ,
+			"cited_by":   e.get( "cited_by" ) ,
+			"added":      ( e.get( "created_at" ) or "" )[ :10 ] ,
+			"published":  e.get( "pubdate" ) or "" ,
+			"pdf":        bool( e.get( "pdf" ) ) ,
+			"has_md":     bool( e.get( "has_md" ) ) ,
+			"montage":    e.get( "montage" ) or "" ,
+			# The links themselves , already compacted for the browser by
+			# code.display_links -- { url , source , raw? } , where `raw` is the
+			# OCR-mangled original a repair replaced.
+			"code":       links ,
+			"sources":    sorted( { l.get( "source" ) or "link" for l in links } ) ,
+			"review":     r_where ,      # "" | "included" | "excluded"
+			"review_why": r_why ,        # task category , or why it was dropped
+			"sort":       s_where ,      # "" | "list" | "staged"
+			"tier":       t_where ,      # tier label , "" when unranked / absent
+			"figures":    figs.get(  key , 0 ) ,
+			"mfigures":   mfigs.get( key , 0 ) ,
+			"tags":       sorted( { t for t in ( s_tags + t_tags ) if t } ) ,
+		} )
+	return rows
+
+
+def _code_payload( dash , sort_board , tiers_board , review , figstate ):
+	"""GET /api/code . Carries the index's own state as well as the rows : the
+	library pool is what every row comes from , so a page that opened before the
+	index finished building needs to know to poll rather than draw an empty
+	table."""
+	status = getattr( dash , "status" , "idle" )
+	rows   = _code_rows( dash , sort_board , tiers_board , review , figstate ) \
+		if status == "ready" else []
+	with_code = sum( 1 for r in rows if r[ "code" ] )
+	return {
+		"ok"       : True ,
+		"status"   : status ,                       # idle | building | ready | error
+		"message"  : getattr( dash , "message" , "" ) ,
+		"error"    : getattr( dash , "error" , "" ) ,
+		"built_at" : getattr( dash , "built_at" , None ) ,
+		"review"   : ( review.status() if review else { "available": False } ) ,
+		"counts"   : {
+			"papers"    : len( rows ) ,
+			"with_code" : with_code ,
+			"links"     : sum( len( r[ "code" ] ) for r in rows ) ,
+			"in_review" : sum( 1 for r in rows if r[ "code" ] and r[ "review" ] == "included" ) ,
+		} ,
+		"rows"     : rows ,
+	}
+
+
+# The exported workbook. Two sheets over the same rows the page is showing :
+# one line per PAPER , and one line per ( paper , link ) for when the repo is
+# the thing you are counting. Column order matches the page's own , left to
+# right , so the sheet reads like the table it came from.
+_CODE_PAPER_HEADERS = ( "DOI / Key" , "Title" , "Year" , "Added" , "Published" ,
+                        "Cited By" , "# Links" , "Sources" , "Code URLs" ,
+                        "Review" , "Review Detail" , "Sort" , "Tier" ,
+                        "Figures" , "Design Figures" , "Tags" , "PDF" , "Proxy" )
+_CODE_LINK_HEADERS  = ( "DOI / Key" , "Title" , "Year" , "Source" , "URL" ,
+                        "OCR-repaired from" , "Review" , "Sort" , "Tier" ,
+                        "Figures" , "Tags" )
+
+
+def _code_workbook_bytes( rows ):
+	"""Build the /code export in memory and hand back the .xlsx bytes.
+	openpyxl saves to any file-like object , so this never touches disk -- the
+	one workbook that IS written to disk is ` prma code `'s own
+	output/code/code.xlsx , which is a different ( whole-library ) rollup.
+
+	The proxy prefix comes from the task that owns it rather than being spelled
+	out again here , the same way the pages take it from one const in
+	/static/common.js : a sheet is the one surface with no JS to build its links
+	in , so this is where the Python copy is read."""
+	import io
+	from ..tasks.code import _PROXY_URL_TEMPLATE
+
+	paper_rows , link_rows = [] , []
+	for r in rows:
+		doi   = r.get( "doi" ) or ""
+		ident = utils.Link( doi , f"https://doi.org/{doi}" ) if doi else ( r.get( "key" ) or "" )
+		proxy_url = _PROXY_URL_TEMPLATE.format( doi=doi ) if doi else ""
+		proxy = utils.Link( proxy_url , proxy_url ) if proxy_url else ""
+		links = r.get( "code" ) or []
+		tags  = " , ".join( r.get( "tags" ) or [] )
+		paper_rows.append( [
+			ident , r.get( "title" ) or "" , r.get( "year" ) or "" ,
+			r.get( "added" ) or "" , r.get( "published" ) or "" ,
+			r.get( "cited_by" ) if r.get( "cited_by" ) is not None else "" ,
+			len( links ) , " , ".join( r.get( "sources" ) or [] ) ,
+			"\n".join( l.get( "url" ) or "" for l in links ) ,
+			r.get( "review" ) or "" , r.get( "review_why" ) or "" ,
+			r.get( "sort" ) or "" , r.get( "tier" ) or "" ,
+			r.get( "figures" ) or 0 , r.get( "mfigures" ) or 0 , tags ,
+			"yes" if r.get( "pdf" ) else "" , proxy ,
+		] )
+		for l in links:
+			url = l.get( "url" ) or ""
+			link_rows.append( [
+				ident , r.get( "title" ) or "" , r.get( "year" ) or "" ,
+				l.get( "source" ) or "" , utils.Link( url , url ) ,
+				l.get( "raw" ) or "" ,
+				r.get( "review" ) or "" , r.get( "sort" ) or "" ,
+				r.get( "tier" ) or "" , r.get( "figures" ) or 0 , tags ,
+			] )
+
+	buf = io.BytesIO()
+	utils.write_xlsx( buf , [
+		( "Papers" , _CODE_PAPER_HEADERS , paper_rows ) ,
+		( "Links"  , _CODE_LINK_HEADERS  , link_rows  ) ,
+	] )
+	return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# /datasets : the PUBLIC DATA every paper stands on , against the curation
+# ---------------------------------------------------------------------------
+# /code's sibling , and the same join with the other half of the question. A
+# deep-learning fMRI paper's data is almost never the authors' own upload : it
+# is somebody else's public collection , cited two different ways --
+#
+#   as a LINK   an archive record ( openneuro.org/datasets/ds000105 , a Zenodo
+#               DOI , an OSF node , a Hugging Face dataset ) , harvested out of
+#               the abstract + OCR text by ` prma datasets ` and pinned on the
+#               record ( see src/tasks/datasets.py )
+#   as a NAME   "we use HCP" , with nothing to click -- matched against the same
+#               vocabulary /review screens with ( src/review/datasets.py ) , so a
+#               paper's datasets read the same on both pages
+#
+# Both are already on the record , and the four curated surfaces are already in
+# memory , so this is the same dict merge _code_rows is : nothing is re-read and
+# nothing is re-derived. One row per LIBRARY paper , the empty ones included --
+# "in the review , names no public data" is a question worth asking , and the
+# page's Uses-data chip is one click either way.
+#
+# The BY-DATASET pivot -- one row per collection , with the papers that use it --
+# is the page's own work , not this payload's : it is a regrouping of these
+# rows , and the browser is where prma decides how things are presented.
+
+
+from ..review import datasets as ds_vocab      # the vocabulary : homes + descriptions
+
+# An ARCHIVE record says what it is out of two caches , neither of them built
+# here and neither of them touched by a request :
+#
+#   output/cache/datasets/  ` prma datasets ` fetches every unique record once --
+#                           Zenodo / Figshare / OpenNeuro / OSF through their own
+#                           APIs , everything else by the page's <title> .
+#   output/cache/osf/       ` prma code ` already fetched every OSF node among the
+#                           CODE links , which covers records the dataset scan
+#                           might never have reached.
+#
+# Both are read as a whole directory and memoized on its mtime : /api/datasets is
+# a per-request dict merge , and re-reading a few hundred small files on every
+# load would be silly. A record in neither shows its URL and no description ,
+# which is the honest answer -- nobody has asked yet.
+_DS_NOTES  = { "mtime": None , "map": {} }
+_OSF_NOTES = { "mtime": None , "map": {} }
+
+
+def _record_titles( args ):
+	"""{ canonical-url : title } off what ` prma datasets ` fetched. {} until it
+	has been run , or on any read error."""
+	try:
+		d = Path( args.output ).joinpath( "cache" , "datasets" )
+		mt = d.stat().st_mtime if d.is_dir() else None
+	except Exception:
+		return {}
+	if mt is None:
+		return {}
+	if _DS_NOTES[ "mtime" ] == mt:
+		return _DS_NOTES[ "map" ]
+	from ..tasks.code import _dedup_key
+	out = {}
+	for fp in d.glob( "*.json" ):
+		try:
+			rec = utils.read_json( fp ) or {}
+		except Exception:
+			continue
+		url , title = rec.get( "url" ) or "" , ( rec.get( "title" ) or "" ).strip()
+		if url and title:
+			out[ _dedup_key( url ) ] = title[ :300 ]
+	_DS_NOTES.update( mtime=mt , map=out )
+	return out
+
+
+def _osf_titles( args ):
+	"""{ guid : human title } off whatever ` prma code ` has cached. {} when the
+	cache doesn't exist , when OSF was never configured , or on any read error --
+	a missing description is a blank line , never a failed request."""
+	try:
+		d = Path( args.output ).joinpath( "cache" , "osf" )
+		mt = d.stat().st_mtime if d.is_dir() else None
+	except Exception:
+		return {}
+	if mt is None:
+		return {}
+	if _OSF_NOTES[ "mtime" ] == mt:
+		return _OSF_NOTES[ "map" ]
+	out = {}
+	for fp in d.glob( "*.json" ):
+		try:
+			rec = utils.read_json( fp ) or {}
+		except Exception:
+			continue
+		if rec.get( "status" ) != "ok":
+			continue
+		title = ( rec.get( "title" ) or "" ).strip()
+		if not title:
+			# No title , but a description is still an answer -- take its first
+			# sentence rather than dumping an abstract into a table row.
+			body = " ".join( ( rec.get( "description" ) or "" ).split() )
+			title = ( body.split( ". " )[ 0 ] + "." ) if body else ""
+		if title:
+			out[ rec.get( "guid" ) or fp.stem ] = title[ :300 ]
+	_OSF_NOTES.update( mtime=mt , map=out )
+	return out
+
+
+def _link_desc( url , records , osf_titles ):
+	"""What an archive record IS , read off the caches above -- never fetched
+	here. The dataset scan's own answer wins ; ` prma code `'s OSF cache is the
+	fallback , since it may hold a node this scan never saw."""
+	if records:
+		from ..tasks.code import _dedup_key
+		t = records.get( _dedup_key( url ) )
+		if t:
+			return t
+	if not osf_titles:
+		return ""
+	try:
+		from ..osf.osf import parse_node
+		guid = parse_node( url )
+	except Exception:
+		return ""
+	return osf_titles.get( guid , "" ) if guid else ""
+
+
+def _dataset_rows( dash , sort_board , tiers_board , review , figstate ):
+	"""One row per library paper : its identity , the public-dataset evidence
+	` prma datasets ` pinned , and where the four curated surfaces have it. The
+	page's tables and the workbook it exports are both built from this."""
+	srt   = _sort_where(  ( sort_board.snapshot()  if sort_board  else {} ).get( "doc" ) )
+	tier  = _tier_where(  ( tiers_board.snapshot() if tiers_board else {} ).get( "doc" ) )
+	rev   = _review_where( getattr( review , "doc" , None ) )
+	figs  = _fig_counts( ( figstate or {} ).get( "images" ) )
+	mfigs = _fig_counts( ( figstate or {} ).get( "method-images" ) )
+	_a    = getattr( dash , "args" , None )
+	recs  = _record_titles( _a ) if _a else {}
+	osft  = _osf_titles( _a )    if _a else {}
+
+	rows = []
+	for e in ( getattr( dash , "library" , None ) or [] ):
+		key = e.get( "key" )
+		if not key:
+			continue
+		# Each archive record travels with what it IS , where we know -- read
+		# time again , same as the homes below , so nothing has to be re-scanned
+		# when the OSF cache grows.
+		links     = [ dict( l , desc=_link_desc( l.get( "url" ) or "" , recs , osft ) )
+			for l in ( e.get( "dataset_links" ) or [] ) ]
+		# A named collection travels with WHERE IT LIVES , joined at read time
+		# off the vocabulary rather than baked into the scan -- so adding a home
+		# for a dataset is a one-line table edit that takes effect on the next
+		# request , with no re-scan and no reindex.
+		names     = [ { "name": n , "url": ds_vocab.home( n ) ,
+			"desc": ds_vocab.describe( n ) }
+			for n in ( e.get( "dataset_names" ) or [] ) ]
+		s_where , s_tags = srt.get(  key , ( "" , [] ) )
+		t_where , t_tags = tier.get( key , ( "" , [] ) )
+		r_where , r_why  = rev.get(  key , ( "" , "" ) )
+		rows.append( {
+			"key":        key ,
+			"title":      e.get( "title" ) or "(untitled)" ,
+			"doi":        e.get( "doi" ) or "" ,
+			"year":       e.get( "year" ) ,
+			"cited_by":   e.get( "cited_by" ) ,
+			"added":      ( e.get( "created_at" ) or "" )[ :10 ] ,
+			"published":  e.get( "pubdate" ) or "" ,
+			"pdf":        bool( e.get( "pdf" ) ) ,
+			"has_md":     bool( e.get( "has_md" ) ) ,
+			"montage":    e.get( "montage" ) or "" ,
+			# The archive records , compacted for the browser by
+			# datasets.display_links -- { url , source , accession? } , where
+			# `accession` marks a link minted from a bare id the paper printed
+			# without a URL ( ` ds000105 ` ).
+			"data":       links ,
+			# The collections the paper NAMES but never links --
+			# { name , url , desc } , where url / desc are "" for a name we have
+			# no checked home page or one-liner for.
+			"names":      names ,
+			"sources":    sorted( { l.get( "source" ) or "archive" for l in links } ) ,
+			# How many repos ` prma code ` found -- a count , not the links : it
+			# is here so "uses public data AND ships code" is a sort on this
+			# page , while the links themselves stay /code's to render.
+			"code":       len( e.get( "code_links" ) or [] ) ,
+			"review":     r_where ,      # "" | "included" | "excluded"
+			"review_why": r_why ,        # task category , or why it was dropped
+			"sort":       s_where ,      # "" | "list" | "staged"
+			"tier":       t_where ,      # tier label , "" when unranked / absent
+			"figures":    figs.get(  key , 0 ) ,
+			"mfigures":   mfigs.get( key , 0 ) ,
+			"tags":       sorted( { t for t in ( s_tags + t_tags ) if t } ) ,
+		} )
+	return rows
+
+
+def _datasets_payload( dash , sort_board , tiers_board , review , figstate ):
+	"""GET /api/datasets . Same contract as /api/code : the index's own state
+	travels with the rows , because the library pool they come from builds
+	lazily and a page that opened first needs to know to poll."""
+	status = getattr( dash , "status" , "idle" )
+	rows   = _dataset_rows( dash , sort_board , tiers_board , review , figstate ) \
+		if status == "ready" else []
+	with_data = sum( 1 for r in rows if r[ "data" ] or r[ "names" ] )
+	distinct  = set()
+	for r in rows:
+		distinct.update( n[ "name" ] for n in r[ "names" ] )
+		distinct.update( l.get( "url" ) or "" for l in r[ "data" ] )
+	return {
+		"ok"       : True ,
+		"status"   : status ,                       # idle | building | ready | error
+		"message"  : getattr( dash , "message" , "" ) ,
+		"error"    : getattr( dash , "error" , "" ) ,
+		"built_at" : getattr( dash , "built_at" , None ) ,
+		"review"   : ( review.status() if review else { "available": False } ) ,
+		"counts"   : {
+			"papers"    : len( rows ) ,
+			"with_data" : with_data ,
+			"links"     : sum( len( r[ "data" ] ) for r in rows ) ,
+			"named"     : sum( len( r[ "names" ] ) for r in rows ) ,
+			"distinct"  : len( distinct ) ,
+			"in_review" : sum( 1 for r in rows
+				if ( r[ "data" ] or r[ "names" ] ) and r[ "review" ] == "included" ) ,
+		} ,
+		"rows"     : rows ,
+	}
+
+
+# The exported workbook. Two sheets over the rows the page is showing : one line
+# per PAPER , and one line per ( paper , dataset ) for when the collection is the
+# thing you are counting -- archive links and named datasets in the same sheet ,
+# told apart by a Kind column , because "which papers used HCP" shouldn't depend
+# on whether they happened to print a URL for it.
+_DS_PAPER_HEADERS = ( "DOI / Key" , "Title" , "Year" , "Added" , "Published" ,
+                      "Cited By" , "# Datasets" , "# Archive Links" , "# Named" ,
+                      "Archives" , "Dataset URLs" , "Named Datasets" , "# Code Links" ,
+                      "Review" , "Review Detail" , "Sort" , "Tier" ,
+                      "Figures" , "Design Figures" , "Tags" , "PDF" , "Proxy" )
+_DS_ITEM_HEADERS  = ( "Dataset" , "Kind" , "Description" , "Archive" , "URL" ,
+                      "From Accession" , "DOI / Key" , "Title" , "Year" , "Review" ,
+                      "Sort" , "Tier" , "Figures" , "Tags" )
+
+
+def _datasets_workbook_bytes( rows ):
+	"""Build the /datasets export in memory and hand back the .xlsx bytes.
+	openpyxl saves to any file-like object , so this never touches disk --
+	` prma datasets ` writes no workbook of its own ( the scan IS the answer ) ,
+	which makes this the only place the rollup exists.
+
+	The proxy prefix comes from the task that owns it rather than being spelled
+	out again , the same way the pages take it from one const in
+	/static/common.js ."""
+	import io
+	from ..tasks.code import _PROXY_URL_TEMPLATE
+
+	paper_rows , item_rows = [] , []
+	for r in rows:
+		doi   = r.get( "doi" ) or ""
+		ident = utils.Link( doi , f"https://doi.org/{doi}" ) if doi else ( r.get( "key" ) or "" )
+		proxy_url = _PROXY_URL_TEMPLATE.format( doi=doi ) if doi else ""
+		proxy = utils.Link( proxy_url , proxy_url ) if proxy_url else ""
+		links = r.get( "data" ) or []
+		names = r.get( "names" ) or []
+		tags  = " , ".join( r.get( "tags" ) or [] )
+		paper_rows.append( [
+			ident , r.get( "title" ) or "" , r.get( "year" ) or "" ,
+			r.get( "added" ) or "" , r.get( "published" ) or "" ,
+			r.get( "cited_by" ) if r.get( "cited_by" ) is not None else "" ,
+			len( links ) + len( names ) , len( links ) , len( names ) ,
+			" , ".join( r.get( "sources" ) or [] ) ,
+			"\n".join( l.get( "url" ) or "" for l in links ) ,
+			"\n".join( n[ "name" ] for n in names ) , r.get( "code" ) or 0 ,
+			r.get( "review" ) or "" , r.get( "review_why" ) or "" ,
+			r.get( "sort" ) or "" , r.get( "tier" ) or "" ,
+			r.get( "figures" ) or 0 , r.get( "mfigures" ) or 0 , tags ,
+			"yes" if r.get( "pdf" ) else "" , proxy ,
+		] )
+		tail = [ ident , r.get( "title" ) or "" , r.get( "year" ) or "" ,
+			r.get( "review" ) or "" , r.get( "sort" ) or "" , r.get( "tier" ) or "" ,
+			r.get( "figures" ) or 0 , tags ]
+		for l in links:
+			url = l.get( "url" ) or ""
+			item_rows.append( [ url , "archive link" , l.get( "desc" ) or "" ,
+				l.get( "source" ) or "" , utils.Link( url , url ) ,
+				l.get( "accession" ) or "" , *tail ] )
+		for n in names:
+			item_rows.append( [ n[ "name" ] , "named" , n.get( "desc" ) or "" , "" ,
+				utils.Link( n[ "url" ] , n[ "url" ] ) if n[ "url" ] else "" ,
+				"" , *tail ] )
+
+	buf = io.BytesIO()
+	utils.write_xlsx( buf , [
+		( "Papers"   , _DS_PAPER_HEADERS , paper_rows ) ,
+		( "Datasets" , _DS_ITEM_HEADERS  , item_rows  ) ,
+	] )
+	return buf.getvalue()
+
 class SnapshotCache:
 	"""
 	Auto-refreshes when underlying source changes.
@@ -1106,6 +1744,13 @@ class SnapshotCache:
 		self._last_refresh = 0.0
 		self._last_sig: Optional[ Tuple[ float , ... ] ] = None
 		self._watch_files: List[ Path ] = self._resolve_watch_files()
+		# Recently-added ( see recent() ) : its own little cache , because it is
+		# a SECOND read of the same source and a ~0.4s SQLite copy each time.
+		self._recent: Optional[ List[ Dict ] ] = None
+		self._recent_sig: Optional[ Tuple[ float , ... ] ] = None
+		self._recent_n  = 0      # how many rows the cached read asked for
+		self._recent_at = 0.0    # when it ran , for the no-watch-files TTL path
+		self._recent_note = ""
 
 	def _resolve_watch_files( self ) -> List[ Path ]:
 		if self.args.manager.lower() == "zotero":
@@ -1167,6 +1812,41 @@ class SnapshotCache:
 				self._refresh()
 
 		return self._titles , self._dois
+
+
+
+	def recent( self , limit=10 ):
+		"""The newest additions to the library , straight off the manager --
+		what /sort's " Recently added " offers. Returns ( rows , note ) ; see
+		tasks.snapshot.recent for the row shape.
+
+		Cached on the SAME source signature the title / DOI sets above use , so
+		clicking the button repeatedly is free while Zotero sits still and picks
+		up a paper the moment one is saved. A bigger `limit` than the cached
+		read covers re-reads ; a smaller one is served by slicing it."""
+		# Clamped here rather than only in the reader , so a silly ?limit= can't
+		# poison the cache's idea of how much it holds.
+		try:    limit = max( 1 , min( int( limit ) , 200 ) )
+		except ( TypeError , ValueError ): limit = 10
+		now = time.time()
+		sig = self._source_sig()
+		fresh = (
+			self._recent is not None
+			and self._recent_n >= limit
+			and ( sig == self._recent_sig if sig is not None
+				else ( now - self._recent_at ) < self.ttl )
+		)
+		if not fresh:
+			# Over-read a little so nudging the count up ( 10 -> 25 ) usually
+			# answers out of the cache instead of re-copying the SQLite.
+			want = max( limit , 25 )
+			rows , note = snap_module.recent( self.args , want )
+			self._recent      = rows
+			self._recent_note = note
+			self._recent_n    = want
+			self._recent_sig  = sig
+			self._recent_at   = now
+		return self._recent[ :limit ] , self._recent_note
 
 
 # ---------------------------------------------------------------------------
@@ -1544,7 +2224,8 @@ class ProcessWorker:
 
 	def _stage_seq( self ):
 		"""The stages run_suite drives ( for the progress block ) , in order."""
-		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "code" , "md" , "modalities" ]
+		seq = [ "openalex" , "yolo" , "ocr" , "images" , "methods" , "code" , "md" ,
+		        "datasets" , "modalities" ]
 		if self.summarize:
 			seq.append( "summarize" )
 		return seq
@@ -1749,6 +2430,18 @@ def _refs_payload( dash , text ):
 	return { "ok": True , "refs": out }
 
 
+def _disposition( kind , filename ):
+	"""A Content-Disposition value that can't break the response. http.server
+	writes headers as latin-1 , and a Zotero PDF is named after its title --
+	curly quotes , en dashes , accents and all -- so a raw name raised half-way
+	through the headers and the browser got an empty reply. The plain `filename`
+	is an ASCII stand-in ; `filename*` ( RFC 6266 ) carries the real name , and
+	it is the one every current browser uses."""
+	name  = str( filename or "download" )
+	plain = re.sub( r'[^\x20-\x7e]|["\\]' , "_" , name )
+	return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote( name , safe='' )}"
+
+
 class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
 	daemon_threads = True
 
@@ -1772,9 +2465,11 @@ class Handler( BaseHTTPRequestHandler ):
 	# their per-row links / modality stamps from the one shared papermeta.
 	tiers: "BoardState" = None
 	sort:  "BoardState" = None
-	# What those two boards add up to , screened and field-extracted ( /review ).
-	# Injected at startup ; None in minimal mode.
+	# What those two boards add up to , screened and field-extracted ( /review ) ,
+	# and the same screen run over the papers you do NOT have ( /review-missing ).
+	# Both injected at startup ; None in minimal mode.
 	review: "ReviewState" = None
+	review_missing: "MissingReviewState" = None
 	papermeta: "PaperMeta" = None
 
 	def log_message( self , *_ ):
@@ -1802,6 +2497,20 @@ class Handler( BaseHTTPRequestHandler ):
 		self.end_headers()
 		self.wfile.write( raw )
 
+	def _send_download( self , data , filename , ctype="application/octet-stream" ):
+		"""Hand back bytes as a file to SAVE rather than to render -- the /code
+		page's xlsx export. It arrives on a POST ( the key list of what you are
+		looking at is far too long for a query string ) , so the page reads the
+		body as a blob and clicks its own link ; the disposition is what names
+		the file when it does."""
+		self.send_response( 200 )
+		self.send_header( "Content-Type"        , ctype )
+		self.send_header( "Content-Length"      , str( len( data ) ) )
+		self.send_header( "Content-Disposition" , _disposition( "attachment" , filename ) )
+		self.send_header( "Cache-Control"       , "no-store" )
+		self.end_headers()
+		self.wfile.write( data )
+
 	def _send_minimal_notice( self ):
 		"""The answer to every route that ISN'T part of the userscript surface when
 		the server was started with --exists. Minimal mode never builds the
@@ -1820,11 +2529,17 @@ class Handler( BaseHTTPRequestHandler ):
 		else:
 			self._send_json( 503 , { "error": msg , "hint": hint } )
 
-	def _send_static( self , base , rel ):
+	def _send_static( self , base , rel , no_cache=False ):
 		"""Serve a file under `base` ( e.g. output/images/ ) by relative path ,
 		with a path-traversal guard so only files actually inside `base` are
 		reachable. Used for the figure crops / montages that ` prma md ` links
-		and the 'Figures' column points at."""
+		and the 'Figures' column points at.
+
+		`no_cache` is for the shared page chrome under /static/ : those are files
+		you EDIT , and the pages themselves are re-read from disk on every load
+		( _load_dashboard_html and friends ) , so the stylesheet has to refresh
+		on a reload too or half the page would still be the old one. The figure
+		crops , which are content , keep the browser's normal caching."""
 		base_r = Path( base ).resolve()
 		target = ( base_r / unquote( rel ) ).resolve()
 		if target != base_r and base_r not in target.parents:
@@ -1842,6 +2557,8 @@ class Handler( BaseHTTPRequestHandler ):
 		self.send_response( 200 )
 		self.send_header( "Content-Type"   , ctype )
 		self.send_header( "Content-Length" , str( len( data ) ) )
+		if no_cache:
+			self.send_header( "Cache-Control" , "no-cache, must-revalidate" )
 		self.end_headers()
 		self.wfile.write( data )
 
@@ -1901,7 +2618,7 @@ class Handler( BaseHTTPRequestHandler ):
 		self.send_response( 200 )
 		self.send_header( "Content-Type"        , "application/pdf" )
 		self.send_header( "Content-Length"      , str( len( data ) ) )
-		self.send_header( "Content-Disposition" , f'inline; filename="{Path( pdf ).name}"' )
+		self.send_header( "Content-Disposition" , _disposition( "inline" , Path( pdf ).name ) )
 		self.end_headers()
 		self.wfile.write( data )
 
@@ -1962,6 +2679,13 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_minimal_notice()
 			return
 
+		if path.startswith( "/static/" ):
+			# The chrome every page links : common.css , common.js , boot.js .
+			# no-cache because they're hand-edited alongside the pages that load
+			# them , and those are re-read from disk on every request.
+			self._send_static( STATIC_DIR , path[ len( "/static/" ): ] , no_cache=True )
+			return
+
 		if path in ( "/" , "/index.html" , "/dashboard" ):
 			self._send_html( 200 , _load_dashboard_html() )
 			return
@@ -1982,6 +2706,47 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_html( 200 , _load_review_html() )
 			return
 
+		if path in ( "/review-missing" , "/review-missing.html" ):
+			self._send_html( 200 , _load_review_missing_html() )
+			return
+
+		if path in ( "/code" , "/code.html" ):
+			self._send_html( 200 , _load_code_html() )
+			return
+
+		if path in ( "/datasets" , "/datasets.html" ):
+			self._send_html( 200 , _load_datasets_html() )
+			return
+
+		if path == "/api/datasets":
+			# Every library paper's public-dataset evidence joined against the
+			# four curated surfaces. Same contract as /api/code below : cheap
+			# ( a dict merge over what is already in memory ) , but the library
+			# pool it reads builds lazily , so pick up a fresher ` prma reindex ` ,
+			# start a build if there has never been one , and answer with the
+			# status so the page polls instead of drawing an empty table.
+			self.dash.maybe_reload()
+			if self.dash.status == "idle":
+				self.dash.ensure_build( refresh=False )
+			self._send_json( 200 , _datasets_payload( self.dash , self.sort ,
+				self.tiers , self.review , self.figstate ) )
+			return
+
+		if path == "/api/code":
+			# Every library paper's code links joined against the four curated
+			# surfaces. Built from what is already in memory ( see _code_rows ) ,
+			# so it is cheap enough to serve on every load -- EXCEPT that the
+			# library pool it reads is the dashboard index , which builds lazily.
+			# Same contract as /api/meta : pick up a fresher ` prma reindex ` , and
+			# start a build if there has never been one , then answer with the
+			# status so the page polls instead of drawing an empty table.
+			self.dash.maybe_reload()
+			if self.dash.status == "idle":
+				self.dash.ensure_build( refresh=False )
+			self._send_json( 200 , _code_payload( self.dash , self.sort ,
+				self.tiers , self.review , self.figstate ) )
+			return
+
 		if path == "/api/review":
 			# The whole review document. Big ( a few MB ) and derived , so it is
 			# served from what was last BUILT -- never built inline , which would
@@ -1997,6 +2762,18 @@ class Handler( BaseHTTPRequestHandler ):
 			# progress while a rebuild runs and `generated` when it lands , which
 			# is how the page knows to re-fetch.
 			self._send_json( 200 , self.review.status() )
+			return
+
+		if path == "/api/review-missing":
+			# The /review-missing document. Same contract as /api/review above ,
+			# and capped at build time ( see missing.MAX_PAPERS ) precisely so this
+			# stays a payload a browser can hold : the pool behind it is ~140,000
+			# papers , and serving all of them would be the pool , not a page.
+			self._send_json( 200 , self.review_missing.snapshot() )
+			return
+
+		if path == "/api/review-missing/version":
+			self._send_json( 200 , self.review_missing.status() )
 			return
 
 		board = self._board( path , "" )
@@ -2135,8 +2912,27 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_json( 200 , self.dash.meta() )
 			return
 
+		if path == "/api/recent":
+			# The newest papers in the reference manager , read off the manager
+			# ITSELF rather than off the dashboard index ( see
+			# SnapshotCache.recent ). That is the whole point of the route : the
+			# index only learns about a paper after a snapshot has pushed it into
+			# output/cache/papers/ and a reindex has run , so a paper saved into
+			# Zotero a minute ago is not searchable yet -- but /sort can still
+			# offer it here , with the key it WILL have once the pipeline catches
+			# up. `note` explains an empty list when there is something to say.
+			rows , note = self.cache.recent( self._arg_int( self._qs() , "limit" , 10 ) )
+			self._send_json( 200 , { "results": rows , "total": len( rows ) ,
+				"note": note , "manager": getattr( self.dash.args , "manager" , "" ) } )
+			return
+
 		if path == "/api/search":
 			qs = self._qs()
+			# Pick up a ` prma reindex ` that ran in another process since the
+			# last query ( a bare mtime stat when nothing moved ) , so a board
+			# left open overnight searches the current index instead of the one
+			# the server started with.
+			self.dash.maybe_reload()
 			# hide_skipped defaults ON : skipped rows are filtered out unless the
 			# dashboard's "Show skipped" toggle asks for them ( hide_skipped=0 ).
 			hide = self._arg( qs , "hide_skipped" , "1" ) not in ( "0" , "false" , "no" )
@@ -2170,12 +2966,74 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_minimal_notice()
 			return
 
+		if urlparse( self.path ).path == "/api/datasets/export.xlsx":
+			# The /datasets table as a workbook , same contract as /code's below :
+			# the body is { "keys": [ ... ] } -- the rows the page is SHOWING , in
+			# the order it is showing them -- so the sheet is the view you built.
+			# No keys , or no body at all , exports every paper that stands on
+			# some public data.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				rows   = _dataset_rows( self.dash , self.sort , self.tiers ,
+					self.review , self.figstate )
+				keys   = data.get( "keys" )
+				if isinstance( keys , list ) and keys:
+					by_key = { r[ "key" ]: r for r in rows }
+					rows   = [ by_key[ k ] for k in keys if k in by_key ]
+				else:
+					rows = [ r for r in rows if r[ "data" ] or r[ "names" ] ]
+				stamp = time.strftime( "%Y%m%d" )
+				self._send_download( _datasets_workbook_bytes( rows ) ,
+					f"prma-datasets-{stamp}.xlsx" ,
+					"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		if urlparse( self.path ).path == "/api/code/export.xlsx":
+			# The /code table as a workbook. The body is { "keys": [ ... ] } -- the
+			# rows the page is SHOWING , in the order it is showing them , so the
+			# sheet is the view you built rather than the whole library again
+			# ( that one is ` prma code `'s output/code/code.xlsx ). No keys , or
+			# no body at all , exports every paper that has a link.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				rows   = _code_rows( self.dash , self.sort , self.tiers ,
+					self.review , self.figstate )
+				keys   = data.get( "keys" )
+				if isinstance( keys , list ) and keys:
+					by_key = { r[ "key" ]: r for r in rows }
+					rows   = [ by_key[ k ] for k in keys if k in by_key ]
+				else:
+					rows = [ r for r in rows if r[ "code" ] ]
+				stamp = time.strftime( "%Y%m%d" )
+				self._send_download( _code_workbook_bytes( rows ) ,
+					f"prma-code-{stamp}.xlsx" ,
+					"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
 		if urlparse( self.path ).path == "/api/review/rebuild":
 			# Re-screen and re-extract from the boards as they stand now. Minutes
 			# of work , so it runs on its own thread and this returns immediately
 			# with the status the page then polls ; a second press while one is
 			# running is a no-op that reports the build already under way.
 			self._send_json( 200 , { "ok": True , **self.review.rebuild() } )
+			return
+
+		if urlparse( self.path ).path == "/api/review-missing/rebuild":
+			# The same , over the OpenAlex pool. It reads the dashboard index , so
+			# nudge that into building first when nobody has opened the dashboard
+			# yet this run -- otherwise the builder falls back to reading the index
+			# off disk , which works but pays for it twice.
+			if self.dash is not None and self.dash.status == "idle":
+				self.dash.ensure_build( refresh=False )
+			self._send_json( 200 , { "ok": True , **self.review_missing.rebuild() } )
 			return
 
 		mode = _figure_mode( self.path , "state" )
@@ -2253,7 +3111,8 @@ class Handler( BaseHTTPRequestHandler ):
 			return
 
 		if self.path in ( "/api/paper-meta" , "/api/tiers/meta" ):
-			# Per-row lookup for the board pages : { "keys": [ ... ] , "mods": bool }.
+			# Per-row lookup for the board pages :
+			# { "keys": [ ... ] , "mods": bool , "links": bool }.
 			# POST rather than GET because the key list is a few hundred DOIs long.
 			# ( /api/tiers/meta is the original spelling , kept working. )
 			try:
@@ -2265,7 +3124,8 @@ class Handler( BaseHTTPRequestHandler ):
 					self._send_json( 400 , { "ok": False , "error": "body needs a 'keys' list" } )
 					return
 				self._send_json( 200 , { "ok": True , "meta": self.papermeta.meta(
-					keys , want_mods=bool( data.get( "mods" ) ) ) } )
+					keys , want_mods=bool( data.get( "mods" ) ) ,
+					want_links=bool( data.get( "links" ) ) ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
@@ -2286,6 +3146,33 @@ class Handler( BaseHTTPRequestHandler ):
 			except ValueError as e:
 				# The user dropped the wrong kind of file. refparse raises these
 				# already phrased for a person , so pass it straight through.
+				self._send_json( 400 , { "ok": False , "error": str( e ) } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		if self.path == "/api/sheet/csv":
+			# A Google Sheet link -> its rows , for /sort's ⇩ Import to take in as
+			# if the file had been dropped on it , and the links behind its cells
+			# ( body : { "url": "..." } ). The page can't fetch docs.google.com
+			# itself -- no CORS -- and every request is rebuilt from the sheet ID
+			# alone , see src/db/gsheet.py . The links are the best-effort half :
+			# when they can't be read the rows still come back , and links_error
+			# says why.
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				from ..db import gsheet
+				rows  = gsheet.rows( gsheet.fetch_csv( data.get( "url" ) ) )
+				links , why = None , ""
+				try:
+					links = gsheet.fetch_links( data.get( "url" ) , rows )
+				except Exception as e:
+					why = str( e ) or e.__class__.__name__
+				self._send_json( 200 , { "ok": True , "rows": rows , "links": links ,
+					"links_error": why } )
+			except ValueError as e:
 				self._send_json( 400 , { "ok": False , "error": str( e ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
@@ -2409,6 +3296,7 @@ def run( args ):
 		Handler.tiers     = None
 		Handler.sort      = None
 		Handler.review    = None
+		Handler.review_missing = None
 		Handler.papermeta = None
 		httpd   = ThreadingHTTPServer( ( args.host , args.port ) , Handler )
 		watched = "mtime-watched" if cache._watch_files else f"ttl={args.ttl}s"
@@ -2456,6 +3344,17 @@ def run( args ):
 			f"{_c.get( 'candidates' , 0 )} candidates"
 			+ ( "  ( the boards have moved since -- rebuild from /review )"
 				if Handler.review.stale() else "" ) )
+
+	# The same screen over the papers you do NOT have ( /review-missing ). Read
+	# off disk like the review above ; never built here , for the same reason --
+	# it is a pass over every abstract in the missing pool.
+	Handler.review_missing = MissingReviewState( args , dash )
+	if Handler.review_missing.load():
+		_c = ( Handler.review_missing.doc.get( "meta" ) or {} ).get( "counts" ) or {}
+		print( f"review-missing :: loaded {_c.get( 'included' , 0 )} candidates / "
+			f"{_c.get( 'candidates' , 0 )} in the pool"
+			+ ( "  ( the index has moved since -- rebuild from /review-missing )"
+				if Handler.review_missing.stale() else "" ) )
 
 	# Both figure reports are pre-built artifacts served verbatim. If the PAGE
 	# template , a report's own renderer , or ( for method-images ) the keyword list
@@ -2518,9 +3417,11 @@ def run( args ):
 	header = [
 		f"exists server  {base}/exists   (manager={args.manager}, {watched})" ,
 		f"dashboard      {base}/          ({dash_state})" ,
-		f"sort board     {base}/sort     (hand-curated , sections ARE tag sets ; CSV in / out)" ,
+		f"sort board     {base}/sort     (hand-curated , sections ARE tag sets ; CSV / Google Sheet in , CSV out)" ,
 		f"review         {base}/review   ({_review_state( Handler.review )})" ,
 		f"tier list      {base}/tiers    (hand-curated buckets ; CSV in / out)" ,
+		f"code           {base}/code     (papers with a repo , vs. review / sort / tiers / figures ; xlsx out)" ,
+		f"datasets       {base}/datasets (the public data papers stand on , by paper or by dataset ; xlsx out)" ,
 		f"errors         {base}/errors   (pipeline problems log)" ,
 		f"status         {base}/status   (pipeline completeness ; run ` prma status `)" ,
 		f"design figures {base}/method-images  (caption-matched ; run ` prma method-images `)" ,

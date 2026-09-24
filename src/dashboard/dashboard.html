@@ -4,65 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma dashboard</title>
-<!-- Apply the saved theme BEFORE first paint so there's no flash. Default light. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<!-- The chrome every prma page shares : the pre-paint theme restore ( so nothing
+     flashes -- light by default , dark opt-in ) , then the palette and the
+     header / button / link styling , out of src/dashboard/static/. The <style>
+     below loads after and wins wherever it redefines something. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-  /* Light theme is the default ; dark is opt-in via [data-theme="dark"] on
-     <html> ( set from localStorage before paint -- see the inline <head> script
-     -- and toggled by the header ☀/🌙 button ). Every colour is a variable so
-     the swap is just these two blocks. */
-  :root {
-    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
-    --fg:#101820; --muted:#5a6560; --accent:#046a38; --accent-ink:#ffffff; --green:#046a38;
-    --chip:#e9eee6; --visited:#8a6420;
-  }
-  :root[data-theme="dark"] {
-    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
-    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --accent-ink:#101820; --green:#719949;
-    --chip:#232f2a; --visited:#cba052;
-  }
-  :root[data-skin="pastel"] {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --accent-ink:#04121f; --green:#046A38;
-    --chip:#eceff3; --visited:#CEA052;
-  }
-  :root[data-skin="pastel"][data-theme="dark"] {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --accent-ink:#04121f; --green:#046A38;
-    --chip:#262c37; --visited:#CEA052;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  }
-  header {
-    position:sticky; top:0; z-index:5; background:var(--panel);
-    border-bottom:1px solid var(--line); padding:12px 18px;
-  }
-  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .counts { color:var(--muted); font-size:12px; display:flex; gap:14px; flex-wrap:wrap; }
-  .counts b { color:var(--fg); font-weight:600; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
-  }
-  button:hover { border-color:var(--accent); }
-  button:disabled { opacity:.5; cursor:default; }
-  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
-  }
-  .navlink:hover { border-color:var(--accent); }
+  /* The palette and the header / button / .navlink / search-box chrome live in
+     /static/common.css , which every prma page links. What stays here is this
+     page's own : the primary button , the tab strip , the results table. */
   .controls { display:flex; gap:10px; align-items:center; margin-top:11px; flex-wrap:wrap; }
-  input[type=search] {
-    flex:1; min-width:240px; background:var(--panel2); color:var(--fg);
-    border:1px solid var(--line); border-radius:8px; padding:10px 13px; font-size:14px;
-  }
-  input[type=search]:focus { outline:none; border-color:var(--accent); }
+  input[type=search] { flex:1; min-width:240px; }
   select {
     background:var(--panel2); color:var(--fg); border:1px solid var(--line);
     border-radius:8px; padding:9px 10px; font-size:13px;
@@ -115,16 +68,11 @@
   td.num { text-align:right; font-variant-numeric:tabular-nums; color:var(--fg); white-space:nowrap; }
   td.title { max-width:640px; }
   .tt { font-weight:500; }
-  /* Title is a link to the same proxy URL as the row's Proxy button, but styled
-     as plain text : no underline, normal colour -- only recolours once visited
-     so you can see at a glance which papers you've already opened. */
-  a.titlelink { color:var(--fg); text-decoration:none; }
-  a.titlelink:hover { color:var(--accent); }
-  a.titlelink:visited { color:var(--visited); }
+  /* a.titlelink , .links a and .muted are in /static/common.css -- the title is
+     a link to the same proxy URL as the row's Proxy button , styled as plain
+     text that only recolours once visited , so you can see at a glance which
+     papers you have already opened. */
   .meta { color:var(--muted); font-size:12px; margin-top:2px; }
-  .links a { color:var(--accent); text-decoration:none; margin-right:9px; white-space:nowrap; }
-  .links a:hover { text-decoration:underline; }
-  .muted { color:var(--muted); }
   .pill {
     display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px;
     background:var(--chip); color:var(--muted); margin-left:6px;
@@ -171,7 +119,10 @@
     <a class="navlink" href="/sort" title="Your hand-sorted premier references — one numbered list you drag into order, tagged fMRI / EEG / anything, with notes and CSV in / out">⬒ Sort</a>
     <a class="navlink" href="/tiers" title="The other board: plain tier buckets you place papers in">★ Tiers</a>
     <a class="navlink" href="/review" title="What Sort and All Figures add up to — every candidate screened against fixed criteria, with every architecture and scanner number its own text states, each behind the sentence it came from">✎ Review</a>
+    <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
     <a class="navlink" href="/status" title="How far each paper has made it through the pipeline">▦ Status</a>
+    <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx">{ } Code</a>
+    <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     <a class="navlink" href="/method-images" title="Figures whose captions describe a model's design — architecture / pipeline diagrams">◫ Method Images</a>
     <a class="navlink" href="/images" title="Every figure the pipeline cropped — no keyword filter, with its own selection">▣ All Figures</a>
     <a class="navlink" href="/errors" title="Items the pipeline couldn't fully process">⚠ Errors</a>
@@ -199,8 +150,12 @@
     <div class="pb-sub" id="pb-sub"></div>
   </div>
 </div>
+<!-- $ , esc , fmt , fmtDate , PROXY , mdHref() , doiLinks() , codeLinks() ,
+     initTheme() -- the helpers every prma page used to write out for itself.
+     Loaded before the page script , so they are plain globals below ; nothing
+     here may redeclare them. -->
+<script src="/static/common.js"></script>
 <script>
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
 // External papers NOT in your collection.
 //   references = works that the papers you've collected cite / list in their
 //               bibliographies, but that you haven't collected yourself.
@@ -221,16 +176,10 @@ let META = {};
 let activeTab = "external";
 let ready = false;
 
-const $ = s => document.querySelector(s);
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
-
 function links(r){
-  const out = [];
-  if(r.doi){
-    out.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank">DOI</a>`);
-    out.push(`<a href="${PROXY}${esc(r.doi)}" target="_blank">Proxy</a>`);
-  }
+  // DOI + Proxy are the same two anchors every prma surface offers ; the rest
+  // is what a dashboard row can additionally reach.
+  const out = doiLinks(r.doi);
   if(r.pdf){
     // Library papers carry a LOCAL path -> stream it via /pdf?key= ; external
     // rows carry a remote OA pdf url -> link straight to it.
@@ -249,30 +198,6 @@ function links(r){
   return out.join(" ");
 }
 
-// The reader page for a paper. The key IS the DOI for anything with one ( see
-// papers.record_key ) , so its slashes stay slashes in the path -- /md/10.1038/…
-// -- the way the server and the figure reports both spell it.
-const mdHref = k => "/md/" + encodeURIComponent(k).replace(/%2F/gi, "/");
-
-// Source-code / data links harvested by ` prma code ` ( abstract + OCR text ) ,
-// each rendered as its host label ( GitHub / OSF / Dryad / … ) linking out to
-// the repo. Empty -> a dim em-dash so the column reads cleanly. Links ` prma
-// code ` repaired from a mangled OCR name carry `raw` -> we mark them with a ˟
-// and spell out the original in the tooltip so a wrong guess is easy to spot.
-function codeLinks(r){
-  const ls = r.code_links || [];
-  if(!ls.length) return `<span class="muted">—</span>`;
-  return ls.map(l=>{
-    const fixed = l.raw ? `${l.url}  ( OCR-repaired from ${l.raw} )` : l.url;
-    const label = esc(l.source||"link") + (l.raw ? `<sup class="muted">˟</sup>` : "");
-    return `<a href="${esc(l.url)}" target="_blank" rel="noopener" title="${esc(fixed)}">${label}</a>`;
-  }).join(" ");
-}
-
-const fmt = n => (n||0).toLocaleString();
-// created_at is an ISO-8601 stamp ( "2026-06-23T19:26:56+00:00" ) ; show just
-// the date in the cell, keep the full timestamp in the tooltip.
-const fmtDate = s => s ? String(s).slice(0,10) : "";
 function renderCounts(){
   if(!ready){ $("#counts").innerHTML = ""; return; }
   $("#counts").innerHTML =
@@ -337,7 +262,7 @@ const COL_ADDED = { key:"created_at", label:"Added",
 // paper's abstract + OCR text. Not sortable ; sits AFTER Links.
 const COL_CODE = { key:"code", label:"Code", def:"desc",
   title:"Source-code / data links found in the abstract + OCR text ( prma code ) · sort to float papers that ship code",
-  cell:r=>`<td class="links">${codeLinks(r)}</td>` };
+  cell:r=>`<td class="links">${codeLinks(r.code_links)}</td>` };
 // Skip / hide control. Not sortable. Persisted server-side ( POST /api/skip ) so
 // skipped papers stay hidden across reloads ; the data is never deleted.
 const COL_SKIP = { key:null, label:"",
@@ -658,17 +583,9 @@ $("#toggleSkipped").addEventListener("click", ()=>{
   btn.classList.toggle("active", showSkipped);
   if(ready) newSearch();
 });
-// Theme : the attribute is already set pre-paint by the inline <head> script ;
-// here we just label the button and persist the choice on toggle.
-function curTheme(){ return document.documentElement.dataset.theme === "dark" ? "dark" : "light"; }
-function labelTheme(){ $("#toggleTheme").textContent = curTheme()==="dark" ? "☀ Light" : "🌙 Dark"; }
-$("#toggleTheme").addEventListener("click", ()=>{
-  const next = curTheme()==="dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("prma-theme", next); } catch(e){}
-  labelTheme();
-});
-labelTheme();
+// Theme : the attribute is already set pre-paint by /static/boot.js ; this
+// labels the header button and persists a flip ( /static/common.js ).
+initTheme();
 
 pollUntilReady();
 

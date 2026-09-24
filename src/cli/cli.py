@@ -79,6 +79,28 @@ def missing( sub , global_parser ):
 	p.set_defaults( _entry=tasks.missing )
 	return {}
 
+def check_missing_file( sub , global_parser ):
+	p = sub.add_parser(
+		"check-missing-file" ,
+		parents=[ global_parser ] ,
+		help="Which papers in a Markdown RESEARCH LOG aren't in the library. The log is the dated notebook you keep while reading : ` # 03SEP2026 ` headings , and under each a run of &nbsp;-separated blocks with a paper's title on one line and its link(s) below. Every block is one paper ; its DOI is lifted out of the link ( doi.org , publisher article routes , bioRxiv , ezproxy'd copies ) with the browser debris cut off ( .full / .abstract / v1 / MIT Press's trailing article number ). Each is then checked against the library with the SAME policy as the /exists userscript endpoint -- DOI settles it , title fuzzy-matched otherwise -- run in-process on the manager snapshot , so no server needs to be up. A DOI miss is retried by title before it counts as missing ( a preprint DOI on the note , the journal version in the library ) and those recoveries are listed separately. Output : output/check-missing/<log-stem>.md -- the missing papers with the log's date , line and link , plus how many times the log mentions each. Overwritten on each run."
+	)
+	p.add_argument( "check_missing_input" ,
+		type=Path ,
+		help="The Markdown research log to check" )
+	p.add_argument( "--out" , dest="check_missing_out" ,
+		type=Path , default=None ,
+		help="Report path ( default : output/check-missing/<log-stem>.md ; a relative path is taken under --output )" )
+	p.add_argument( "--list-only" , dest="check_missing_list_only" ,
+		action="store_true" , default=False ,
+		help="Print the papers the parser extracted ( title / doi / date / line / link ) as JSON and stop -- nothing is checked. For seeing what the parser makes of a log" )
+	p.set_defaults( _entry=tasks.check_missing_file )
+	return {
+		"check_missing_input":     None ,
+		"check_missing_out":       None ,
+		"check_missing_list_only": False ,
+	}
+
 def snapshot( sub , global_parser ):
 	p = sub.add_parser(
 		"snapshot" ,
@@ -447,6 +469,28 @@ def code( sub , global_parser ):
 		"code_force_download": False ,
 	}
 
+def datasets( sub , global_parser ):
+	p = sub.add_parser(
+		"datasets" ,
+		parents=[ global_parser ] ,
+		help="Scan every paper for the PUBLIC DATA it stands on and pin it on each record for the /datasets page. Two kinds of evidence , because papers give it two ways : DATA-ARCHIVE LINKS harvested out of the OpenAlex abstract + OCR full text ( OpenNeuro , NeuroVault , DANDI , OpenfMRI , OSF , Zenodo , Dryad , Figshare , Hugging Face , PhysioNet , Dataverse , NITRC , CRCNS , EBRAINS , BALSA , ConnectomeDB , LONI / IDA , NDA , Synapse , Kaggle , ... ) -- through the same extractor 'prma code' uses , so URLs the OCR split across lines are rejoined and dead fragments dropped -- plus bare OpenNeuro accessions ( 'ds000105' with no URL around it , which is how most papers cite one ) minted into the canonical record link ; and dataset NAMES the paper never links ( HCP , NSD , ABIDE , ADNI , UK Biobank , THINGS , BOLD5000 , Algonauts , ... ) , matched against the same vocabulary '/review' screens with and read off the rendered md with the bibliography cut , so a reference list full of other papers' datasets can't score. Code forges are deliberately NOT in the table ( a GitHub repo is a /code link ) ; the generalists that host both -- Zenodo , OSF , Dryad , Figshare , Hugging Face -- appear on both pages , which is the honest answer about what they are. RECORD TITLES : after the scan , each UNIQUE archive record is fetched once and cached under output/cache/datasets/ so the page can say what it IS and not only where it lives -- Zenodo , Figshare , OpenNeuro and OSF through their own ( keyless ) APIs , everything else by reading the page's <title> . Dead links and soft-404 titles are dropped ; a timeout or a 5xx is NOT cached , so it retries next run. An honest User-Agent is used deliberately -- Zenodo's API 403s a spoofed browser one. Idempotent : cached records are skipped ( --force-download re-fetches ; --no-fetch skips the network entirely ). Runs 'prma md' inline ( idempotent , and it pulls each paper up through yolo -> ocr -> preprocess -> images -> code on the way ) so 'prma datasets' is one-stop. This is also stage 'datasets' of the per-paper suite , so papers added under 'prma server --watch' are scanned automatically. THE PAGE : 'GET /datasets' pivots the scan either way -- one row per paper , or one row per dataset with the papers that use it -- against the same curated surfaces /code shows ( Review / Sort / Tier / Figs ) , with .xlsx + CSV export of exactly what you filtered to. Pass --force to re-scan papers already marked done."
+	)
+	p.add_argument( "--force" , dest="datasets_force" ,
+		action="store_true" , default=False ,
+		help="Re-scan even papers already marked done ( they carry a 'datasets' field )" )
+	p.add_argument( "--no-fetch" , dest="datasets_no_fetch" ,
+		action="store_true" , default=False ,
+		help="Skip the record-title fetch ( the only part that touches the network ) -- rows then show their URL and no description" )
+	p.add_argument( "--force-download" , dest="datasets_force_download" ,
+		action="store_true" , default=False ,
+		help="Re-fetch every record title , including ones already cached under output/cache/datasets/ . Independent of --force ; combine them to re-scan papers AND re-fetch" )
+	p.set_defaults( _entry=tasks.datasets )
+	return {
+		"datasets_force": False ,
+		"datasets_no_fetch": False ,
+		"datasets_force_download": False ,
+	}
+
 def modalities( sub , global_parser ):
 	p = sub.add_parser(
 		"modalities" ,
@@ -527,6 +571,15 @@ def review( sub , global_parser ):
 		"review_out":           None ,
 	}
 
+def review_missing( sub , global_parser ):
+	p = sub.add_parser(
+		"review-missing" ,
+		parents=[ global_parser ] ,
+		help="Run the SAME three inclusion criteria as ` prma review ` over the papers you do NOT have : the dashboard's \"All missing\" pool -- every work your library cites , plus every work that cites your library , that isn't in the library itself ( ~140,000 of them ). There is no full text for any of these , so each is screened on the only thing there is , its title and its OpenAlex abstract , against thresholds sized for ~1,500 characters instead of 50,000 ( see the block comment in src/review/classify.py for which way each criterion had to move ). MEASURED , not claimed : screened against the papers the built /review has already judged , it is right about roughly nine in ten of what it lets through , and finds roughly two in five of what the full text included. The RECALL is re-measured on every build ( the same screen re-run over the papers /review included ) and the page prints that figure , so it is never a number somebody wrote down once. Most of the misses are papers whose abstract never names the architecture at all , which no threshold recovers. So it reports CANDIDATES , and the page says so. What survives gets the same field extraction , over the abstract , with the verbatim quote behind every value ; acquisition blanks are filled from the dataset consensus the built /review already mined from your corpus. The excluded are TALLIED rather than listed ( ~97,000 rows is not a table ) , but the NEAR MISSES are kept -- papers that satisfied two criteria and failed exactly one , which is where a false negative hides. Reads the dashboard index ` prma reindex ` wrote and runs no pipeline stage and no network. Output : output/cache/review-missing.json , which ` prma server ` serves at /review-missing -- where the same rebuild is a button."
+	)
+	p.set_defaults( _entry=tasks.review_missing )
+	return {}
+
 def reindex( sub , global_parser ):
 	p = sub.add_parser(
 		"reindex" ,
@@ -594,6 +647,7 @@ def server( sub , global_parser ):
 REGISTRARS = (
 	base          ,
 	missing       ,
+	check_missing_file ,
 	snapshot      ,
 	status        ,
 	yolo          ,
@@ -612,10 +666,12 @@ REGISTRARS = (
 	process       ,
 	reprocess     ,
 	code          ,
+	datasets      ,
 	modalities    ,
 	method_images ,
 	all_images    ,
 	review        ,
+	review_missing,
 	reindex       ,
 	server        ,
 )

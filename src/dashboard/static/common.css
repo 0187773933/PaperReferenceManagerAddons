@@ -1,0 +1,232 @@
+/* ---------------------------------------------------------------------------
+   common.css -- the chrome every prma page wears.
+
+   Served at GET /static/common.css ( src/server/server.py ) and linked from
+   dashboard.html , sort.html , tiers.html , review.html , md.html , errors.html
+   and status.html. It holds the two things those pages had SEPARATE , drifting
+   copies of : the palette , and the header / button / link chrome around it.
+
+   THE PALETTE. Four blocks , because there are two themes x two skins :
+
+     :root                                 the WSU light default
+     :root[data-theme="dark"]              dark , opt-in
+     :root[data-skin="pastel"]             the pastel skin , light
+     :root[data-skin="pastel"][data-theme="dark"]
+
+   The attributes are set BEFORE first paint by /static/boot.js so nothing
+   flashes ; the header button flips the theme and persists it. Every colour on
+   every page is a var() off these , which is what lets one toggle repaint the
+   whole thing.
+
+   WHAT DOESN'T LIVE HERE. A page's own vocabulary -- review.html's field wells
+   and priority pills , the boards' row and drop-zone colours -- stays in that
+   page's <style>, which is loaded AFTER this file and so wins wherever it
+   redefines something. Add a token here only when a second page needs it.
+
+   NOT the figure reports ( src/dashboard/method_images.html ) : ` prma images `
+   writes those to output/ as a standalone file that has to work opened straight
+   off disk , so it keeps its own copy on purpose.
+--------------------------------------------------------------------------- */
+
+:root {
+  --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
+  --fg:#101820; --muted:#5a6560; --accent:#046a38; --accent-ink:#ffffff; --green:#046a38;
+  --chip:#e9eee6; --warn:#8a6420; --red:#b3261e; --row:#ffffff; --visited:#8a6420;
+  /* Where a paper sits on each CURATED SURFACE. Read by the .badge classes in
+     the list-page section below , so /code and /datasets say "included" ,
+     "on list" , a tier label and a figure count in the same colours. */
+  --b-in:#dcefe0;   --b-in-fg:#1d6b39;      /* in the review      */
+  --b-out:#f0e6e6;  --b-out-fg:#8a3a34;     /* screened out of it */
+  --b-sort:#dde8fb; --b-sort-fg:#1a4f8a;    /* on the sort list   */
+  --b-tier:#f8e8cd; --b-tier-fg:#8a5a12;    /* ranked in a tier   */
+  --b-fig:#ece0fa;  --b-fig-fg:#5a3a91;     /* has figures picked */
+  /* Not a colour : the ✕ glyph the search boxes clear themselves with , as a
+     mask ( see input[type=search]::-webkit-search-cancel-button below ) , so
+     it takes the field's own text colour in every theme and skin. Here
+     because a mask url() has to be declared somewhere both rules can reach. */
+  --clearx:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 4l8 8M12 4l-8 8' stroke='%23000' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+:root[data-theme="dark"] {
+  --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
+  --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --accent-ink:#101820; --green:#719949;
+  --chip:#232f2a; --warn:#f8e08e; --red:#ff6b6b; --row:#141c22; --visited:#cba052;
+  --b-in:#16301f;   --b-in-fg:#7fd6a0;
+  --b-out:#331c1c;  --b-out-fg:#ff9d94;
+  --b-sort:#1a2740; --b-sort-fg:#7fb6ff;
+  --b-tier:#3a2a13; --b-tier-fg:#ffb454;
+  --b-fig:#2e2440;  --b-fig-fg:#c79bff;
+}
+:root[data-skin="pastel"] {
+  --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
+  --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --accent-ink:#04121f; --green:#046A38;
+  --chip:#eceff3; --warn:#c1670c; --red:#c5221f; --row:#ffffff; --visited:#CEA052;
+}
+:root[data-skin="pastel"][data-theme="dark"] {
+  --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
+  --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --accent-ink:#04121f; --green:#5fd99a;
+  --chip:#262c37; --warn:#e8a33d; --red:#ff6b6b; --row:#141821; --visited:#CEA052;
+}
+
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+
+/* ---- header chrome ------------------------------------------------------ */
+header {
+  position:sticky; top:0; z-index:5; background:var(--panel);
+  border-bottom:1px solid var(--line); padding:12px 18px;
+}
+.titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+.counts { color:var(--muted); font-size:12px; display:flex; gap:14px; flex-wrap:wrap; }
+.counts b { color:var(--fg); font-weight:600; }
+.grow { flex:1; }
+
+button {
+  background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+  border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
+}
+button:hover:not(:disabled) { border-color:var(--accent); }
+button:disabled { opacity:.45; cursor:default; }
+/* The one button on a page that does the thing the page is for : Save on the
+   boards , Rebuild where there is one. */
+button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+
+.navlink {
+  background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+  border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
+}
+.navlink:hover { border-color:var(--accent); }
+
+input[type=search] {
+  background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+  border-radius:8px; padding:10px 13px; font-size:14px;
+}
+input[type=search]:focus { outline:none; border-color:var(--accent); }
+
+/* The ✕ that clears a search box , shown whenever there is something to clear.
+   The browser's own is drawn only while the box is focused or hovered , which
+   is exactly when you can already see what you typed -- the moment it earns its
+   keep is the one where a filter you left on hours ago is quietly hiding rows
+   and nothing on screen offers to turn it off.
+
+   Restyling the native button is what forces it out : -webkit-appearance:none
+   takes away its drawing ( and with it the UA rule that hides it ) , and we
+   give it our own. It stays the REAL cancel button , so clicking still clears
+   the field and still fires ` input ` and ` search ` -- every page's existing
+   handlers keep working untouched. Drawn as a mask over currentColor so it
+   follows the field's own text colour into either theme.
+
+   WebKit / Blink only ; Firefox draws no cancel button at all , as before. */
+input[type=search]::-webkit-search-cancel-button {
+  -webkit-appearance:none; appearance:none;
+  width:13px; height:13px; margin-left:8px;
+  cursor:pointer; opacity:.5; background-color:currentColor;
+  -webkit-mask:var(--clearx) center/contain no-repeat;
+          mask:var(--clearx) center/contain no-repeat;
+}
+input[type=search]::-webkit-search-cancel-button:hover { opacity:1; }
+
+/* ---- shared text / link idioms ------------------------------------------
+   `.links` is the row of small out-links every list renders -- built by
+   paperLinks() / codeLinks() in common.js , so the markup and the rules that
+   dress it stay in one place each. */
+.muted { color:var(--muted); }
+.links a { color:var(--accent); text-decoration:none; margin-right:9px; white-space:nowrap; }
+.links a:hover { text-decoration:underline; }
+a.titlelink { color:var(--fg); text-decoration:none; }
+a.titlelink:hover { color:var(--accent); }
+a.titlelink:visited { color:var(--visited); }
+
+
+/* ---- list pages ----------------------------------------------------------
+   The vocabulary a LIST PAGE wears : the filter chips , the sortable table ,
+   the membership badges , the empty state and the toast. /code and /datasets
+   are the same furniture with different columns , and were carrying two
+   drifting copies of all of it -- so it lives here now , and both pages just
+   opt in :
+
+     <body class="list">
+
+   THE GATE MATTERS. Eight other pages define their own ` .badge ` , ` .chip ` ,
+   ` main ` , ` table ` and ` thead th ` , and they are NOT the same : the boards'
+   badge has no inline-block , their chip is an inline-flex with its own
+   padding , the dashboard's header row isn't sticky. Ungated , every rule below
+   would leak a property or two into all of them. So each selector is written
+
+     :where(.list) <selector>
+
+   -- ` :where() ` contributes NOTHING to specificity , so these weigh exactly
+   what a bare ` .badge ` weighs , and a list page's own <style> ( loaded after
+   this file ) still wins wherever it redefines something , the same way it does
+   for the chrome above. */
+
+:where(.list) .controls { display:flex; gap:10px; align-items:center; margin-top:11px; flex-wrap:wrap; }
+:where(.list) .controls input[type=search] { flex:1; min-width:260px; }
+
+:where(.list) .chipbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+:where(.list) .chipbar .lbl { color:var(--muted); font-size:12px; margin-right:2px; }
+:where(.list) .chip {
+  padding:5px 11px; border-radius:20px; cursor:pointer; font-size:12px;
+  background:var(--chip); border:1px solid transparent; color:var(--muted);
+  white-space:nowrap; user-select:none;
+}
+:where(.list) .chip:hover { border-color:var(--line); }
+:where(.list) .chip.on { color:var(--fg); border-color:var(--accent); background:var(--panel2); }
+:where(.list) .chip .n { color:var(--muted); font-size:11px; margin-left:5px; }
+:where(.list) .sep { width:1px; align-self:stretch; background:var(--line); margin:0 3px; }
+
+:where(.list) main { padding:14px 18px 60px; }
+:where(.list) .status { color:var(--muted); font-size:12px; margin:2px 2px 10px; display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+:where(.list) .status a { color:var(--accent); text-decoration:none; }
+:where(.list) .status a:hover { text-decoration:underline; }
+
+/* The table. Rows the page wants hover feedback on carry ` class="row" ` --
+   /datasets draws detail rows between them that must NOT light up. */
+:where(.list) .wrap { border:1px solid var(--line); border-radius:10px; background:var(--panel); overflow-x:auto; }
+:where(.list) table { width:100%; border-collapse:collapse; font-size:13px; }
+:where(.list) thead th {
+  position:sticky; top:0; z-index:2; background:var(--panel2);
+  border-bottom:1px solid var(--line); text-align:left; font-weight:600;
+  padding:9px 10px; white-space:nowrap; cursor:pointer; user-select:none;
+}
+:where(.list) thead th:hover { color:var(--accent); }
+:where(.list) thead th.static , :where(.list) thead th.static:hover { cursor:default; color:var(--muted); }
+:where(.list) thead th .arrow { color:var(--accent); font-size:10px; margin-left:4px; }
+:where(.list) thead th.num , :where(.list) tbody td.num { text-align:right; font-variant-numeric:tabular-nums; }
+:where(.list) tbody td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+:where(.list) tbody tr:last-child td { border-bottom:none; }
+:where(.list) tbody tr.row:hover { background:var(--panel2); }
+:where(.list) td.idx { color:var(--muted); font-variant-numeric:tabular-nums; width:1%; text-align:right; }
+:where(.list) td.ttl { min-width:280px; max-width:640px; }
+:where(.list) td.nowrap { white-space:nowrap; width:1%; }
+
+:where(.list) .t { font-weight:500; }
+:where(.list) .rowlinks { margin-top:3px; font-size:12px; }
+:where(.list) .tags { margin-top:3px; font-size:11px; color:var(--muted); }
+:where(.list) .tag { background:var(--chip); border-radius:9px; padding:1px 7px; margin-right:4px; white-space:nowrap; }
+:where(.list) .dash { color:var(--muted); }
+
+/* The membership badges , off the tokens in the palette above. */
+:where(.list) .badge {
+  display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px;
+  background:var(--chip); color:var(--muted); white-space:nowrap;
+}
+:where(.list) .badge.inrev { background:var(--b-in);   color:var(--b-in-fg); }
+:where(.list) .badge.outrev{ background:var(--b-out);  color:var(--b-out-fg); }
+:where(.list) .badge.onsort{ background:var(--b-sort); color:var(--b-sort-fg); }
+:where(.list) .badge.tier  { background:var(--b-tier); color:var(--b-tier-fg); }
+:where(.list) .badge.figs  { background:var(--b-fig);  color:var(--b-fig-fg); }
+
+:where(.list) .empty { color:var(--muted); padding:48px; text-align:center; }
+/* Drawn by toast() in common.js -- no page needs to declare the element. */
+:where(.list) .toast {
+  position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
+  background:var(--panel); border:1px solid var(--line); border-radius:9px;
+  padding:9px 15px; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.22); z-index:20;
+}
+
+:where(.list) footer { color:var(--muted); font-size:12px; padding:22px 18px 40px; line-height:1.6; }
+:where(.list) footer code { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; }

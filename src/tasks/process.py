@@ -100,6 +100,7 @@ _PDF_STAGES = (
 	( "methods"    , "methods"    ) ,
 	( "code"       , "code"       ) ,   # scan abstract + OCR text for source-code links ,
 	( "md"         , "md"         ) ,   # BEFORE md so md can render a Source Code section
+	( "datasets"   , "datasets"   ) ,   # AFTER md : the dataset NAMES are read off the rendered md
 	( "modalities" , "modalities" ) ,   # AFTER md : its inferred fallback reads the rendered md body
 )
 
@@ -124,7 +125,8 @@ _PDF_STAGES = (
 # Bump when the STAGES change ( one added / removed / materially reworked ) so
 # papers processed under the old pipeline re-run once to catch up , then re-stamp.
 # v2 : added the ` modalities ` stage ( per-paper modality stamp ).
-SUITE_VERSION = 2
+# v3 : added the ` datasets ` stage ( public-dataset links + names -> /datasets ).
+SUITE_VERSION = 3
 
 
 def _pdf_sig( paper ):
@@ -142,13 +144,15 @@ def _pdf_sig( paper ):
 
 
 def _has_pending_work( args , key , paper ):
-	"""Does any CURRENT stage still lack its output for this paper? -- code never
-	scanned , modalities never stamped , or ( when a live , non-failed PDF is on
-	disk ) yolo / md / methods missing. NOTE this stays True forever for papers
-	that simply CAN'T produce an output ( no sections -> no md / methods ) ;
-	needs_processing() layers the 'already attempted' stamp on top so those
-	aren't retried endlessly."""
+	"""Does any CURRENT stage still lack its output for this paper? -- code or
+	datasets never scanned , modalities never stamped , or ( when a live ,
+	non-failed PDF is on disk ) yolo / md / methods missing. NOTE this stays True
+	forever for papers that simply CAN'T produce an output ( no sections -> no
+	md / methods ) ; needs_processing() layers the 'already attempted' stamp on
+	top so those aren't retried endlessly."""
 	if paper.get( "code" ) is None:
+		return True
+	if paper.get( "datasets" ) is None:
 		return True
 	from . import modalities as modalities_task
 	if modalities_task.read( args , paper ) is None:
@@ -232,6 +236,7 @@ DERIVED_FIELDS = (
 	"pymupdf4llm"              ,   # legacy sibling of raw_text
 	"images"                   ,   # prma images     : crop marker
 	"code"                     ,   # prma code       : source-code links
+	"datasets"                 ,   # prma datasets   : public-dataset links + names
 	"modalities"               ,   # prma modalities : fMRI / EEG / ... stamp
 	"processed"                ,   # the suite's own completion stamp
 	papers_db.YOLO_FAILED_KEY  ,   # a dead-PDF marker that shouldn't outlive it

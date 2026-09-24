@@ -14,7 +14,10 @@ Shape ( output/cache/sort.json ) :
   {
     "version": 1 ,
     "updated_at": "..." ,
-    "options":  { "auto_move": false } ,       # re-group a row when its tags change
+    "options":  { "auto_move": false ,         # re-group a row when its tags change
+                  "add_where": "bottom" ,      # where a paper added from search lands
+                  "fold_cols": [ "code" ] ,    # columns the page can fold away
+                  "sheet_url": "" } ,          # the Google Sheet last imported from
     "columns":  [ { "id": "notes" , "label": "Notes" } , ... ] ,
     "items":    [ { "key": "10.1038/..." , "title": "..." , "doi": "..." ,
                     "wid": "W..." , "pdf": "" , "year": 2023 , "journal": "" ,
@@ -121,6 +124,8 @@ def normalize( doc ):
 				tags.append( { "name": t , "color": "" } )
 	opts  = doc.get( "options" ) if isinstance( doc.get( "options" ) , dict ) else {}
 	where = opts.get( "add_where" )
+	fold  = opts.get( "fold_cols" ) if isinstance( opts.get( "fold_cols" ) , list ) else []
+	sheet = tiers_db._clean_str( opts.get( "sheet_url" ) , 500 ).strip()
 	return {
 		"version":    VERSION ,
 		"updated_at": tiers_db._clean_str( doc.get( "updated_at" ) , 40 ) ,
@@ -129,6 +134,13 @@ def normalize( doc ):
 			# Where a paper added from search lands : the end of the list , the
 			# top , or straight after the last row you placed by hand.
 			"add_where": where if where in ( "bottom" , "top" , "placed" ) else "bottom" ,
+			# The columns a Google Sheet import brought in ( Methods summary ,
+			# Datasets , Code ) : wide enough that the page folds them away behind
+			# one show / hide button rather than drawing them all the time.
+			"fold_cols": [ c for c in col_ids if c in fold ] ,
+			# The sheet the last one came from , so the next import is one click.
+			# Only ever a docs.google.com link -- see src/db/gsheet.py .
+			"sheet_url": sheet if sheet.startswith( "https://docs.google.com/spreadsheets/" ) else "" ,
 		} ,
 		"columns":    columns ,
 		"items":      items ,

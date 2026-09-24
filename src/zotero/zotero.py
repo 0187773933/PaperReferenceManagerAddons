@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import shutil
 import sqlite3
@@ -8,6 +9,24 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from ..utils import utils
+
+
+# Zotero's ` date ` field is free text -- "2024" , "2024-05-01" , "May 2024" ,
+# "in press" . The first standalone 4-digit number in a plausible range is the
+# year ; anything else has none , which the row shows as a blank.
+def _year_of( raw ):
+	m = re.search( r"\b( 1[6-9]\d{2} | 20\d{2} | 21\d{2} )\b" , str( raw or "" ) , re.X )
+	return int( m.group( 1 ) ) if m else None
+
+
+# The primary key a DOI-less Zotero item gets in output/cache/papers/ , spelled
+# the way papers.synthetic_key spells it ( imported lazily : src/db imports back
+# into utils , and this module is loaded by the CLI before either ) . Keeping the
+# two in step is what lets /sort recognize a recently-added row it already has.
+def _synthetic_key( zotero_item_key ):
+	from ..db import papers
+	return papers.synthetic_key( papers.SOURCE_ZOTERO , zotero_item_key )
+
 
 class Zotero():
 	def __init__( self , args ):
@@ -173,6 +192,92 @@ class Zotero():
 					if d:
 						dois.add( d )
 			return titles , dois
+
+	# The N papers most recently added to Zotero , read straight off the live
+	# SQLite -- NOT off output/cache/papers/ and NOT off the dashboard index.
+	# That is the whole point : a paper saved into Zotero thirty seconds ago is
+	# in neither of those until a snapshot + reindex has run , so /sort could
+	# not offer it without either a restart or a full pipeline pass. This path
+	# sees it immediately.
+	#
+	# Same fast shape as take_titles_and_dois : one ordered scan of items for
+	# the newest keys , then the field / creator rows for JUST those items.
+	# Scoped to `limit` , so it stays a few milliseconds on top of the SQLite
+	# copy however large the library is.
+	def take_recent( self , limit=10 ):
+		limit = max( 1 , min( int( limit or 10 ) , 200 ) )
+		# Over-fetch : the newest rows include items we drop below ( no title
+		# and no DOI -- a bare web link , an empty placeholder ) , and dropping
+		# them must not shorten the answer.
+		scan = min( limit * 4 + 20 , 500 )
+		with self.open_snapshot() as conn:
+			c = conn.cursor()
+			order , ids = [] , {}
+			for row in c.execute( """
+				SELECT items.itemID , items.key , items.dateAdded
+				FROM items
+				JOIN itemTypes       ON itemTypes.itemTypeID  = items.itemTypeID
+				LEFT JOIN deletedItems ON deletedItems.itemID = items.itemID
+				WHERE deletedItems.itemID IS NULL
+				  AND itemTypes.typeName NOT IN ( 'attachment' , 'note' , 'annotation' )
+				ORDER BY items.dateAdded DESC
+				LIMIT ?
+			""" , ( scan , ) ):
+				order.append( row[ "itemID" ] )
+				ids[ row[ "itemID" ] ] = {
+					"zkey":  row[ "key" ] ,
+					"added": ( row[ "dateAdded" ] or "" ) ,
+					"meta":  {} ,
+					"authors": [] ,
+				}
+			if not order:
+				return []
+
+			marks = " , ".join( "?" * len( order ) )
+			for row in c.execute( f"""
+				SELECT itemData.itemID , fields.fieldName , itemDataValues.value
+				FROM itemData
+				JOIN fields         ON fields.fieldID         = itemData.fieldID
+				JOIN itemDataValues ON itemDataValues.valueID = itemData.valueID
+				WHERE itemData.itemID IN ( {marks} )
+			""" , order ):
+				ids[ row[ "itemID" ] ][ "meta" ][ row[ "fieldName" ] ] = row[ "value" ]
+
+			for row in c.execute( f"""
+				SELECT itemCreators.itemID , creators.firstName , creators.lastName
+				FROM itemCreators
+				JOIN creators     ON creators.creatorID         = itemCreators.creatorID
+				JOIN creatorTypes ON creatorTypes.creatorTypeID = itemCreators.creatorTypeID
+				WHERE itemCreators.itemID IN ( {marks} )
+				  AND creatorTypes.creatorType = 'author'
+				ORDER BY itemCreators.itemID , itemCreators.orderIndex
+			""" , order ):
+				name = " ".join( x for x in ( row[ "firstName" ] , row[ "lastName" ] ) if x )
+				if name:
+					ids[ row[ "itemID" ] ][ "authors" ].append( name )
+
+		out = []
+		for item_id in order:
+			it    = ids[ item_id ]
+			meta  = it[ "meta" ]
+			doi   = utils.normalize_doi( meta.get( "DOI" ) )
+			title = ( meta.get( "title" ) or "" ).strip()
+			if not title and not doi:
+				continue     # nothing to show and nothing to key on
+			out.append( {
+				"key":     doi or _synthetic_key( it[ "zkey" ] or item_id ) ,
+				"zkey":    it[ "zkey" ] or "" ,
+				"title":   title or doi ,
+				"doi":     doi or "" ,
+				"year":    _year_of( meta.get( "date" ) ) ,
+				"journal": ( meta.get( "publicationTitle" ) or meta.get( "bookTitle" )
+					or meta.get( "proceedingsTitle" ) or "" ) ,
+				"authors": it[ "authors" ] ,
+				"added":   it[ "added" ] ,
+			} )
+			if len( out ) >= limit:
+				break
+		return out
 
 	def take_snapshot( self ):
 		with self.open_snapshot() as conn:

@@ -45,6 +45,8 @@ from collections import Counter
 from tqdm import tqdm
 
 from ..db    import papers as papers_db
+from ..tasks import code as code_task
+from ..tasks import datasets as datasets_task
 from ..utils import utils
 from .       import index as dash_index
 
@@ -56,7 +58,8 @@ from .       import index as dash_index
 #   7 -> 8 : library entries gained montage / has_md + full-text OCR haystack
 #   8 -> 9 : library entries gained created_at ( In-Library "Added" column )
 #   9 -> 10: library entries gained code_links ( In-Library "Code" column )
-STATE_VERSION = 10
+#  10 -> 11: library entries gained dataset_links + dataset_names ( /datasets )
+STATE_VERSION = 11
 
 
 # ---------------------------------------------------------------------------
@@ -93,23 +96,19 @@ def _ocr_fulltext( paper ):
 	return " ".join( parts )
 
 
-def _code_links( paper ):
-	"""Compact the source-code / data links ` prma code ` pinned on a library
-	paper ( paper[ 'code' ].links ) down to the { url , source } pairs the
-	dashboard's 'Code' column renders. [] when the paper hasn't been scanned or
-	had no links. When ` prma code ` repaired an OCR-mangled GitHub link we emit
-	the corrected `resolved_url` and carry the original as `raw` ( for a tooltip )."""
-	out = []
-	for l in ( ( paper.get( "code" ) or {} ).get( "links" ) ) or []:
-		raw = l.get( "url" )
-		if not raw:
-			continue
-		fixed = l.get( "resolved_url" )
-		entry = { "url": fixed or raw , "source": l.get( "source" ) }
-		if fixed and fixed != raw:
-			entry[ "raw" ] = raw
-		out.append( entry )
-	return out
+# The source-code / data links ` prma code ` pinned on a library paper , compacted
+# down to the { url , source } pairs the dashboard's "Code" column renders. Read
+# through the task that WROTE the field ( src/tasks/code.py ) so this and the
+# /review document can't drift into showing different links for the same paper.
+_code_links = code_task.display_links
+
+# The public-dataset evidence ` prma datasets ` pinned : the archive links
+# ( OpenNeuro / Zenodo / OSF / Hugging Face / ... ) and the datasets the paper
+# only NAMES ( HCP , NSD , ABIDE , ... ). Same contract as the line above --
+# read through the task that WROTE the field ( src/tasks/datasets.py ) so the
+# /datasets page and this index can't drift.
+_ds_links = datasets_task.display_links
+_ds_names = datasets_task.display_names
 
 
 def _work_entry( meta ):
@@ -318,6 +317,8 @@ def build( args , full=False , log=print , progress=None ):
 			"has_md":     md_fp.exists() ,                # -> "Read" accordion available
 			"created_at": paper.get( "created_at" ) or "" , # when first added to the library
 			"code_links": _code_links( paper ) ,          # prma code -> "Code" column
+			"dataset_links": _ds_links( paper ) ,        # prma datasets -> /datasets
+			"dataset_names": _ds_names( paper ) ,        #   "     "     -> /datasets
 			"hay":        ( lib_title + " " + abstract + " " + ocr_body ).lower() ,
 		}
 
@@ -500,6 +501,8 @@ def _lib_rows( lib_meta ):
 			"pubdate":    e.get( "pubdate" ) or "" ,
 			"created_at": e.get( "created_at" ) or "" ,  # In-Library "Added" column
 			"code_links": e.get( "code_links" ) or [] ,  # In-Library "Code" column
+			"dataset_links": e.get( "dataset_links" ) or [] ,  # -> /datasets
+			"dataset_names": e.get( "dataset_names" ) or [] ,  # -> /datasets
 			"authors":    e.get( "authors" ) or [] ,
 			"hay":        e.get( "hay" ) or "" ,
 		} )

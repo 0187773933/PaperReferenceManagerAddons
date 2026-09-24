@@ -1109,7 +1109,14 @@ function records() {
 		};
 	} ).filter( Boolean );
 }
+/* The figure reports are standalone files -- they are opened straight off disk
+   with no server to fetch /static/common.js from -- so this is their own copy of
+   what saveCSV does there : a .csv carries no declaration of its encoding , and
+   without the BOM Excel reads our UTF-8 in the machine's legacy encoding ( an em
+   dash comes back as ` ‚Äî ` on a Mac ). Only for CSV : a BOM in front of the
+   JSON export would break anything strict that reads it. */
 function download( text , name , mime ) {
+	if( /csv/.test( mime ) ) text = "\uFEFF" + text;
 	const url = URL.createObjectURL( new Blob( [ text ] , { type: mime } ) );
 	const a = document.createElement( "a" );
 	a.href = url; a.download = name;
@@ -1181,9 +1188,14 @@ document.getElementById( "export-csv" ).addEventListener( "click" , () => {
 	const cols = [ "id","doi","title","modalities","modalities_inferred","figure","page","image","pdf","md","methods","keywords","lead","caption" ];
 	// The cross-report column only means something on /images.
 	if ( XREF ) cols.splice( cols.indexOf( "lead" ) + 1 , 0 , "in_method_images" );
+	/* These reports are opened straight off disk , so this is their own copy of
+	   csvCell in /static/common.js -- including the part that matters here : a
+	   caption's own line breaks become "; " , so every row of the sheet is one
+	   uniform line instead of as many as the longest caption. */
 	const esc = v => {
-		const s = Array.isArray( v ) ? v.join( "; " ) : ( v === null ? "" : String( v ) );
-		return /[",\n]/.test( s ) ? '"' + s.replace( /"/g , '""' ) + '"' : s;
+		const s = ( Array.isArray( v ) ? v.join( "; " ) : ( v == null ? "" : String( v ) ) )
+			.replace( /\r\n?/g , "\n" ).split( "\n" ).map( t => t.trim() ).filter( Boolean ).join( "; " );
+		return /[",]/.test( s ) ? '"' + s.replace( /"/g , '""' ) + '"' : s;
 	};
 	const rows = records().map( r => cols.map( c => esc( r[ c ] ) ).join( "," ) );
 	download( [ cols.join( "," ) ].concat( rows ).join( "\n" ) , EXPORT_STEM + ".csv" , "text/csv" );

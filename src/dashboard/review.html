@@ -4,8 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma · review</title>
-<!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<!-- The chrome every prma page shares : the pre-paint theme restore ( so nothing
+     flashes ) , then the palette and the header / button / link styling. Both are
+     served from src/dashboard/static/ ; anything a page loads after them wins
+     wherever it redefines something. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <!--
   The /review page : what /sort and /images ADD UP TO.
 
@@ -29,247 +33,11 @@
   Paper bodies are built ON EXPAND , not up front : 194 papers x ~50 fields x
   three evidence quotes is a lot of DOM to make for rows nobody opened.
 -->
-<style>
-  /* The shared prma palette : light by default , dark opt-in via
-     [data-theme="dark"] on <html> ( restored from localStorage before paint by
-     the script above , flipped by the header \u2600/\U0001F319 button ) -- the same four
-     blocks the dashboard and the two boards carry.
-
-     Everything below the first six tokens is this page's own vocabulary : a
-     field's background , the pill colours , the "the paper does not say" grey.
-     They are tokens rather than literals for one reason -- a hex typed into a
-     rule is a colour that only works in one theme , and this page has four. */
-  :root {
-    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
-    --fg:#101820; --muted:#5a6560; --accent:#046a38; --green:#046a38; --warn:#8a6420;
-    --chip:#e9eee6; --field:#f2f5ef; --edge:#a8c2b1; --prose:#2b3439; --faint:#8e9a93;
-    --sel:#d8e9de; --sel-fg:#08442a;
-    --ds:#dcefe9;  --ds-fg:#0f5c4d;
-    --mod:#e8e2f4; --mod-fg:#4a3480;
-    --cur:#f4e7cf; --cur-fg:#7a5715;
-    --pri1:#d5ecdd; --pri1-fg:#046a38;
-    --pri2:#dbe7f5; --pri2-fg:#1d4f7c;
-    --pri3:#e6e9e4; --pri3-fg:#5a6560;
-    --note-bg:#fdf6e6; --note-line:#e0c893;
-  }
-  :root[data-theme="dark"] {
-    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
-    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --green:#719949; --warn:#f8e08e;
-    --chip:#232f2a; --field:#141c22; --edge:#3d5147; --prose:#cfd6d0; --faint:#6b7a73;
-    --sel:#33422f; --sel-fg:#f0dfb8;
-    --ds:#1a2f2c;  --ds-fg:#7fd4c4;
-    --mod:#2a2438; --mod-fg:#c3a8f0;
-    --cur:#3a2f13; --cur-fg:#f8e08e;
-    --pri1:#1b3f2c; --pri1-fg:#8fd0a0;
-    --pri2:#22323f; --pri2-fg:#8ec8ff;
-    --pri3:#242f2c; --pri3-fg:#a9b6cc;
-    --note-bg:#1e1a11; --note-line:#4a3a1a;
-  }
-  :root[data-skin="pastel"] {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --green:#046A38; --warn:#c1670c;
-    --chip:#eceff3; --field:#f4f6f9; --edge:#b3c6de; --prose:#2b3038; --faint:#98a1ad;
-    --sel:#dbe9fb; --sel-fg:#0d47a1;
-    --ds:#dcf0ec;  --ds-fg:#0f5c4d;
-    --mod:#e9e3f6; --mod-fg:#4a3480;
-    --cur:#fdeacd; --cur-fg:#a8560a;
-    --pri1:#dcf0e2; --pri1-fg:#046A38;
-    --pri2:#dde9f9; --pri2-fg:#1a4f8a;
-    --pri3:#e8ebef; --pri3-fg:#5b6470;
-    --note-bg:#fff7e8; --note-line:#f0d7a8;
-  }
-  :root[data-skin="pastel"][data-theme="dark"] {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --green:#5fd99a; --warn:#e8a33d;
-    --chip:#262c37; --field:#1f242e; --edge:#38506b; --prose:#c8cfda; --faint:#5b6472;
-    --sel:#1d3550; --sel-fg:#cfe6ff;
-    --ds:#1a2b2b;  --ds-fg:#7fd4c4;
-    --mod:#2b2338; --mod-fg:#c3a8f0;
-    --cur:#3a2a13; --cur-fg:#ffb454;
-    --pri1:#1b3f2c; --pri1-fg:#5fd99a;
-    --pri2:#1d3550; --pri2-fg:#8ec8ff;
-    --pri3:#2a2f3d; --pri3-fg:#a9b6cc;
-    --note-bg:#1e1a11; --note-line:#4a3a1a;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  }
-  header {
-    position:sticky; top:0; z-index:5; background:var(--panel);
-    border-bottom:1px solid var(--line); padding:11px 18px 9px;
-  }
-  .titlebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .counts { color:var(--muted); font-size:12px; display:flex; gap:13px; flex-wrap:wrap; }
-  .counts b { color:var(--fg); font-weight:600; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
-  }
-  button:hover:not(:disabled) { border-color:var(--accent); }
-  button:disabled { opacity:.45; cursor:default; }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
-  }
-  .navlink:hover { border-color:var(--accent); }
-  input[type=search] {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 11px; font-size:13px; min-width:230px;
-  }
-  input[type=search]:focus { outline:none; border-color:var(--accent); }
-  select {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 9px; font-size:13px;
-  }
-
-  /* ---- filter chips ---- */
-  .controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:9px; }
-  .chipbar { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
-  .chipbar .lbl { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-right:2px; }
-  .chip {
-    background:var(--chip); border:1px solid transparent; color:var(--fg);
-    border-radius:11px; padding:2px 9px; font-size:12px; cursor:pointer; user-select:none;
-    white-space:nowrap;
-  }
-  .chip:hover { border-color:var(--line); }
-  .chip.on { background:var(--sel); border-color:var(--accent); color:var(--sel-fg); }
-  .chip .c { color:var(--muted); font-variant-numeric:tabular-nums; margin-left:5px; font-size:11px; }
-  .chip.on .c { color:inherit; opacity:.72; }
-  .sep { width:1px; align-self:stretch; background:var(--line); margin:0 3px; }
-
-  main { padding:16px 18px 60px; max-width:1180px; margin:0 auto; }
-  #task-chips { margin-bottom:14px; }
-
-  /* ---- banner ( empty / building / stale ) ---- */
-  .banner {
-    border:1px solid var(--line); border-radius:10px; background:var(--panel);
-    padding:14px 16px; margin-bottom:16px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;
-  }
-  .banner.warn { border-color:var(--note-line); background:var(--note-bg); }
-  .banner .msg { flex:1; min-width:260px; }
-  .banner .msg b { display:block; margin-bottom:3px; }
-  .banner .msg span { color:var(--muted); font-size:12.5px; }
-  .track { height:8px; border-radius:5px; background:var(--panel2); overflow:hidden; width:100%; margin-top:9px; }
-  .track .done { background:var(--accent); height:100%; transition:width .3s ease; }
-
-  /* ---- criteria ---- */
-  details.crit { margin-bottom:14px; }
-  details.crit > summary {
-    cursor:pointer; color:var(--muted); font-size:12px; list-style:none;
-    text-transform:uppercase; letter-spacing:.5px;
-  }
-  details.crit > summary::-webkit-details-marker { display:none; }
-  details.crit > summary::before { content:"▸ "; }
-  details.crit[open] > summary::before { content:"▾ "; }
-  details.crit ol { margin:9px 0 0; padding-left:22px; color:var(--muted); font-size:12.5px; }
-  details.crit li { margin-bottom:6px; }
-
-  /* ---- paper rows ---- */
-  .section-title {
-    color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.5px;
-    margin:24px 0 10px; display:flex; align-items:baseline; gap:9px;
-  }
-  .section-title .n { color:var(--fg); font-weight:600; }
-  .paper { border:1px solid var(--line); border-radius:9px; background:var(--panel); margin-bottom:7px; }
-  .paper.open { border-color:var(--edge); }
-  .hd { display:flex; gap:11px; padding:10px 12px; cursor:pointer; align-items:flex-start; }
-  .hd:hover { background:var(--panel2); border-radius:9px; }
-  .paper.open .hd { border-radius:9px 9px 0 0; }
-  .hd .num { color:var(--muted); font-variant-numeric:tabular-nums; width:34px; flex:none; text-align:right; font-size:12px; padding-top:2px; }
-  .pri {
-    flex:none; font-size:11px; font-weight:700; border-radius:5px; padding:2px 6px; margin-top:1px;
-    background:var(--chip); color:var(--muted);
-  }
-  .pri.p1 { background:var(--pri1); color:var(--pri1-fg); }
-  .pri.p2 { background:var(--pri2); color:var(--pri2-fg); }
-  .pri.p3 { background:var(--pri3); color:var(--pri3-fg); }
-  .who { flex:1; min-width:0; }
-  .who .t { font-weight:600; }
-  .who .t .yr { color:var(--muted); font-weight:400; font-variant-numeric:tabular-nums; margin-left:7px; font-size:12.5px; }
-  .who .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
-  .who .sub .model { color:var(--mod-fg); font-weight:600; }
-  .who .sub .role { color:var(--muted); }
-  .who .tagline { margin-top:5px; display:flex; gap:5px; flex-wrap:wrap; }
-  .tag { font-size:11px; padding:1px 7px; border-radius:9px; background:var(--chip); color:var(--muted); }
-  .tag.ds { background:var(--ds); color:var(--ds-fg); }
-  .tag.mod { background:var(--mod); color:var(--mod-fg); }
-  .tag.cur { background:var(--cur); color:var(--cur-fg); }
-  .lk { flex:none; white-space:nowrap; padding-top:2px; text-align:right; }
-  .lk a { color:var(--accent); text-decoration:none; margin-left:9px; font-size:12.5px; }
-  .lk a:hover { text-decoration:underline; }
-  .lk .meta { color:var(--muted); font-size:11.5px; margin-top:4px; font-variant-numeric:tabular-nums; }
-
-  /* ---- expanded body ---- */
-  .body { display:none; padding:2px 12px 14px 57px; border-top:1px solid var(--line); }
-  .paper.open .body { display:block; }
-  .blk { margin-top:13px; }
-  .blk > h4 {
-    margin:0 0 7px; font-size:11px; color:var(--muted); font-weight:600;
-    text-transform:uppercase; letter-spacing:.5px;
-  }
-  .prose { color:var(--prose); font-size:13px; }
-  .prose.clamp { max-height:74px; overflow:hidden; position:relative; cursor:pointer; }
-  .prose.clamp::after {
-    content:""; position:absolute; left:0; right:0; bottom:0; height:34px;
-    background:linear-gradient(transparent,var(--panel));
-  }
-  .notes { color:var(--cur-fg); font-size:13px; }
-  .caps { color:var(--prose); font-size:12.5px; }
-  .caps div { margin-bottom:5px; }
-
-  /* ---- the uniform field grid ---- */
-  .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(268px,1fr)); gap:5px; }
-  .f {
-    background:var(--field); border:1px solid transparent; border-radius:7px;
-    padding:6px 9px; font-size:12.5px; min-width:0;
-  }
-  .f.has { cursor:pointer; }
-  .f.has:hover { border-color:var(--line); }
-  .f .k { color:var(--muted); font-size:11px; }
-  .f .v { margin-top:1px; word-break:break-word; }
-  .f .v.none { color:var(--faint); font-style:italic; }
-  .f .badge {
-    font-size:10px; padding:0 5px; border-radius:8px; margin-left:6px; vertical-align:1px;
-    background:var(--chip); color:var(--muted);
-  }
-  .f .badge.curated  { background:var(--cur); color:var(--cur-fg); }
-  .f .badge.inferred { background:var(--ds); color:var(--ds-fg); }
-  .f .ev { display:none; margin-top:7px; border-top:1px solid var(--line); padding-top:7px; }
-  .f.open { border-color:var(--edge); }
-  .f.open .ev { display:block; }
-  .f .ev .alt { color:var(--muted); font-size:11.5px; margin-bottom:6px; }
-  .f .ev q {
-    display:block; color:var(--prose); font-size:11.5px; line-height:1.5;
-    border-left:2px solid var(--line); padding-left:8px; margin-bottom:6px;
-  }
-  .f .ev q::before, .f .ev q::after { content:""; }
-  .f .ev .why { color:var(--ds-fg); font-size:11.5px; }
-
-  .scores { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
-  .scores b { color:var(--fg); font-variant-numeric:tabular-nums; }
-
-  /* ---- excluded + dataset tables ---- */
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  .tbl { border:1px solid var(--line); border-radius:9px; overflow:hidden; }
-  thead th {
-    text-align:left; color:var(--muted); font-weight:600; font-size:11.5px;
-    padding:7px 12px; border-bottom:1px solid var(--line); background:var(--panel); white-space:nowrap;
-  }
-  tbody td { padding:7px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
-  tbody tr:last-child td { border-bottom:none; }
-  tbody tr:hover { background:var(--panel); }
-  td.num, td.nowrap { width:1%; white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums; }
-  .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; background:var(--chip); color:var(--muted); }
-  .pill.border { background:var(--cur); color:var(--cur-fg); }
-
-  .empty { color:var(--muted); padding:44px; text-align:center; }
-  code { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:12px; }
-  footer { color:var(--muted); font-size:12px; padding:26px 18px 40px; max-width:1180px; margin:0 auto; line-height:1.6; }
-</style>
+<!-- The look of a screened paper list -- the chipbar , the criteria disclosure ,
+     the expandable paper row and the uniform field grid. Shared with
+     /review-missing , which asks the same question of the pool you have NOT
+     curated ; loaded after common.css so it wins where it redefines something. -->
+<link rel="stylesheet" href="/static/review.css">
 </head>
 <body>
 <header>
@@ -278,8 +46,11 @@
     <div class="counts" id="counts"></div>
     <div class="grow"></div>
     <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+    <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
     <a class="navlink" href="/sort" title="The list this review screens — one numbered list you drag into order">⬒ Sort</a>
     <a class="navlink" href="/images" title="The other input — every cropped figure, with the selection this review reads">▣ Figures</a>
+    <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx">{ } Code</a>
+    <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     <button id="export-json" title="Download the papers currently shown, as JSON">⇧ JSON</button>
     <button id="export-csv"  title="Download the papers currently shown, one row each, as CSV">⇧ CSV</button>
     <button id="rebuild" title="Re-screen and re-extract from the boards as they stand now ( minutes )">↻ Rebuild</button>
@@ -315,19 +86,12 @@
 
 <footer id="footer"></footer>
 
+<!-- $ , esc , fmt , when , PROXY , doiLinks() , codeLinks() , initTheme() --
+     the helpers every prma page used to write out for itself. Loaded before the
+     page script , so they are plain globals below ; nothing here may redeclare
+     them. -->
+<script src="/static/common.js"></script>
 <script>
-/* Where a DOI goes when you want the PDF through the university's subscription.
-   Lives here with the other link decisions , not in the Python that built the
-   document -- that file states FACTS about a paper ( it has a .md , it has a
-   PDF ) and this page decides what they turn into. */
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
-
-const $  = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
-const fmt = n => (n||0).toLocaleString();
-const when = s => esc(String(s||"").replace("T"," "));
 
 let DOC = null;          // the whole review document
 let STATUS = {};         // availability / build progress , polled
@@ -346,18 +110,36 @@ let sortBy = "priority";
    The document says WHICH text a paper has ; the routes are this page's to
    compose. /md/<stem> renders the paper in the browser , /methods/<stem>.txt
    is the plain methods section off disk , /pdf?key= streams the PDF the
-   library actually holds. */
+   library actually holds. DOI + Proxy and the code links come from
+   /static/common.js , so they are the same two anchors and the same repo list
+   the dashboard shows for the same paper.
+
+   The code links are what ` prma code ` harvested from the whole abstract + OCR
+   text ( and repaired where OCR mangled a repo name ) -- not the Code_URL the
+   methods section happened to spell out. That one is still down in the
+   architecture fields , with the sentence it was read from. */
 function links(p){
-  const f = p.files || {}, out = [];
-  if(p.doi){
-    out.push(`<a href="https://doi.org/${esc(p.doi)}" target="_blank" title="Publisher page">DOI</a>`);
-    out.push(`<a href="${PROXY}${esc(p.doi)}" target="_blank" title="Through the library proxy">Proxy</a>`);
-  }
+  const f = p.files || {};
+  const out = doiLinks(p.doi);
   if(f.pdf)     out.push(`<a href="/pdf?key=${encodeURIComponent(p.key)}" target="_blank" title="The PDF in your library">PDF</a>`);
   if(f.md)      out.push(`<a href="/md/${encodeURIComponent(f.prefix)}" target="_blank" title="The rendered paper, figures and all">MD</a>`);
   if(f.methods) out.push(`<a href="/methods/${encodeURIComponent(f.prefix)}.txt" target="_blank" title="The isolated methods section — what most of this page was read out of">Methods</a>`);
   if(f.montage) out.push(`<a href="/images/${encodeURIComponent(f.prefix)}-Figures.png" target="_blank" title="Figure montage">Figures</a>`);
+  // Only when there ARE any : the dashboard's em-dash placeholder holds a column
+  // open , and there is no column here to hold.
+  if((p.code_links||[]).length) out.push(codeLinks(p.code_links));
   return out.join("");
+}
+
+/* Every source-code / data link known for a paper , from either place it can be
+   known : the ` prma code ` sweep of the whole paper , and the Code_URL the
+   extractor read out of the methods section. The sweep is the better finder --
+   it reads the abstract too , knows a dozen hosts rather than six , and repairs
+   OCR-broken names -- but a paper whose only mention sits in a sentence the
+   sweep's URL regex missed still counts. Used by the "Has code" chip and its
+   filter , so the count and the filter can never disagree. */
+function anyCode(p){
+  return (p.code_links||[]).length > 0 || !!((p.architecture||{}).Code_URL||{}).value;
 }
 
 /* ---- the one field renderer ---------------------------------------------
@@ -495,7 +277,7 @@ function matches(p){
   if(activePri.size  && !activePri.has(p.priority)) return false;
   if(activeTask.size && !activeTask.has(p.task_category)) return false;
   if(activeFlag.has("curated") && !p.curated) return false;
-  if(activeFlag.has("code")    && !((p.architecture||{}).Code_URL||{}).value) return false;
+  if(activeFlag.has("code")    && !anyCode(p)) return false;
   if(activeFlag.has("sort")    && !(p.curated_lists||[]).includes("sort board")) return false;
   if(activeFlag.has("figures") && !(p.curated_lists||[]).includes("selected figures")) return false;
   if(!query) return true;
@@ -559,7 +341,7 @@ function renderControls(){
     .map(k => chip(k, byTask[k], activeTask.has(k), { task:k })).join("");
 
   const nCur  = P.filter(p => p.curated).length;
-  const nCode = P.filter(p => ((p.architecture||{}).Code_URL||{}).value).length;
+  const nCode = P.filter(anyCode).length;
   const nSort = P.filter(p => (p.curated_lists||[]).includes("sort board")).length;
   const nFig  = P.filter(p => (p.curated_lists||[]).includes("selected figures")).length;
   $("#flag-chips").innerHTML =
@@ -615,6 +397,9 @@ function renderExcluded(){
         if(f.md)      lk.push(`<a href="/md/${encodeURIComponent(f.prefix)}" target="_blank">MD</a>`);
         if(f.methods) lk.push(`<a href="/methods/${encodeURIComponent(f.prefix)}.txt" target="_blank" title="The isolated methods section — what it was screened on">Methods</a>`);
         if(f.montage) lk.push(`<a href="/images/${encodeURIComponent(f.prefix)}-Figures.png" target="_blank" title="Figure montage — the quickest way to eyeball a borderline exclusion">Figures</a>`);
+        // A paper dropped for weak attention evidence that nonetheless ships a
+        // repo is exactly the kind of borderline call worth opening.
+        if((e.code_links||[]).length) lk.push(codeLinks(e.code_links));
         return `<tr><td>${esc(e.title||e.key)}${e.borderline?` <span class="pill border">borderline</span>`:""}`
           + `<div style="color:var(--muted);font-size:11px;margin-top:2px">${esc(e.best_task_guess)}</div></td>`
           + `<td class="num">${esc(e.year||"")}</td>`
@@ -727,7 +512,7 @@ function download(text, name, mime){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-const stamp = () => new Date().toISOString().slice(0,10);
+/* stamp() is in /static/common.js. */
 
 $("#export-json").addEventListener("click", () => {
   if(!DOC) return;
@@ -744,10 +529,13 @@ $("#export-csv").addEventListener("click", () => {
   const flat = [].concat(G.architecture, G.acquisition, G.preprocessing);
   const head = ["#","Priority","Model_Name","Title","Year","Publication_Date","Added_To_Library",
                 "Citations","DOI_or_Key","Task","Decoding_Target",
-                "Attention_Role","Datasets_Used","Tags","Curator_Notes","Curated_Lists","Detail_Source"]
+                "Attention_Role","Datasets_Used","Tags","Curator_Notes","Curated_Lists","Detail_Source",
+                "Code_Links"]
                .concat(flat);
-  const cell = v => { const s = Array.isArray(v) ? v.join("; ") : (v==null?"":String(v));
-                      return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  // csvCell ( /static/common.js ) : the same escaping every other page uses ,
+  // and the one place a cell's own line breaks are flattened to "; " so a
+  // spreadsheet draws every row at one height.
+  const cell = csvCell;
   const lines = [ head.map(cell).join(",") ];
   VIEW.forEach(p => {
     const groups = Object.assign({}, p.architecture, p.acquisition, p.preprocessing);
@@ -755,11 +543,14 @@ $("#export-csv").addEventListener("click", () => {
                  String(p.added||"").slice(0,10), p.cited_by,
                  p.key, p.task_category,
                  p.decoding_target, p.attention_role, p.datasets_used, p.tags,
-                 p.curator_notes, p.curated_lists, p.detail_source ]
+                 p.curator_notes, p.curated_lists, p.detail_source,
+                 (p.code_links||[]).map(l => l.url) ]
       .concat(flat.map(c => (groups[c]||{}).value || ""))
       .map(cell).join(","));
   });
-  download(lines.join("\n"), `prma-review-${stamp()}.csv`, "text/csv");
+  // saveCSV ( /static/common.js ) puts the UTF-8 BOM on ; download() above
+  // stays for the .json export , which must NOT have one.
+  saveCSV(lines.join("\n"), `prma-review-${stamp()}.csv`);
 });
 
 /* ---- fetching ------------------------------------------------------------ */
@@ -778,7 +569,10 @@ async function fetchDoc(){
     DOC.papers.forEach(p => HAY.set(p,
       [ p.title, p.model_name, p.key, p.doi, p.task_category, p.attention_role,
         (p.tags||[]).join(" "), (p.modalities||[]).join(" "),
-        (p.datasets_used||[]).join(" "), (p.curator_notes||[]).join(" ") ]
+        (p.datasets_used||[]).join(" "), (p.curator_notes||[]).join(" "),
+        // The repo URLs and their host labels , so "github" / "osf" / an org
+        // name finds the papers that ship code.
+        (p.code_links||[]).map(l => `${l.source} ${l.url}`).join(" ") ]
       .filter(Boolean).join(" ").toLowerCase()));
     renderAll();
   } else {
@@ -812,19 +606,10 @@ async function startRebuild(){
 
 $("#rebuild").addEventListener("click", startRebuild);
 
-/* The theme is one setting shared by every prma page ( localStorage
-   "prma-theme" ) , so flipping it here flips the dashboard and both boards too. */
-$("#toggleTheme").addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("prma-theme", next); } catch(e){}
-  labelTheme();
-});
-function labelTheme(){
-  $("#toggleTheme").textContent =
-    document.documentElement.dataset.theme === "dark" ? "☀ Light" : "🌙 Dark";
-}
-labelTheme();
+/* Labels the header button and persists a flip ( /static/common.js ). The theme
+   is one setting shared by every prma page , so flipping it here flips the
+   dashboard and both boards too. */
+initTheme();
 
 /* ---- interaction --------------------------------------------------------- */
 document.addEventListener("click", e => {

@@ -4,51 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma tiers</title>
-<!-- Same pre-paint theme restore as the dashboard, so there's no flash. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<!-- The chrome every prma page shares : the pre-paint theme restore ( so nothing
+     flashes ) , then the palette and the header / button / link styling. The
+     <style> below loads after and wins wherever it redefines something. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-  :root {
-    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
-    --fg:#101820; --muted:#5a6560; --accent:#046a38; --accent-ink:#ffffff; --green:#046a38;
-    --chip:#e9eee6; --warn:#8a6420; --row:#ffffff;
-  }
-  :root[data-theme="dark"] {
-    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
-    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --accent-ink:#101820; --green:#719949;
-    --chip:#232f2a; --warn:#f8e08e; --row:#141c22;
-  }
-  :root[data-skin="pastel"] {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --accent-ink:#04121f; --green:#046A38;
-    --chip:#eceff3; --warn:#c1670c; --row:#ffffff;
-  }
-  :root[data-skin="pastel"][data-theme="dark"] {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --accent-ink:#04121f; --green:#046A38;
-    --chip:#262c37; --warn:#e8a33d; --row:#141821;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  }
-  header { position:sticky; top:0; z-index:20; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 16px; }
-  .titlebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .counts { color:var(--muted); font-size:12px; display:flex; gap:12px; flex-wrap:wrap; }
-  .counts b { color:var(--fg); font-weight:600; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:6px 11px; cursor:pointer; font-size:13px;
-  }
-  button:hover { border-color:var(--accent); }
-  button:disabled { opacity:.5; cursor:default; }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:6px 11px; font-size:13px; text-decoration:none;
-  }
-  .navlink:hover { border-color:var(--accent); }
+  /* The palette and the base header / button / .navlink chrome are in
+     /static/common.css. What is left here is where this board differs from it :
+     a tighter header that has to sit above the drag layer , and smaller
+     buttons. Everything below that is the tier list's own. */
+  header { z-index:20; padding:10px 16px; }
+  .titlebar { gap:12px; }
+  .counts { gap:12px; }
+  button { padding:6px 11px; }
+  .navlink { padding:6px 11px; }
   .savestate { font-size:12px; color:var(--muted); min-width:104px; text-align:right; }
   .savestate.dirty { color:var(--warn); }
 
@@ -317,6 +287,9 @@
     <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
     <a class="navlink" href="/sort" title="The other board: one numbered list, ordered by hand, tagged fMRI / EEG / anything">⬒ Sort</a>
     <a class="navlink" href="/review" title="What the sort board and the picked figures add up to: every candidate screened, with the numbers pulled out of its own text">✎ Review</a>
+    <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
+    <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx">{ } Code</a>
+    <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     <button id="autotag" title="Fill in modalities from the ` prma modalities ` stamp for every row that has none">⚡ Auto-tag</button>
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
     <button id="refsbtn" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
@@ -343,7 +316,7 @@
       <option value="references">In bibliographies</option>
       <option value="cited_by">Newer / citing</option>
     </select>
-    <input type="text" id="filter" style="max-width:220px" placeholder="Filter the board…" autocomplete="off">
+    <input type="search" id="filter" style="max-width:220px" placeholder="Filter the board…" autocomplete="off">
   </div>
   <div class="paintbar">
     <button class="pbtn" id="tagfilter" title="Turn the chips into a filter: click them to show only the papers carrying them">🔎 Filter</button>
@@ -364,20 +337,19 @@
 <div id="acpop"></div>
 <div id="overlay"><div class="sheet" id="sheet"></div></div>
 <div id="toast"></div>
+<!-- $ , $$ , esc , fmt , PROXY , mdHref() , doiLinks() , codeLinks() ,
+     initTheme() , trackHeadHeight() -- the helpers every prma page used to write out for itself.
+     Loaded before the page script , so they are plain globals below ; nothing
+     here may redeclare them. -->
+<script src="/static/common.js"></script>
 <script>
 // The proxy every prma page links DOIs through ( see the dashboard's copy ).
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
 // The reader page for a paper : the key IS the DOI when there is one, so its
 // slashes stay slashes in the path -- /md/10.1038/… ( same as the dashboard ).
-const mdHref = k => "/md/" + encodeURIComponent(k).replace(/%2F/gi, "/");
 // Matches utils.doi_to_filename() -- how output/md and output/methods name files.
 const fileStem = k => String(k||"").replace(/[\/\\]/g, "_");
 const STAGING = "unranked";
 
-const $  = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48);
 const nowISO = () => new Date().toISOString();
 
@@ -539,7 +511,6 @@ function setLocked(on){
   $("#refsbtn").title = LOCKED
     ? "This list is in view-only mode — nothing can be imported into it right now"
     : "Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf";
-  syncHeadOffset();
 }
 // Returns true when the caller should stop -- and says why, once, rather than
 // letting a click land on nothing.
@@ -784,11 +755,9 @@ function rowLinks(it){
   const m = META[it.key] || {};
   const doi = it.doi || m.doi || "";
   const wid = it.wid || m.wid || "";
-  const out = [];
-  if(doi){
-    out.push(`<a href="https://doi.org/${esc(doi)}" target="_blank" rel="noopener">DOI</a>`);
-    out.push(`<a href="${PROXY}${esc(doi)}" target="_blank" rel="noopener">Proxy</a>`);
-  }
+  // DOI + Proxy are the same two anchors every prma surface offers
+  // ( /static/common.js ) ; the rest is what a board row can additionally reach.
+  const out = doiLinks(doi);
   // Library papers stream from disk ; an external one carries whatever open-access
   // url its pool row had.
   if(m.pdf)      out.push(`<a href="/pdf?key=${encodeURIComponent(it.key)}" target="_blank">PDF</a>`);
@@ -1010,10 +979,6 @@ function toast(msg, ms, undoLabel, onUndo){
   t.classList.add("show");
   if(onUndo) $("#undobtn").onclick = ()=>{ t.classList.remove("show"); onUndo(); };
   clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("show"), ms||2600);
-}
-// The board's sticky column header sits directly under the ( variable-height ) header.
-function syncHeadOffset(){
-  document.documentElement.style.setProperty("--headh", document.querySelector("header").offsetHeight + "px");
 }
 
 // ---------------------------------------------------------------------------
@@ -1974,6 +1939,7 @@ document.addEventListener("click", e=>{
   if(!e.target.closest(".searchwrap")) closeResults();
 });
 $("#filter").addEventListener("input", applyFilter);
+$("#filter").addEventListener("search", applyFilter);   // the ✕ ( and Esc ) clearing it
 // Two filters, ANDed : the text box, and the set of chips picked in the paint
 // bar ( 🔎 Filter ). A row hidden by either drops out of the selection too, so
 // the chips never tag a paper you can't see.
@@ -1985,14 +1951,16 @@ function matchesChips(it){
   return filterAll ? want.every(w=>have.has(w)) : want.some(w=>have.has(w));
 }
 function applyFilter(){
-  const q = $("#filter").value.trim().toLowerCase();
+  const q = $("#filter").value.trim();
   let shown = 0, pruned = false;
   $$(".row").forEach(row=>{
     const f = findItem(row.dataset.key);
     if(!f) return;
+    // textHas ( /static/common.js ) : a title pasted from a PDF -- curly quotes,
+    // a line break -- still finds the row.
     const hay = q ? [ f.it.title, f.it.key, f.it.doi, (f.it.mods||[]).join(" "), (f.it.tags||[]).join(" "),
-      Object.values(f.it.fields||{}).join(" ") ].join(" ").toLowerCase() : "";
-    const hide = (q && !hay.includes(q)) || !matchesChips(f.it);
+      Object.values(f.it.fields||{}).join(" ") ].join(" ") : "";
+    const hide = (q && !textHas(hay, q)) || !matchesChips(f.it);
     row.classList.toggle("hide", hide);
     if(hide){ if(SEL.delete(row.dataset.key)) pruned = true; }
     else shown++;
@@ -2009,7 +1977,7 @@ $("#tagfilter").addEventListener("click", ()=>{
   $("#tagfilter").classList.toggle("on", filtering);
   $("#tagfilter").textContent = filtering ? "🔎 Filtering" : "🔎 Filter";
   $("#tagfilterany").style.display = filtering ? "" : "none";
-  applyFilter(); renderPaintbar(); syncHeadOffset();
+  applyFilter(); renderPaintbar();
 });
 $("#tagfilterany").addEventListener("click", ()=>{
   filterAll = !filterAll;
@@ -2111,13 +2079,9 @@ $("#autotag").addEventListener("click", async ()=>{
   toast(n ? `Tagged ${n} paper(s) from their Methods stamp` :
     `No modality stamps found — run \` prma modalities \` to tag the library`, 4000);
 });
-$("#toggleTheme").addEventListener("click", ()=>{
-  const next = document.documentElement.dataset.theme==="dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("prma-theme", next); } catch(e){}
-  labelTheme();
-});
-function labelTheme(){ $("#toggleTheme").textContent = document.documentElement.dataset.theme==="dark" ? "☀ Light" : "🌙 Dark"; }
+// Labels the header button and persists a flip ( /static/common.js ). One
+// setting shared by every prma page.
+initTheme();
 
 document.addEventListener("keydown", e=>{
   if(e.key==="Escape"){
@@ -2143,7 +2107,6 @@ window.addEventListener("beforeunload", e=>{
   } catch(err){}
   if(!sent){ e.preventDefault(); e.returnValue = ""; }
 });
-window.addEventListener("resize", syncHeadOffset);
 
 // ---------------------------------------------------------------------------
 // CSV in / out
@@ -2155,10 +2118,7 @@ window.addEventListener("resize", syncHeadOffset);
 // Any OTHER column in an imported file becomes a new free-text column rather
 // than being dropped.
 // ---------------------------------------------------------------------------
-const csvCell = v => {
-  const s = (v==null ? "" : String(v));
-  return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
-};
+/* csvCell is in /static/common.js -- one copy for both boards , /code and /datasets. */
 function toCSV(){
   const head = [ "Tier","Tier_Description","DOI_or_Key","Title","Year","Modalities_Tagged","Tags" ]
     .concat(DOC.columns.map(c=>c.label)).concat([ "MD_File" ]);
@@ -2174,13 +2134,11 @@ function toCSV(){
   }));
   return lines.join("\n");
 }
+// saveCSV ( /static/common.js ) , not a hand-rolled anchor : it is the one
+// place the UTF-8 BOM goes on, and without it Excel reads every em dash and
+// every accented name in this file in the machine's legacy encoding.
 $("#exportbtn").addEventListener("click", ()=>{
-  const blob = new Blob([ toCSV() ], { type:"text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `prma-tiers-${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a); a.click();
-  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  saveCSV(toCSV(), `prma-tiers-${new Date().toISOString().slice(0,10)}.csv`);
 });
 function parseCSV(text){
   const rows = []; let row = [], field = "", q = false, i = 0;
@@ -2419,8 +2377,9 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
   <div class="btns"><button data-act="ok">Got it</button></div>`));
 
 // ---------------------------------------------------------------------------
-labelTheme();
-syncHeadOffset();
+// The board's sticky column header sits directly under the ( variable-height )
+// header : --headh follows the header's height as it changes ( /static/common.js ).
+trackHeadHeight();
 try { $("#smode").value = localStorage.getItem("prma-search-mode") || "title"; } catch(e){}
 labelMode();
 // A server that isn't there yet -- still starting, or restarting after a crash
@@ -2429,7 +2388,7 @@ labelMode();
 // offered as soon as it does.
 function boot(){
   loadDoc().then(()=>{
-    syncHeadOffset(); pollRev();
+    pollRev();
     offerDraft();     // anything the last session couldn't get to the server
   }).catch(()=>{
     $("#savestate").textContent = "server not answering — retrying";

@@ -286,3 +286,175 @@ def classify(title, abstract, methods, body, tags, modalities):
 		task_evidence=' /// '.join(task_ev),
 		attn_evidence=' /// '.join(first_hits(core, ATTN_BUILT, limit=2)),
 	)
+
+
+# ===========================================================================
+# ABSTRACT-ONLY SCREENING  ( the /review-missing pool )
+# ===========================================================================
+# Everything above screens a paper we HOLD : the rendered md and the isolated
+# methods section , tens of thousands of characters , where a threshold of
+# "eight fMRI mentions" is a low bar and "two attention mentions" is the bar
+# that separates a transformer paper from one citing Vaswani in related work.
+#
+# The OpenAlex pool is the papers we do NOT hold. There is no methods section
+# and no body -- only a title and an abstract , ~1,500 characters , and the
+# full-text thresholds would reject every single one of them. So the vocabulary
+# below is REUSED VERBATIM ( it is the part that carries the domain knowledge )
+# against thresholds sized for an abstract , and the two questions flip weight :
+#
+#   fMRI     is HARDER to establish -- an abstract names its modality once ,
+#            if at all , so one mention has to count , and dominance becomes
+#            "fMRI is named at least as often as any rival" rather than a ratio
+#            over hundreds of hits.
+#   attention is EASIER to trust -- an abstract has no related-work section , so
+#            a transformer named there is almost always the authors' own. One
+#            mention counts , where the full text needs two.
+#
+# Measured against the papers of the built /review , this agrees with the
+# full-text verdict lopsidedly : it is right about roughly nine in ten of what it
+# lets through , and finds roughly two in five of what the full text included.
+# ( missing.measure_recall re-derives the second figure on every build , so the
+# page prints a live number rather than this comment's. )
+#
+# That asymmetry is not a bug to tune away -- it is what an abstract can and
+# cannot tell you. An abstract that says "we present a deep learning model" and
+# leaves the transformer to the methods is unscreenable , and in the calibration
+# run 54 of the 83 misses were exactly that. So this surface reports CANDIDATES ,
+# its misses are silent , and the page says so.
+
+# The decoding phrasings an ABSTRACT uses. TASK_RULES above is written for a
+# paper that names its task somewhere in a methods section ; an abstract says
+# "we decode X from brain activity" once and moves on , and 20 of the 135
+# included papers scored zero on TASK_RULES from their abstract alone while
+# plainly being decoding papers. This is the supplement , and it is deliberately
+# SEPARATE rather than merged into TASK_RULES : those rules also assign the task
+# CATEGORY that /review sorts by , and growing them would silently re-screen the
+# built review. Adding a pattern here moves /review-missing only.
+DECODE_GENERIC = [
+	r'\bbrain[- ]?decoding\b', r'\bneural decoding\b', r'\bmind[- ](?:reading|captioning)\b',
+	r'\b(?:brain|fMRI|neural|EEG|MEG)[- ]to[- ](?:text|image|speech|音|audio|music|video|語|semantic\w*)\b',
+	r'\bdecod\w+[^.]{0,40}\bfrom (?:the )?(?:brain|fMRI|neural|BOLD|cortical|human brain)\b',
+	r'\breconstruct\w*[^.]{0,40}\bfrom (?:the )?(?:brain|fMRI|neural|BOLD|cortical|human brain)\b',
+	r'\bfrom (?:brain|fMRI|neural|BOLD) (?:activity|recordings?|signals?|responses?|data)\b'
+	r'[^.]{0,70}\b(?:decod|reconstruct|generat|predict|translat|classif|retriev)',
+	r'\b(?:decod\w+|reconstruct\w+|translat\w+|generat\w+)\b[^.]{0,50}'
+	r'\b(?:stimul\w+|semantics?|language|speech|images?|visual (?:content|experience)|percept\w+|'
+	r'thoughts?|mental (?:content|imagery|states?))\b[^.]{0,40}\b(?:brain|fMRI|neural|BOLD)\b',
+]
+
+
+def classify_abstract( title , abstract ):
+	"""Screen one paper on its title + abstract alone. Same three criteria and
+	the same vocabulary as classify() ; see the block comment above for why the
+	thresholds differ and what that costs.
+
+	Returns the SAME dict shape classify() does -- so the /review-missing build ,
+	its serialiser and its page are the same code shape as /review's -- plus
+	`abstract_chars` and `decode_generic` , which only mean anything here.
+
+	`abstract` may be the lowercased text off the dashboard index ; every
+	pattern here is matched case-insensitively , so that costs nothing."""
+	title    = title or ''
+	abstract = abstract or ''
+	text     = title + '\n' + abstract
+
+	# --- 1. fMRI? -- named at all , and named at least as often as any rival.
+	# An abstract states its modality once. There is no room for a ratio.
+	fmri_ev  = count( text , FMRI_EVIDENCE )
+	other_ev = count( text , OTHER_MODALITY )
+	is_fmri    = fmri_ev >= 1 and fmri_ev >= other_ev
+	multimodal = fmri_ev >= 1 and other_ev >= 1
+
+	# --- 2. attention in THEIR model? An abstract has no related-work section ,
+	# so one mention is the authors' own machinery far more often than not.
+	attn_built_n = count( text , ATTN_BUILT )
+	attn_pre_n   = count( text , ATTN_PRETRAINED )
+	attn_total   = attn_built_n + attn_pre_n
+	attn_ours    = near( text , ATTN_ANY , OURS , window=300 )
+	attn_built   = attn_total >= 1
+
+	attn_role = []
+	if count( text , [ r'\btransformer (?:encoder|backbone|block|layer)' , r'\bvision transformer\b' ,
+			r'\bViT\b' , r'\bSwin\b' ] ):
+		attn_role.append( 'transformer backbone over fMRI' )
+	if count( text , [ r'\bcross-?attention\b' , r'\bco-?attention\b' ] ):
+		attn_role.append( 'cross-attention fusion' )
+	if count( text , [ r'\bself-?attention\b' , r'\bmulti-?head' ] ):
+		attn_role.append( 'self-attention layers' )
+	if attn_pre_n:
+		attn_role.append( 'pretrained transformer (LM/VLM/CLIP) in pipeline' )
+
+	# --- 3. decoding task? The categorised rules first ( they also name the
+	# category ) , then the generic phrasings an abstract actually uses.
+	scores = { name: 3 * count( title , pats ) + 2 * count( abstract , pats )
+		for name , pats in TASK_RULES.items() }
+	ranked = sorted( scores.items() , key=lambda kv: -kv[ 1 ] )
+	task    = ranked[ 0 ][ 0 ] if ranked[ 0 ][ 1 ] > 0 else None
+	generic = count( text , DECODE_GENERIC )
+	decode_score = ranked[ 0 ][ 1 ] + generic
+	is_decoding  = decode_score >= 2
+
+	# --- exclusions , in the same order and with the same words as classify() ,
+	# so a reason means the same thing on both pages.
+	reason = None
+	_sv = EXCLUDE_RULES[ 'review / survey (not a primary model paper)' ]
+	survey = bool( SURVEY_TITLE.search( title ) ) or \
+		( 4 * count( title , _sv ) + 2 * count( abstract , _sv ) ) >= 4
+	if survey:
+		reason = 'review / survey (not a primary model paper)'
+	elif not is_fmri:
+		reason = ( 'the abstract never names fMRI' if fmri_ev == 0
+			else 'non-fMRI modality (EEG/MEG/ECoG/fNIRS dominant)' )
+	elif not attn_built:
+		reason = 'the abstract names no transformer / attention machinery'
+	elif not is_decoding:
+		enc = count( text , EXCLUDE_RULES[ 'encoding model only (stimulus -> brain, not brain -> stimulus)' ] )
+		rec = count( text , EXCLUDE_RULES[ 'fMRI image reconstruction / acceleration (signal processing, not decoding)' ] )
+		if enc >= 1:
+			reason = 'encoding model only (stimulus -> brain, not brain -> stimulus)'
+		elif rec >= 1:
+			reason = 'fMRI image reconstruction / acceleration (signal processing, not decoding)'
+		else:
+			reason = 'no clear fMRI decoding task'
+
+	# The verbatim quotes , for the papers that got through ONLY. first_hits
+	# walks its pattern list one re.finditer at a time , which is by a wide
+	# margin the most expensive thing in here -- and the excluded table , here
+	# as on /review , shows the numbers rather than the sentences. Paying for it
+	# on every candidate in the pool instead of the few hundred that survive is most of
+	# this screen's running time.
+	task_ev , attn_ev = [] , []
+	if reason is None:
+		task_ev = first_hits( text , TASK_RULES[ task ] , limit=2 ) if task else []
+		if not task_ev and generic:
+			task_ev = first_hits( text , DECODE_GENERIC , limit=2 )
+		attn_ev = first_hits( text , ATTN_ANY , limit=2 )
+
+	return dict(
+		include=( reason is None ) ,
+		exclusion_reason=reason or '' ,
+		# EACH criterion's own verdict , not the first one that failed. The
+		# cascade above short-circuits -- a paper rejected at the attention test
+		# was never asked whether it decodes -- so a caller that wants to know
+		# "which single criterion did this miss on" ( missing.near_miss ) has to
+		# read these , never the reason string. All three are decided before the
+		# cascade runs , so this costs nothing.
+		criteria=dict( fmri=bool( is_fmri ) , attention=bool( attn_built ) ,
+			decoding=bool( is_decoding ) , primary=not survey ) ,
+		task_category=task or 'unclassified' ,
+		task_scores=scores ,
+		fmri_score=fmri_ev , fmri_strong=count( text , FMRI_STRONG ) ,
+		fmri_evidence_methods=fmri_ev ,        # one text : "in methods" IS the whole of it
+		rival_modality_methods=other_ev ,
+		multimodal=multimodal ,
+		attn_methods=attn_built_n , attn_pretrained=attn_pre_n , attn_body=attn_built_n ,
+		attn_total_methods=attn_total ,
+		attn_attributed_to_authors=attn_ours ,
+		attention_role='; '.join( dict.fromkeys( attn_role ) ) or 'unspecified' ,
+		decode_score=decode_score ,
+		decode_generic=generic ,
+		other_modality_score=other_ev ,
+		abstract_chars=len( abstract ) ,
+		task_evidence=' /// '.join( task_ev ) ,
+		attn_evidence=' /// '.join( attn_ev ) ,
+	)

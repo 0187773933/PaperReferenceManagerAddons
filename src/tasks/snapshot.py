@@ -180,3 +180,49 @@ def titles_and_dois( args ):
 		print( f"Snapshot :: unknown manager '{manager_name}' ; expected zotero|mendeley|all." )
 
 	return titles , dois
+
+
+def recent( args , limit=10 ):
+	"""The N papers most recently ADDED to the reference manager , read
+	straight off the live source -- the same fast path ` titles_and_dois `
+	above takes , and for the same reason : output/cache/papers/ and the
+	dashboard index both lag the manager by a snapshot + a reindex , so a
+	paper saved a minute ago is in neither. This sees it now.
+
+	Returns ( rows , note ) . `rows` is newest-first :
+	  { key , zkey , title , doi , year , journal , authors , added }
+	where `key` is the primary key that paper WILL have in the unified DB
+	( normalized DOI , else the synthetic nodoi- key ) , so a row can be
+	matched against a board , the library index or anything else keyed the
+	usual way.
+
+	`note` is a short human sentence when the list is empty for a reason
+	worth saying -- Mendeley keeps no added-date in its snapshot , so there
+	is nothing to sort by -- and "" otherwise."""
+	manager_name = ( args.manager or "zotero" ).lower()
+	if getattr( args , "mendeley" , False ):
+		manager_name = "mendeley"
+	elif getattr( args , "zotero" , False ):
+		manager_name = "zotero"
+
+	# --manager all : Zotero is the only one that records when an item was
+	# added , so it answers for the pair rather than the two being merged.
+	if manager_name in ( "zotero" , "all" ):
+		from ..zotero.zotero import Zotero
+		try:
+			z = Zotero( args )
+		except FileNotFoundError as e:
+			return [] , f"Zotero not configured ( {e} )"
+		try:
+			return z.take_recent( limit ) , ""
+		except Exception as e:
+			# A library that moved or a SQLite that won't open is a sentence on
+			# a button , not a 500 : everything else on the page still works.
+			print( f"Snapshot :: recently-added read failed ( {e} )" )
+			return [] , f"Couldn't read the Zotero library ( {e} )"
+
+	if manager_name == "mendeley":
+		return [] , ( "Mendeley's snapshot carries no 'date added' , so there is "
+			"nothing to order by -- recently-added is Zotero only." )
+
+	return [] , f"unknown manager '{manager_name}' ; expected zotero|mendeley|all."

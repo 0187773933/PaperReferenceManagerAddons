@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · datasets</title>
+<!-- The chrome every prma page shares : the pre-paint theme restore , then the
+     palette and the header / button / link styling. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  /* The palette , the header chrome AND the whole list-page vocabulary -- the
+     chipbar , the sortable table , the membership badges , the empty state and
+     the toast -- are in /static/common.css , which this page opts into with
+     <body class="list">. What is left here is what only /datasets has : the two
+     kinds of thing a dataset can BE , and the row that shows one. */
+  :root {
+    --b-arc:#d9ecf2;  --b-arc-fg:#14607a;     /* an archive record you can open */
+    --b-nam:#eee6dc;  --b-nam-fg:#7a5326;     /* a collection only NAMED        */
+  }
+  :root[data-theme="dark"] {
+    --b-arc:#12303a;  --b-arc-fg:#6fcde8;
+    --b-nam:#332a20;  --b-nam-fg:#e0b183;
+  }
+  .badge.arc { background:var(--b-arc); color:var(--b-arc-fg); }
+  .badge.nam { background:var(--b-nam); color:var(--b-nam-fg); }
+
+  /* The view switch. Two readings of one scan : the collections themselves ,
+     and the papers that stand on them. */
+  .views { display:flex; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .views button {
+    border:none; border-radius:0; padding:7px 13px; background:var(--panel2);
+    color:var(--muted); font-size:13px;
+  }
+  .views button + button { border-left:1px solid var(--line); }
+  .views button.on { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .views button:hover:not(.on) { color:var(--fg); }
+
+  /* One dataset : its name , the url under it , and the paper that put it here.
+     The two bare anchors here sit OUTSIDE a .links strip -- the collection's own
+     name , and the Code count that jumps to /code -- so they need the colour
+     without the right margin .links carries for a row of small links , which
+     would shove a right-aligned number out of its column. */
+  .dsname { font-weight:500; }
+  .dsname a , td.num a { color:var(--accent); text-decoration:none; }
+  .dsname a:hover , td.num a:hover { text-decoration:underline; }
+  .caret { display:inline-block; width:16px; color:var(--muted); transition:transform .12s ease; }
+  tr.row.open .caret { transform:rotate(90deg); }
+
+  /* A dataset is TWO table rows : the name and its columns , then everything
+     that has to be READ rather than sorted -- what the collection is , where it
+     lives , and the paper that put it here. The second row spans the table
+     because a sentence in the 380px Dataset column wraps to five lines and
+     makes the row taller than the answer is worth.
+
+     They read as one row : the top one's cells give up their bottom border and
+     the pair light together on hover , from either half. */
+  tr.row > td { border-bottom:none; }
+  tr.row:hover , tr.row:hover + tr.under { background:var(--panel2); }
+  tr.under:hover { background:var(--panel2); }
+  tr.row:has( + tr.under:hover ) { background:var(--panel2); }
+  tr.under > td { padding-top:0; }
+  .dsdesc { font-size:12px; line-height:1.5; max-width:none; }
+  .dsurl { font-size:11px; color:var(--muted); word-break:break-all; margin-top:3px; }
+  .dspaper { margin-top:5px; font-size:12px;
+             display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .dspaper .pttl { color:var(--muted); max-width:520px;
+                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* The expanded papers under one dataset. A nested list rather than a nested
+     table : it is a roll call , not a second thing to sort. */
+  tr.row.open , tr.row.open + tr.under { background:var(--panel2); }
+  .plist { margin:9px 0 2px; }
+  .plist { padding:0; list-style:none; }
+  .plist li { padding:6px 0; border-top:1px solid var(--line); }
+  .plist li:first-child { border-top:none; }
+  .plist .pt { font-size:13px; }
+</style>
+</head>
+<body class="list">
+<header>
+  <div class="titlebar">
+    <h1>prma · datasets</h1>
+    <div class="counts" id="counts"></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
+    <a class="navlink" href="/code" title="The other half of the question : the papers that ship a repo">{ } Code</a>
+    <a class="navlink" href="/review" title="The screened , field-extracted review these papers are checked against">✎ Review</a>
+    <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
+    <a class="navlink" href="/sort" title="The hand-ordered list">⬒ Sort</a>
+    <a class="navlink" href="/tiers" title="The hand-ranked tiers">★ Tiers</a>
+    <button id="xlsx" title="Download the papers you are looking at as .xlsx ( two sheets : one per paper , one per paper-and-dataset )">⇧ XLSX</button>
+    <button id="csv"  title="Download the table you are looking at , in this order , as CSV">⇧ CSV</button>
+    <button id="reload" title="Re-read the scan and the boards">↻ Reload</button>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+  <div class="controls">
+    <div class="views">
+      <button id="v-datasets" data-view="datasets" title="One row per collection , with the papers that use it">⛁ Datasets</button>
+      <button id="v-papers"   data-view="papers"   title="One row per paper , with the data it stands on">☰ Papers</button>
+    </div>
+    <input type="search" id="q" placeholder="Search…  ( / )" autocomplete="off">
+    <div class="chipbar" id="flags"></div>
+    <div class="sep"></div>
+    <div class="chipbar" id="hosts"></div>
+  </div>
+</header>
+
+<main>
+  <div class="status" id="status"></div>
+  <div id="view"></div>
+</main>
+
+<footer id="footer"></footer>
+
+<!-- $ , esc , fmt , fmtDate , mdHref , doiLinks() , codeLinks() , initTheme() --
+     the helpers every prma page used to write out for itself. Loaded before the
+     page script , so they are plain globals below ; nothing here may redeclare
+     them. -->
+<script src="/static/common.js"></script>
+<script>
+/* ---------------------------------------------------------------------------
+   /datasets -- the public data the library stands on.
+
+   /code's sibling. Almost no paper here collected its own scans : it ran on
+   somebody else's public collection , and said so in one of two ways -- by
+   LINKING an archive record ( an OpenNeuro accession , a Zenodo DOI , an OSF
+   node , a Hugging Face dataset ) , or by just NAMING one ( "we use HCP" ) with
+   nothing to click. ` prma datasets ` harvests both and pins them on the record ;
+   this page joins them against the four surfaces you curated by hand and lets
+   you read the join either way round :
+
+     Datasets   one row per collection , with how many of your papers use it and
+                how many of THOSE made it into the review -- which is the
+                question none of the other pages can answer : what is this
+                library actually built on.
+     Papers     one row per paper , /code-shaped , with the data it names.
+
+   Both views are the same rows regrouped in the browser -- the payload is per
+   paper , the pivot is here , because how a thing is shown is the page's job.
+
+   Nothing here writes. It is a view -- reload it after you move a board.
+--------------------------------------------------------------------------- */
+
+let DATA = { rows: [] , counts: {} , status: "idle" };
+let VIEW = [];                  // the PAPERS currently passing the filters
+let PIVOT = [];                 // those papers regrouped by dataset
+let query = "";
+let poll  = null;
+let view  = "datasets";         // "datasets" | "papers"
+
+/* Which of the toggles are on. `data` starts on because the page is about the
+   papers that stand on something public ; turning it off is how you ask the
+   opposite question ( "what did I keep that names no data at all" ) , which is
+   worth one click. */
+const flags = new Set( [ "data" ] );
+const hosts = new Set();        // archive labels to keep ; empty = all of them
+const shown = new Set();        // dataset ids expanded in the Datasets view
+
+/* Sort : one column + direction PER VIEW , so switching back and forth doesn't
+   lose where you were. Datasets defaults to most-used first ( the reason to
+   open the page ) ; Papers defaults to the review column , like /code. */
+let sortKey = { datasets: "papers" , papers: "review" };
+let sortDir = { datasets: "desc"   , papers: "desc"   };
+
+const FLAGS = [
+  { id:"data"  , label:"Uses public data" , title:"Papers ` prma datasets ` found an archive link or a named collection for" ,
+    test: r => r.data.length || r.names.length } ,
+  { id:"link"  , label:"Has a link"       , title:"Papers that LINK an archive record you can open , not just name one" ,
+    test: r => r.data.length } ,
+  { id:"unlnk" , label:"Named , unlinked" , title:"Papers that name a public collection but never link it — the ones where finding the data is on you" ,
+    test: r => r.names.length && !r.data.length } ,
+  { id:"code"  , label:"Ships code"       , title:"Papers ` prma code ` also found a repo for — data AND code" ,
+    test: r => r.code > 0 } ,
+  { id:"review", label:"In review"        , title:"Included by /review's three screening criteria" ,
+    test: r => r.review === "included" } ,
+  { id:"excl"  , label:"Screened out"     , title:"Reached /review as a candidate and was excluded" ,
+    test: r => r.review === "excluded" } ,
+  { id:"sort"  , label:"On sort"          , title:"On the /sort list ( or its staging shelf )" ,
+    test: r => !!r.sort } ,
+  { id:"tier"  , label:"In a tier"        , title:"Ranked into a tier on /tiers" ,
+    test: r => !!r.tier } ,
+];
+
+/* ---- the two column sets -------------------------------------------------
+   `get` is what the row sorts by -- a number or a lowercase string , never the
+   rendered HTML , so ordering can't drift from what a cell says. */
+const COLS = {
+  papers: [
+    { id:"title"  , label:"Paper"    , get: r => ( r.title || "" ).toLowerCase() , dir:"asc"  } ,
+    { id:"year"   , label:"Year"     , get: r => r.year || 0        , dir:"desc" , num:true } ,
+    { id:"added"  , label:"Added"    , get: r => r.added || ""      , dir:"desc" } ,
+    { id:"cites"  , label:"Cites"    , get: r => r.cited_by || 0    , dir:"desc" , num:true } ,
+    { id:"data"   , label:"Datasets" , get: r => r.data.length + r.names.length , dir:"desc" } ,
+    { id:"code"   , label:"Code"     , get: r => r.code || 0        , dir:"desc" , num:true } ,
+    { id:"review" , label:"Review"   , get: r => ( { included:2 , excluded:1 }[ r.review ] || 0 ) , dir:"desc" } ,
+    { id:"sort"   , label:"Sort"     , get: r => ( { list:2 , staged:1 }[ r.sort ] || 0 )         , dir:"desc" } ,
+    /* Unranked sorts BELOW every real tier label rather than above "A" , so the
+       first click on Tier gives you the ranked papers , not the blanks. */
+    { id:"tier"   , label:"Tier"     , get: r => ( r.tier || "\uffff" ).toLowerCase() , dir:"asc"  } ,
+    { id:"figs"   , label:"Figs"     , get: r => r.figures || 0     , dir:"desc" , num:true } ,
+  ] ,
+  datasets: [
+    { id:"label"  , label:"Dataset"  , get: d => ( d.label || "" ).toLowerCase() , dir:"asc"  } ,
+    { id:"kind"   , label:"Kind"     , get: d => d.kind             , dir:"asc"  } ,
+    { id:"arch"   , label:"Archive"  , get: d => ( d.source || "\uffff" ).toLowerCase() , dir:"asc" } ,
+    { id:"papers" , label:"Papers"   , get: d => d.keys.length      , dir:"desc" , num:true } ,
+    { id:"review" , label:"In review", get: d => d.n_review         , dir:"desc" , num:true } ,
+    { id:"sort"   , label:"On sort"  , get: d => d.n_sort           , dir:"desc" , num:true } ,
+    { id:"tier"   , label:"Ranked"   , get: d => d.n_tier           , dir:"desc" , num:true } ,
+    { id:"span"   , label:"Years"    , get: d => d.last || 0        , dir:"desc" , num:true } ,
+  ] ,
+};
+const col = ( v , id ) => COLS[ v ].find( c => c.id === id );
+
+/* ---- haystacks -----------------------------------------------------------
+   Two searches , because there are two tables. In the Papers view you are
+   searching PAPERS -- title , identifiers , every dataset name and archive URL
+   they carry , and their board tags. In the Datasets view you are searching the
+   COLLECTIONS themselves , which is what makes typing "openneuro" there narrow
+   the list to OpenNeuro rather than to everything OpenNeuro papers also used.
+   Both are folded once and cached on the object. */
+function hay( r ){
+  if( r._hay == null ){
+    r._hay = [ r.title , r.doi , r.key , r.tier , r.review_why ,
+      ( r.tags || [] ).join( " " ) , ( r.names || [] ).map( n => n.name ).join( " " ) ,
+      r.data.map( l => `${l.source || ""} ${l.url || ""} ${l.accession || ""}` ).join( " " ) ,
+    ].join( " " ).toLowerCase();
+  }
+  return r._hay;
+}
+const dsHay = d => `${d.label} ${d.kind} ${d.source || ""} ${d.url || ""} ${d.desc || ""}`.toLowerCase();
+
+/* ---- filter + sort -------------------------------------------------------
+   The chips always filter PAPERS -- in both views , because a dataset is only
+   ever interesting through the papers that used it. The query filters whichever
+   table you are looking at ( see the haystacks above ). */
+function passes( r ){
+  for( const f of FLAGS ) if( flags.has( f.id ) && !f.test( r ) ) return false;
+  if( hosts.size && !r.sources.some( s => hosts.has( s ) ) ) return false;
+  if( view === "papers" && query && !hay( r ).includes( query ) ) return false;
+  return true;
+}
+
+/* One row per collection , built out of the papers that survived the chips. An
+   archive record is identified by its URL and a named collection by its name ,
+   so the two can never collide ; the counts on each row are of THOSE papers ,
+   which is what makes "used by 9 papers , 4 of them in the review" mean the
+   same thing as the filters above it. */
+function pivot( rows ){
+  const by = new Map();
+  const add = ( id , seed , r ) => {
+    let d = by.get( id );
+    if( !d ){ d = Object.assign( { id , keys: [] , papers: [] , lead: null ,
+      n_review:0 , n_sort:0 , n_tier:0 , first:0 , last:0 } , seed ); by.set( id , d ); }
+    d.keys.push( r.key );
+    d.papers.push( r );
+    /* The paper to SHOW on the collapsed row : the earliest one in the library
+       that used this collection , which is the one that put it here. Ties fall
+       to the title so the choice is stable across re-sorts. */
+    if( !d.lead || ( +r.year || 9999 ) < ( +d.lead.year || 9999 )
+        || ( ( +r.year || 9999 ) === ( +d.lead.year || 9999 )
+             && ( r.title || "" ) < ( d.lead.title || "" ) ) ) d.lead = r;
+    if( r.review === "included" ) d.n_review++;
+    if( r.sort ) d.n_sort++;
+    if( r.tier ) d.n_tier++;
+    const y = +r.year || 0;
+    if( y ){ d.first = d.first ? Math.min( d.first , y ) : y; d.last = Math.max( d.last , y ); }
+  };
+  for( const r of rows ){
+    for( const l of r.data ){
+      /* A host chip narrows the archives themselves , not just the papers --
+         picking OpenNeuro should not leave a paper's Zenodo record on screen. */
+      if( hosts.size && !hosts.has( l.source || "archive" ) ) continue;
+      add( "u:" + l.url , { label: l.url , kind: "archive" , url: l.url ,
+        source: l.source || "archive" , accession: l.accession || "" ,
+        desc: l.desc || "" } , r );
+    }
+    /* A named collection has no host , so a host filter is a statement that you
+       are looking at archives right now -- drop the named rows rather than show
+       them under a filter they can't answer to. */
+    if( !hosts.size )
+      for( const n of r.names )
+        add( "n:" + n.name , { label: n.name , kind: "named" , url: n.url || "" ,
+          home: !!n.url , source: "" , desc: n.desc || "" } , r );
+  }
+  return Array.from( by.values() );
+}
+
+function compute(){
+  VIEW = DATA.rows.filter( passes );
+  const c = col( view , sortKey[ view ] ) || COLS[ view ][ 0 ];
+  const sign = sortDir[ view ] === "asc" ? 1 : -1;
+  if( view === "datasets" ){
+    PIVOT = pivot( VIEW );
+    if( query ) PIVOT = PIVOT.filter( d => dsHay( d ).includes( query ) );
+    PIVOT.sort( ( a , b ) => {
+      const va = c.get( a ) , vb = c.get( b );
+      if( va < vb ) return -1 * sign;
+      if( va > vb ) return  1 * sign;
+      /* One stable tie-break for every column : the most-used collection , then
+         alphabetical -- so a re-sort never reshuffles rows that compare equal. */
+      if( b.keys.length !== a.keys.length ) return b.keys.length - a.keys.length;
+      return a.label.localeCompare( b.label );
+    } );
+  } else {
+    VIEW.sort( ( a , b ) => {
+      const va = c.get( a ) , vb = c.get( b );
+      if( va < vb ) return -1 * sign;
+      if( va > vb ) return  1 * sign;
+      if( ( b.figures || 0 ) !== ( a.figures || 0 ) ) return ( b.figures || 0 ) - ( a.figures || 0 );
+      return ( a.title || "" ).localeCompare( b.title || "" );
+    } );
+  }
+}
+
+/* ---- render -------------------------------------------------------------- */
+function renderCounts(){
+  const c = DATA.counts || {};
+  $( "#counts" ).innerHTML =
+    `<span><b>${fmt( c.distinct )}</b> datasets</span>` +
+    `<span>across <b>${fmt( c.with_data )}</b> papers</span>` +
+    `<span><b>${fmt( c.links )}</b> archive links · <b>${fmt( c.named )}</b> named</span>` +
+    `<span><b>${fmt( c.in_review )}</b> of them in the review</span>` +
+    `<span>of <b>${fmt( c.papers )}</b> in the library</span>`;
+}
+
+function renderChips(){
+  renderChipbar( $( "#flags" ) , "Show" ,
+    FLAGS.map( f => ( { id: f.id , label: f.label , title: f.title ,
+      n: DATA.rows.filter( f.test ).length } ) ) ,
+    id => flags.has( id ) ,
+    id => { flags.has( id ) ? flags.delete( id ) : flags.add( id ); renderChips(); draw(); } );
+
+  /* One chip per archive actually present , commonest first -- OpenNeuro ,
+     Zenodo , OSF , Hugging Face … -- so "the neuroimaging archives , not the
+     general ones" is a click. */
+  const n = {};
+  for( const r of DATA.rows ) for( const s of r.sources ) n[ s ] = ( n[ s ] || 0 ) + 1;
+  renderChipbar( $( "#hosts" ) , "Archive" ,
+    Object.keys( n ).sort( ( a , b ) => n[ b ] - n[ a ] || a.localeCompare( b ) )
+      .map( s => ( { id: s , label: s , n: n[ s ] } ) ) ,
+    id => hosts.has( id ) ,
+    id => { hosts.has( id ) ? hosts.delete( id ) : hosts.add( id ); renderChips(); draw(); } );
+}
+
+/* A ˟ marks a link this page can offer only because ` prma datasets ` MINTED it
+   from a bare accession the paper printed without a URL. Same idea as /code's
+   mark on an OCR-repaired repo : the tooltip says what the paper actually said ,
+   so a synthesized link is never mistaken for a quoted one. */
+const minted = a => a ? `<sup class="muted" title="Not printed as a URL — built from the accession ${esc( a )} in the text">˟</sup>` : "";
+
+/* What to CALL an archive record in a list of them. The host is already its own
+   column , so eight rows labelled "OpenNeuro" would name nothing ; the record
+   path is the part that differs -- ` datasets/ds002680/versions/1.2.0 ` ,
+   ` record/998877 ` , ` ad8jb ` -- and is what the paper was actually citing.
+   Falls back to the whole URL for anything we can't parse. */
+function recordLabel( url ){
+  const m = /^https?:\/\/[^/]+\/(.+?)\/?$/i.exec( url || "" );
+  return m ? m[ 1 ] : ( url || "" ).replace( /^https?:\/\//i , "" );
+}
+
+/* The Datasets cell in the Papers view. Archive records first ( they open ) ,
+   then the collections the paper only named. A paper citing eighteen of them
+   would turn the cell into a paragraph and push every other column off the
+   screen , so the tail folds into a count that names the rest in its tooltip --
+   the whole list is still in the export , and the row stays a row. */
+const MAX_CELL = 6;
+function dataCell( r ){
+  const items = r.data.map( l => ( {
+    html: `<a href="${esc( l.url )}" target="_blank" rel="noopener" title="${esc( l.url )}">` +
+          `${esc( l.source || "archive" )}</a>${minted( l.accession )}` ,
+    tip : l.url ,
+  } ) ).concat( r.names.map( n => ( {
+    /* The paper named this one and printed no URL for it -- but we know where
+       most of them live ( src/review/datasets.py ) , so the badge is a link to
+       the collection's own page whenever we have one that has been checked.
+       Without a home it stays a plain badge rather than a dead anchor. */
+    html: n.url
+      ? `<a class="badge nam" href="${esc( n.url )}" target="_blank" rel="noopener" ` +
+        `title="Named in the text , never linked — ${esc( n.url )}">${esc( n.name )}</a>`
+      : `<span class="badge nam" title="Named in the text , never linked">${esc( n.name )}</span>` ,
+    tip : n.url || n.name ,
+  } ) ) );
+  if( !items.length ) return `<span class="muted">—</span>`;
+  const rest = items.slice( MAX_CELL );
+  return items.slice( 0 , MAX_CELL ).map( x => x.html ).join( " " ) + ( rest.length
+    ? ` <span class="muted" title="${esc( rest.map( x => x.tip ).join( "\n" ) )}">+${rest.length} more</span>`
+    : "" );
+}
+
+function paperRow( r , i ){
+  const tags = ( r.tags || [] ).length
+    ? `<div class="tags">${r.tags.map( t => `<span class="tag">${esc( t )}</span>` ).join( "" )}</div>` : "";
+  return `<tr class="row">
+    <td class="idx">${i + 1}</td>
+    <td class="ttl">
+      <div class="t">${esc( r.title )}</div>
+      ${paperLinkRow( r )}${tags}
+    </td>
+    <td class="num nowrap">${r.year || ""}</td>
+    <td class="nowrap">${esc( fmtDate( r.added ) )}</td>
+    <td class="num nowrap">${r.cited_by == null ? "" : fmt( r.cited_by )}</td>
+    <td class="links">${dataCell( r )}</td>
+    <td class="num nowrap">${r.code ? `<a href="/code" title="${r.code} repo link( s ) — see /code">${r.code}</a>` : DASH}</td>
+    <td class="nowrap" title="${esc( r.review_why || "" )}">${REVIEW_BADGE[ r.review ] || DASH}</td>
+    <td class="nowrap">${SORT_BADGE[ r.sort ] || DASH}</td>
+    <td class="nowrap">${r.tier ? `<span class="badge tier">${esc( r.tier )}</span>` : DASH}</td>
+    <td class="num nowrap" title="${r.mfigures ? `${r.mfigures} picked on /method-images` : ""}">${
+      r.figures ? `<span class="badge figs">${r.figures}</span>` : DASH}</td>
+  </tr>`;
+}
+
+/* One collection , plus -- when it is expanded -- the roll call of papers that
+   use it. The detail row is drawn inline rather than fetched : it is the same
+   objects the pivot was built from. */
+function dsRow( d , i ){
+  const isOpen = shown.has( d.id );
+  /* Three shapes for the NAME , because a row is only honest if it says where
+     its link came from : an archive record the paper printed ; a named
+     collection we can send you to anyway , off the checked home pages in
+     src/review/datasets.py ; and a named one we have no home for , which stays
+     plain text rather than becoming a guess. */
+  const name = d.kind === "archive"
+    ? `<a href="${esc( d.url )}" target="_blank" rel="noopener">${esc( recordLabel( d.url ) )}</a>${minted( d.accession )}`
+    : d.url
+      ? `<a href="${esc( d.url )}" target="_blank" rel="noopener" ` +
+        `title="The collection's own page — the papers named it without printing a link">${esc( d.label )}</a>`
+      : esc( d.label );
+
+  const span = d.first ? ( d.first === d.last ? `${d.first}` : `${d.first}–${d.last}` ) : "";
+  const row = `<tr class="row ${isOpen ? "open" : ""}" data-ds="${esc( d.id )}">
+    <td class="idx">${i + 1}</td>
+    <td class="ttl"><div class="dsname"><span class="caret">▸</span>${name}</div></td>
+    <td class="nowrap"><span class="badge ${d.kind === "archive" ? "arc" : "nam"}">${d.kind}</span></td>
+    <td class="nowrap">${d.source ? esc( d.source ) : DASH}</td>
+    <td class="num nowrap">${fmt( d.keys.length )}</td>
+    <td class="num nowrap">${d.n_review ? `<span class="badge inrev">${d.n_review}</span>` : DASH}</td>
+    <td class="num nowrap">${d.n_sort ? `<span class="badge onsort">${d.n_sort}</span>` : DASH}</td>
+    <td class="num nowrap">${d.n_tier ? `<span class="badge tier">${d.n_tier}</span>` : DASH}</td>
+    <td class="num nowrap">${span}</td>
+  </tr>`;
+
+  /* Line 2 : what the thing IS. A written one-liner for a named collection , the
+     title ` prma code ` cached for an OSF node , and nothing at all for an
+     archive nobody has fetched -- where a blank line beats an invented one. */
+  const desc = d.desc
+    ? `<div class="dsdesc">${esc( d.desc )}</div>`
+    : ( d.kind === "named"
+        ? `<div class="dsdesc muted">No description on file for this one.</div>` : "" );
+
+  /* Line 3 : where it lives. */
+  const url = d.url
+    ? `<div class="dsurl">${esc( d.url )}</div>`
+    : `<div class="dsurl">named in the text — no link given, and no home page on file</div>`;
+
+  /* Line 4 : the paper itself , on the row rather than behind the disclosure --
+     a collection is only ever interesting through the work that used it , and
+     needing a click to find out which paper that was made the two tabs feel
+     like they pointed at each other rather than into each other. Replaced by
+     the full roll call once the row is open. */
+  const papers = isOpen
+    ? `<ul class="plist">` + d.papers.slice().sort( ( a , b ) => ( b.year || 0 ) - ( a.year || 0 )
+        || ( a.title || "" ).localeCompare( b.title || "" ) ).map( pp => `<li>
+        <div class="pt">${esc( pp.title )}${pp.year ? ` <span class="muted">( ${pp.year} )</span>` : ""}
+          ${REVIEW_BADGE[ pp.review ] || ""}${pp.tier ? `<span class="badge tier">${esc( pp.tier )}</span>` : ""}</div>
+        ${paperLinkRow( pp )}
+      </li>` ).join( "" ) + `</ul>`
+    : ( d.lead ? `<div class="dspaper">` +
+        `<span class="pttl" title="${esc( d.lead.title )}">${esc( d.lead.title )}` +
+        `${d.lead.year ? ` ( ${d.lead.year} )` : ""}</span>` +
+        `<span class="links">${paperAnchors( d.lead ).join( "" )}</span>` +
+        ( d.papers.length > 1 ? `<span class="muted">+${d.papers.length - 1} more</span>` : "" ) +
+      `</div>` : "" );
+
+  return row + `<tr class="under" data-ds="${esc( d.id )}"><td></td>` +
+    `<td colspan="8">${desc}${url}${papers}</td></tr>`;
+}
+
+function draw(){
+  $$( ".views button" ).forEach( b => b.classList.toggle( "on" , b.dataset.view === view ) );
+  $( "#q" ).placeholder = view === "datasets"
+    ? "Search datasets — name, archive, URL…  ( / )"
+    : "Search title, DOI, dataset, archive url, tag…  ( / )";
+
+  compute();
+  if( DATA.status !== "ready" ){
+    $( "#view" ).innerHTML = indexBuildingHtml( DATA );
+    $( "#status" ).textContent = "";
+    return;
+  }
+  const rows = view === "datasets" ? PIVOT : VIEW;
+  if( !rows.length ){
+    /* Three different empty tables , and they mean different things. No papers
+       at all is an index that hasn't been built ; papers but not one scrap of
+       dataset evidence anywhere is a library ` prma datasets ` has never been
+       run over -- which looks exactly like an over-tight filter unless we say
+       so. Only the third is actually "your filters are too narrow". */
+    const any = DATA.rows.some( r => r.data.length || r.names.length );
+    $( "#view" ).innerHTML = !DATA.rows.length
+      ? `<div class="empty">No papers indexed yet.</div>`
+      : !any
+        ? `<div class="empty">Nothing in the library has been scanned for datasets yet.<br>` +
+          `<span class="muted">Run <code>prma datasets</code> — it pins the archive links and named ` +
+          `collections this page reads, and papers added under <code>prma server --watch</code> are ` +
+          `scanned as they arrive.</span></div>`
+        : `<div class="empty">Nothing matches these filters.</div>`;
+    $( "#status" ).textContent = "";
+    return;
+  }
+  $( "#view" ).innerHTML =
+    `<div class="wrap"><table><thead>${sortHeader( COLS[ view ] , sortKey[ view ] , sortDir[ view ] )}</thead><tbody>` +
+    ( view === "datasets" ? PIVOT.map( dsRow ).join( "" ) : VIEW.map( paperRow ).join( "" ) ) +
+    `</tbody></table></div>`;
+
+  $$( "#view thead th[data-col]" ).forEach( th => th.onclick = () => {
+    const id = th.dataset.col;
+    /* Same column -> flip ; a new one -> start in the direction that column is
+       actually interesting in ( most papers , newest , A–Z ). */
+    if( id === sortKey[ view ] ) sortDir[ view ] = sortDir[ view ] === "asc" ? "desc" : "asc";
+    else { sortKey[ view ] = id; sortDir[ view ] = col( view , id ).dir; }
+    draw();
+  } );
+  $$( "#view tr[data-ds]" ).forEach( tr => tr.onclick = e => {
+    if( e.target.closest( "a" ) ) return;      // opening the archive isn't expanding it
+    const id = tr.dataset.ds;
+    shown.has( id ) ? shown.delete( id ) : shown.add( id );
+    draw();
+  } );
+
+  const links = VIEW.reduce( ( a , r ) => a + r.data.length , 0 );
+  const named = VIEW.reduce( ( a , r ) => a + r.names.length , 0 );
+  const inrev = VIEW.filter( r => r.review === "included" ).length;
+  const rv    = DATA.review || {};
+  $( "#status" ).innerHTML =
+    ( view === "datasets"
+      ? `<span>${fmt( PIVOT.length )} datasets across ${fmt( VIEW.length )} papers · click a row for the papers</span>`
+      : `<span>${fmt( VIEW.length )} papers · ${fmt( links )} archive links · ${fmt( named )} named · ${fmt( inrev )} in the review</span>` ) +
+    reviewNote( rv );
+}
+
+/* ---- export --------------------------------------------------------------
+   The CSV is the TABLE you are looking at , in the order it is in -- datasets
+   or papers , since the filtering and sorting is the work. The xlsx is always
+   the full two-sheet rollup for the papers currently in scope , built
+   server-side ( POST the keys , read the workbook back as a blob ) so the sheet
+   carries real hyperlinks and this page carries no spreadsheet library. */
+const PAPER_HEAD = [ "DOI_or_Key" , "Title" , "Year" , "Added" , "Published" , "Cited_By" ,
+  "N_Datasets" , "N_Archive_Links" , "N_Named" , "Archives" , "Dataset_URLs" ,
+  "Named_Datasets" , "N_Code_Links" , "Review" , "Review_Detail" , "Sort" , "Tier" ,
+  "Figures" , "Design_Figures" , "Tags" ];
+const DS_HEAD = [ "Dataset" , "Kind" , "Description" , "Archive" , "URL" , "From_Accession" ,
+  "N_Papers" , "N_In_Review" , "N_On_Sort" , "N_Ranked" , "First_Year" , "Last_Year" , "Papers" ];
+function toCSV(){
+  if( view === "datasets" )
+    return csvText( DS_HEAD , PIVOT.map( d => [ d.label , d.kind , d.desc || "" ,
+      d.source , d.url , d.accession || "" , d.keys.length , d.n_review , d.n_sort ,
+      d.n_tier , d.first || "" , d.last || "" , d.keys.join( " ; " ) ] ) );
+  return csvText( PAPER_HEAD , VIEW.map( r => [ r.doi || r.key , r.title , r.year || "" ,
+    r.added , r.published , r.cited_by == null ? "" : r.cited_by ,
+    r.data.length + r.names.length , r.data.length , r.names.length ,
+    r.sources.join( "; " ) , r.data.map( l => l.url ).join( " " ) ,
+    r.names.map( n => n.name ).join( "; " ) ,
+    r.code , r.review , r.review_why , r.sort , r.tier , r.figures , r.mfigures ,
+    ( r.tags || [] ).join( "; " ) ] ) );
+}
+
+$( "#csv" ).addEventListener( "click" , () => {
+  const n = view === "datasets" ? PIVOT.length : VIEW.length;
+  if( !n ){ toast( "Nothing to export" ); return; }
+  saveCSV( toCSV() ,
+    `prma-${view === "datasets" ? "datasets" : "dataset-papers"}-${stamp()}.csv` );
+} );
+
+bindXlsxExport( "#xlsx" , "/api/datasets/export.xlsx" ,
+  () => `prma-datasets-${stamp()}.xlsx` , () => VIEW.map( r => r.key ) );
+
+/* ---- load ---------------------------------------------------------------- */
+async function load(){
+  try {
+    DATA = await ( await fetch( "/api/datasets" ) ).json();
+  } catch( e ){
+    $( "#view" ).innerHTML = `<div class="empty">Couldn't load /api/datasets: ${esc( e.message || e )}</div>`;
+    return;
+  }
+  DATA.rows = DATA.rows || [];
+  renderCounts(); renderChips(); draw();
+  /* The index builds in the background on a first-ever open ; keep asking until
+     it lands , then stop ( this page is a view , it does not need to poll ). */
+  clearTimeout( poll );
+  if( DATA.status === "building" ) poll = setTimeout( load , 2000 );
+}
+
+$$( ".views button" ).forEach( b => b.addEventListener( "click" , () => {
+  if( view === b.dataset.view ) return;
+  view = b.dataset.view;
+  draw();
+} ) );
+$( "#reload" ).addEventListener( "click" , load );
+bindSearch( "#q" , q => { query = q; draw(); } );
+
+$( "#footer" ).innerHTML =
+  `Two kinds of evidence , both harvested by <code>prma datasets</code> and read off the record rather than re-derived here. ` +
+  `<b>Archive links</b> are the records a paper actually printed — OpenNeuro , NeuroVault , DANDI , OSF , Zenodo , Dryad , Figshare , Hugging Face , PhysioNet , ConnectomeDB , LONI , NDA , … — pulled out of its abstract and OCR full text ` +
+  `through the same extractor <a href="/code">/code</a> uses , so URLs the OCR split across lines are rejoined and dead fragments dropped. A <sup>˟</sup> marks one built from a bare accession the paper printed without a URL ( <code>ds000105</code> ) ; the tooltip spells out what it said. ` +
+  `Each row on the <b>Datasets</b> tab says what the collection IS on its second line. For a NAMED collection that is a written one-liner ( <code>src/review/datasets.py</code> ) ; ` +
+  `for an ARCHIVE RECORD it is fetched once by <code>prma datasets</code> and cached under <code>output/cache/datasets/</code> — Zenodo , Figshare , OpenNeuro and OSF through their own APIs , everything else by reading the page's <code>&lt;title&gt;</code> . ` +
+  `Dead links and soft-404 titles are dropped , so a record with no description is one nothing answered for — usually a URL the OCR mangled , which its own link makes obvious. ` +
+  `<br>` +
+  `<b>Named datasets</b> are the collections a paper only names — HCP , NSD , ABIDE , UK Biobank , … — matched against the same vocabulary <a href="/review">/review</a> screens with , read off the rendered md with the bibliography cut so a reference list can't score. ` +
+  `The paper printed no URL for those , so the badge goes to the collection's own home page instead — one checked URL per name in <code>src/review/datasets.py</code> , which is also why a name with no entry there stays plain text rather than becoming a guess. ` +
+  `<br>Code forges are deliberately not here : a GitHub repo is a <a href="/code">/code</a> link. The generalists that host both — Zenodo , OSF , Dryad , Figshare , Hugging Face — appear on both pages , which is the honest answer about what they are. ` +
+  `<br>Review , Sort , Tier and Figs are read live off <code>output/cache/review.json</code> , the two board documents and the /images picks , so everything but Review updates the moment you reload. Review is the last <em>build</em> — rebuild it from /review when the boards have moved. ` +
+  `<br>Library papers only : a paper on a board that isn't in your library has never been scanned , so it has nothing to say here.`;
+
+initTheme();
+load();
+</script>
+</body>
+</html>

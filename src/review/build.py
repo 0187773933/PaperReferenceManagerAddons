@@ -40,6 +40,13 @@ meta block , the corpus-mined dataset acquisition reference , every included
 paper and every excluded one. It is what GET /api/review serves and what
 src/dashboard/review.html renders ; ` prma review ` writes the same file.
 
+Each paper also carries `code_links` : the source-code / data repos ` prma code `
+found by sweeping its abstract + OCR full text , read straight off the record
+through code.display_links -- the SAME field and the same reader behind the
+dashboard's In-Library "Code" column. Not re-derived here , and not the same
+thing as the Code_URL the extractor reads out of the methods section : that one
+is one more extracted field , with the sentence it came from.
+
 Every extracted field is the SAME SHAPE , which is what lets the page render all
 of them with one renderer :
 
@@ -68,13 +75,14 @@ import time
 from collections import OrderedDict
 
 from ..db    import figure_state , papers as papers_db , sortboard
+from ..tasks import code as code_task
 from ..utils import utils
 from .       import classify as CLS
 from .       import datasets as DS
 from .extract import ACQ_PATTERNS , ARCH_PATTERNS , PREPROC_PATTERNS , clean , extract_block
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MAX_TEXT = 150_000     # guard against a runaway pdf-to-text dump
 EV_QUOTES = 3          # verbatim quotes kept per field
@@ -182,6 +190,12 @@ def record_facts( args , paper ):
 		# after , always as a sortable YYYY-MM-DD.
 		published  = mi._publication_date( args , paper ) ,
 		cited_by   = oa.get( "cited_by_count" ) ,
+		# The source-code / data links ` prma code ` already found in this paper's
+		# abstract + OCR full text. READ , like the modality stamp above -- a paper
+		# the stage never reached arrives with none rather than being scanned from
+		# under a page request. Same compaction the dashboard's In-Library "Code"
+		# column uses , so the two surfaces show the same repos.
+		code_links = code_task.display_links( paper ) ,
 	)
 
 
@@ -189,7 +203,7 @@ def _blank( k ):
 	return dict( key=k , doi="" , title="" , year="" , tags=set() , modalities=set() ,
 		sources=set() , curator_notes=set() , figure_captions=[] , figures=[] ,
 		pdf="" , prefix="" , md_path="" , methods_path="" , montage_path="" ,
-		added="" , published="" , cited_by=None )
+		added="" , published="" , cited_by=None , code_links=[] )
 
 
 def load_candidates( args ):
@@ -233,6 +247,7 @@ def load_candidates( args ):
 		e[ "doi"   ] = e[ "doi"   ] or fig[ "doi"   ]
 		e[ "modalities" ].update( fig[ "modalities" ] )
 		e[ "pdf" ] = e[ "pdf" ] or fig[ "pdf" ]
+		e[ "code_links" ] = e[ "code_links" ] or fig[ "code_links" ]
 		for f in ( "added" , "published" , "cited_by" ):
 			e[ f ] = e[ f ] if e[ f ] not in ( "" , None ) else fig[ f ]
 		e[ "figures" ] = fig[ "figures" ]
@@ -253,6 +268,7 @@ def load_candidates( args ):
 		e[ "title" ] = e[ "title" ] or facts[ "title" ]
 		e[ "doi"   ] = e[ "doi"   ] or facts[ "doi"   ]
 		e[ "pdf"   ] = facts[ "pdf" ]
+		e[ "code_links" ] = facts[ "code_links" ]
 		e[ "modalities" ].update( facts[ "modalities" ] )
 		for f in ( "added" , "published" , "cited_by" ):
 			e[ f ] = facts[ f ]
@@ -306,7 +322,7 @@ def _selected_figures( args ):
 			# A pick whose paper has since left the library. Keep the key -- the
 			# sort board may still carry it , and the text may still be on disk.
 			out[ key ] = dict( title="" , doi="" , pdf="" , modalities=[] , figures=[] ,
-				added="" , published="" , cited_by=None )
+				added="" , published="" , cited_by=None , code_links=[] )
 			continue
 		yolo  = paper.get( "yolo" ) or {}
 		pages = yolo.get( "pages" ) or []
@@ -545,6 +561,12 @@ def build_records( included , excluded , ds_rows ):
 			"acquisition"   : acq ,
 			"preprocessing" : pre ,
 			"figures"       : list( e[ "figure_captions" ] ) ,
+			# The repos ` prma code ` found in the paper itself. NOT the same thing
+			# as architecture.Code_URL : that one is whatever the methods SECTION
+			# happened to spell out , this is the whole abstract + OCR sweep , with
+			# the OCR-mangled names repaired. The page shows these and treats
+			# Code_URL as one more extracted field.
+			"code_links"    : list( e[ "code_links" ] ) ,
 			"screening"     : {
 				"fmri_evidence_total"    : cl[ "fmri_score" ] ,
 				"fmri_evidence_methods"  : cl[ "fmri_evidence_methods" ] ,
@@ -583,6 +605,7 @@ def build_records( included , excluded , ds_rows ):
 			"best_task_guess" : cl[ "task_category" ] ,
 			"tags"      : sorted( r[ "entry" ][ "tags" ] ) ,
 			"curated_lists" : sorted( r[ "entry" ][ "sources" ] ) ,
+			"code_links": list( r[ "entry" ][ "code_links" ] ) ,
 			"screening" : {
 				"fmri_evidence_methods"  : cl[ "fmri_evidence_methods" ] ,
 				"rival_modality_methods" : cl[ "rival_modality_methods" ] ,
@@ -600,9 +623,10 @@ def _doi_from_key( key ):
 
 
 def _files( e ):
-	"""WHICH text a paper has -- not where to link it. Composing URLs is the
-	page's job ( review.html builds them next to its PROXY constant ) , so this
-	carries the facts and the file stem the /md and /methods routes take."""
+	"""WHICH text a paper has -- not where to link it. Composing URLs is the page's
+	job ( review.html builds them out of the shared helpers in
+	src/dashboard/static/common.js ) , so this carries the facts and the file stem
+	the /md and /methods routes take."""
 	return {
 		"prefix"  : e[ "prefix" ] ,
 		"md"      : bool( e[ "md_path"      ] ) ,

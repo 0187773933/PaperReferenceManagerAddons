@@ -4,51 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>prma · md</title>
-<!-- Apply the saved theme BEFORE first paint so there's no flash. Same key the
-     dashboard writes ( "prma-theme" ) , so a tab opened from it matches. -->
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("prma-theme")||"light";if(localStorage.getItem("prma-skin")==="pastel")document.documentElement.dataset.skin="pastel";}catch(e){document.documentElement.dataset.theme="light";}</script>
+<!-- The chrome every prma page shares : the pre-paint theme restore ( so the
+     reader tab opens in the theme of the page it was opened FROM , with no
+     flash ) , then the palette and the header styling. -->
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-  /* Palette copied from dashboard.html so the reader tab looks like the page it
-     was opened from -- light by default , dark opt-in via [data-theme="dark"]. */
-  :root {
-    --bg:#f4f6f2; --panel:#ffffff; --panel2:#fbfcf9; --line:#d8e0d4;
-    --fg:#101820; --muted:#5a6560; --accent:#046a38; --chip:#e9eee6;
-  }
-  :root[data-theme="dark"] {
-    --bg:#101820; --panel:#182028; --panel2:#1f2a2e; --line:#2c3a36;
-    --fg:#e8ece7; --muted:#8fa096; --accent:#cba052; --chip:#232f2a;
-  }
-  :root[data-skin="pastel"] {
-    --bg:#f5f6f8; --panel:#ffffff; --panel2:#ffffff; --line:#dce1e8;
-    --fg:#1a1d23; --muted:#5b6470; --accent:#1a73e8; --chip:#eceff3;
-  }
-  :root[data-skin="pastel"][data-theme="dark"] {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a3038;
-    --fg:#e6e9ef; --muted:#8b94a3; --accent:#3ea6ff; --chip:#262c37;
-  }
-  * { box-sizing:border-box; }
-  body {
-    margin:0; background:var(--bg); color:var(--fg);
-    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  }
-  header {
-    position:sticky; top:0; z-index:5; background:var(--panel);
-    border-bottom:1px solid var(--line); padding:12px 18px;
-  }
-  .titlebar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .titlebar h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
-  .grow { flex:1; }
-  button {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px;
-  }
-  button:hover { border-color:var(--accent); }
-  .navlink {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-    border-radius:7px; padding:7px 12px; font-size:13px; text-decoration:none;
-    white-space:nowrap;
-  }
-  .navlink:hover { border-color:var(--accent); }
+  /* The palette and the header chrome are in /static/common.css. This page only
+     reads long-form text , so it sets a roomier line-height and keeps its own
+     table of contents , figure and prose rules. */
+  body { line-height:1.55; }
+  .navlink { white-space:nowrap; }
   .hidden { display:none !important; }
   /* Section jump chips. A ` prma md ` render runs long ( every section , plus the
      OCR body ) , so the headers double as the table of contents. */
@@ -91,14 +57,11 @@
   <div class="toc" id="toc"></div>
 </header>
 <main id="main"><div class="empty">Loading…</div></main>
+<!-- $ , esc , PROXY , doiLinks() , initTheme() and the rest -- the helpers every
+     prma page used to write out for itself. Loaded before the page script , so
+     they are plain globals below ; nothing here may redeclare them. -->
+<script src="/static/common.js"></script>
 <script>
-// Route DOI links through your library's proxy. Same PROXY constant ( same
-// value ) the sibling pages use -- dashboard.html / status.html / errors.html /
-// method_images.html -- so a fork for another library greps one name.
-const PROXY = "https://doi-org.ezproxy.libraries.wright.edu/";
-const $ = s => document.querySelector(s);
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g, c =>
-  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 
 // Which paper : everything after /md/ . The dashboard's MD button sends the
 // paper's key ( its DOI ) ; the figure reports' relative ../md/<file>.md links
@@ -142,15 +105,7 @@ function render(d){
 })();
 
 // ---- Theme toggle ( shared with the dashboard via localStorage ) ------------
-const curTheme = () => document.documentElement.dataset.theme || "light";
-function labelTheme(){ $("#toggleTheme").textContent = curTheme()==="dark" ? "☀ Light" : "🌙 Dark"; }
-$("#toggleTheme").addEventListener("click", ()=>{
-  const next = curTheme()==="dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("prma-theme", next); } catch(e){}
-  labelTheme();
-});
-labelTheme();
+initTheme();
 </script>
 </body>
 </html>
