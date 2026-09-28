@@ -194,6 +194,10 @@ def _clean_item( raw , col_ids , seen_keys ):
 		# number by hand , so /sort can drop new papers after the last one you've
 		# actually placed rather than at the end of everything.
 		"placed":   bool( raw.get( "placed" ) ) ,
+		# "added before prma had processed it" -- set by /sort on a paper taken
+		# from Recently added that the index hadn't seen yet , so the page can
+		# fill in its tags / Code / Datasets once the --watch worker has run it.
+		"pending":  bool( raw.get( "pending" ) ) ,
 		"fields":   fields ,
 		"added_at": _clean_str( raw.get( "added_at" ) , 40 ) ,
 	}

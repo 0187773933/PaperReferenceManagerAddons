@@ -758,10 +758,11 @@ function docSig(d){
 }
 // Called once, after the first load. A draft that matches what came back was
 // saved after all ( the beacon below landed ) and is dropped without a word.
+// True when it put the question up ( see boot ).
 function offerDraft(){
   const d = readDraft();
-  if(!d || !d.doc || !d.doc.items){ return; }
-  if(docSig(d.doc) === docSig(DOC)){ clearDraft(); return; }
+  if(!d || !d.doc || !d.doc.items){ return false; }
+  if(docSig(d.doc) === docSig(DOC)){ clearDraft(); return false; }
   const when = new Date(d.at || Date.now()).toLocaleString();
   sheet(`
     <h3>Unsaved work found in this browser</h3>
@@ -777,7 +778,9 @@ function offerDraft(){
       <button data-act="discard">Discard it</button>
       <button class="primary" data-act="restore">Restore it</button>
     </div>`, act=>{
-    if(act !== "restore"){ if(act === "discard") clearDraft(); return; }
+    // Placeholders are filled in only once this is answered : filling them is
+    // an edit, and an edit rewrites the draft this is asking about.
+    if(act !== "restore"){ if(act === "discard"){ clearDraft(); backfillPending(); } return; }
     DOC = d.doc;
     if(!DOC.options) DOC.options = { auto_move:false };
     if(!Array.isArray(DOC.staging)) DOC.staging = [];
@@ -786,7 +789,9 @@ function offerDraft(){
     renderAll(); markDirty();
     fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
     toast("Restored — saving it to the server now", 5000);
+    backfillPending();
   });
+  return true;
 }
 // Leaving with work in flight : write the draft synchronously, then push the
 // document out with a beacon, which survives the page going away in a way
@@ -805,6 +810,9 @@ window.addEventListener("beforeunload", e=>{
 // Switching tabs / minimizing is the last moment anything is guaranteed to run
 // on a phone or a sleeping laptop, so flush there too.
 document.addEventListener("visibilitychange", ()=>{ if(document.hidden && dirty) save(); });
+// The index build stamp last seen -- undefined until the first poll, which only
+// records it ( loadDoc has just backfilled ).
+let INDEX;
 async function pollRev(){
   try {
     const d = await (await fetch("/api/sort/version")).json();
@@ -815,8 +823,22 @@ async function pollRev(){
       setLocked(d.locked); renderAll();
       toast(d.locked ? "🔒 This board was just locked — view only"
                      : "🔓 This board was just unlocked — you can edit again", 6000);
+      if(!d.locked) backfillPending();     // what it couldn't fill while locked
     }
     if(d && d.rev !== REV && !dirty && !saving){ await loadDoc(); toast("Reloaded — the board changed in another tab"); }
+    // The index moved : the --watch worker ( or a ` prma reindex ` ) has just
+    // processed papers, so the placeholders fill in, and an open Recently added
+    // list drops the "not indexed yet" it no longer needs.
+    if(d && "index" in d && d.index !== INDEX){
+      const seen = INDEX !== undefined;
+      INDEX = d.index;
+      if(seen){
+        backfillPending();
+        if(recentOpen()) fetchMeta(hits.map(h=>h.key), true).then(()=>{ if(recentOpen()) renderResults(); });
+      }
+    }
+    if(backfillOwed) backfillPending();
+    if(recentOpen()) refreshRecent();
   } catch(e){}
   setTimeout(pollRev, 6000);
 }
@@ -935,8 +957,7 @@ function rowHtml(it, n){
   const title = it.title || m.title || it.key;
   const year  = it.year || m.year || "";
   const inner = esc(title);          // plain text -- open it from the link strip
-  const loose = (m.in_library === false)
-    ? ` <span class="loose" title="Not matched to a paper in your library — links other than the DOI are unavailable">not in library</span>` : "";
+  const loose = (m.in_library === false) ? " " + looseBadge(it) : "";
   return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
     `<div class="c numc">`+
       `<input class="numin" value="${n}" title="Type a position and press ↵ to send it there" `+
@@ -1098,6 +1119,14 @@ function toggleTagOnSelection(value){
   toast(`${all?"Removed":"Added"} “${value}” ${all?"from":"on"} ${items.length} row(s)`);
 }
 function renderAll(){ labelFold(); renderColHead(); renderBoard(); renderStage(); renderCounts(); renderPaintbar(); }
+// Why a row has no links past the DOI : a paper that isn't in the library, or --
+// for one added from Recently added before prma had got to it -- one that is,
+// but hasn't been processed yet ( see backfillPending ).
+function looseBadge(it){
+  return it.pending
+    ? `<span class="loose" title="In your library, but prma hasn't processed it yet — its tags, Code and Datasets fill themselves in once it has">⏳ processing</span>`
+    : `<span class="loose" title="Not matched to a paper in your library — links other than the DOI are unavailable">not in library</span>`;
+}
 function repaintLinks(){
   $$(".row").forEach(row=>{
     const f = findItem(row.dataset.key);
@@ -1105,9 +1134,19 @@ function repaintLinks(){
     const el = row.querySelector('[data-links]');
     if(el) el.innerHTML = rowLinks(f.it);
     const m = META[f.it.key];
-    if(m && m.in_library === false && !row.querySelector(".loose"))
-      row.querySelector(".tt").insertAdjacentHTML("beforeend",
-        ` <span class="loose" title="Not matched to a paper in your library">not in library</span>`);
+    // Redrawn rather than only ever added : a paper the index has caught up
+    // with loses its badge, and a placeholder's reads "processing". The space
+    // before the badge shares a text node with the title, so only that one
+    // character goes with it.
+    const old = row.querySelector(".tt .loose");
+    if(m && m.in_library === false){
+      if(old) old.outerHTML = looseBadge(f.it);
+      else row.querySelector(".tt").insertAdjacentHTML("beforeend", " " + looseBadge(f.it));
+    } else if(old && m){
+      const prev = old.previousSibling;
+      if(prev && prev.nodeType === 3) prev.textContent = prev.textContent.replace(/ $/, "");
+      old.remove();
+    }
   });
   // The shelf's rows hang off the same meta ( "in library", and which links
   // exist ), and it lands after they're first drawn. Only those two strips are
@@ -1706,7 +1745,49 @@ async function addPaper(hit, at){
   }
   const wrote = prefill(it, gm);
   if(wrote.length){ markDirty(); refreshFields(it, wrote); }
+  // Straight out of Recently added ( those hits carry `added` ) and nothing has
+  // processed it yet : a placeholder, filled in by backfillPending once the
+  // pipeline has run it. A search hit that isn't in the library is left alone --
+  // it may never be.
+  if("added" in hit && gm && gm.in_library === false){ it.pending = true; markDirty(); repaintLinks(); }
   if(hits.length) renderResults();
+}
+// The placeholders ( it.pending ) get what addPaper would have given them had
+// the pipeline already run : their modality tags if they have none, their Code
+// / Datasets cells where they're empty. Nothing you typed is overwritten. Runs
+// on load and whenever the index moves ( pollRev ) -- i.e. when the --watch
+// worker has just processed papers. A row stays pending until its paper has
+// really been through the suite ( it has an .md, tags or code ), so one whose
+// PDF was still downloading is picked up again by the rescan that follows.
+// Never while a dialog is up ( the draft question, an import being set up ) :
+// those are working on the board too. `backfillOwed` has pollRev try again once
+// it's closed.
+let backfilling = false, backfillOwed = false;
+async function backfillPending(){
+  if(LOCKED || backfilling) return;
+  const todo = DOC.items.filter(it=>it.pending);
+  if(!todo.length){ backfillOwed = false; return; }
+  if($("#overlay").classList.contains("show")){ backfillOwed = true; return; }
+  backfillOwed = false;
+  backfilling = true;
+  try {
+    const got = await fetchMeta(todo.map(it=>it.key), true);
+    let changed = false;
+    todo.forEach(it=>{
+      const f = findItem(it.key);
+      if(!f || f.it !== it) return;          // removed, or the board reloaded meanwhile
+      const m = got[it.key];
+      if(!m || !m.in_library) return;        // not processed yet -- keep waiting
+      if(!(it.tags||[]).length && m.mods && m.mods.length){
+        it.tags = m.mods.slice(); sortTags(it); m.mods.forEach(rememberTag); refreshTags(it.key); changed = true;
+      }
+      const wrote = prefill(it, m);
+      if(wrote.length){ refreshFields(it, wrote); changed = true; }
+      if(m.has_md || (m.mods||[]).length || (m.code||[]).length){ it.pending = false; changed = true; }
+    });
+    if(changed){ markDirty(); renderPaintbar(); renderCounts(); }
+    repaintLinks();
+  } finally { backfilling = false; }
 }
 function removeItem(key){
   if(guard()) return;
@@ -1880,7 +1961,7 @@ function recentBadges(h){
   // ending the text run is left dangling at the end of a line whenever the
   // badge wraps under it.
   const raw = m && m.in_library === false
-    ? `<span class="nyet" title="Not in the search index yet — nothing has read this paper, so it adds with no tags and empty Code / Datasets cells. Both fill themselves in once \` prma reindex \` has run.">not indexed yet</span>` : "";
+    ? `<span class="nyet" title="prma hasn't processed this paper yet. Add it anyway : it comes in marked ⏳ processing, and its tags and Code / Datasets cells fill themselves in once the live server ( \` prma \` ) has run it — or after \` prma process \` + \` prma reindex \` if the server runs without --watch.">not indexed yet</span>` : "";
   return (when ? ` · ${esc(when)}` : "") + raw;
 }
 function recentHint(){
@@ -1908,9 +1989,29 @@ async function showRecent(){
     if(hitMode === "recent" && $("#results").classList.contains("show")) renderResults();
   });
 }
+function recentOpen(){ return hitMode === "recent" && $("#results").classList.contains("show"); }
+// An open list keeps itself current ( pollRev ) : save a paper into Zotero with
+// the list up and it appears on the next poll, where you left the highlight.
+// The server answers this out of its cache until Zotero actually writes, so
+// asking every poll costs a stat. Redrawn only when the papers changed, and a
+// read that failed leaves the list you have alone.
+async function refreshRecent(){
+  if(recentBusy) return;
+  let d;
+  try { d = await (await fetch(`/api/recent?limit=${recentN}`)).json(); } catch(e){ return; }
+  const rows = (d && d.results) || [];
+  if(!recentOpen() || recentBusy || (!rows.length && d.note)) return;
+  const sig = list => list.map(h=>h.key).join("\n");
+  if(sig(rows) === sig(hits)) return;
+  const cur = hits[hitIdx] && hits[hitIdx].key;
+  hits = rows; hitTotal = rows.length; recentNote = d.note || "";
+  hitIdx = Math.max(0, hits.findIndex(h=>h.key === cur));
+  renderResults();
+  fetchMeta(hits.map(h=>h.key), true).then(()=>{ if(recentOpen()) renderResults(); });
+}
 $("#recentbtn").addEventListener("click", ()=>{
   // A second press puts it away, the way the button that opened it should.
-  if(hitMode === "recent" && $("#results").classList.contains("show")){ closeResults(); return; }
+  if(recentOpen()){ closeResults(); return; }
   showRecent();
 });
 // "show 25 · 50" in the panel's own hint line, rather than another select in a
@@ -3184,8 +3285,10 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         <b>Zotero itself</b>, not the search index, which is the point: a paper reaches the search
         above only after a snapshot has filed it and <code>prma reindex</code> has read it, and
         until then searching for it finds nothing. This has it the moment you save it. One that
-        hasn't been through the pipeline yet says <kbd>not indexed yet</kbd> and comes in without
-        tags and with empty Code / Datasets cells — they fill themselves in once it has. Ten by
+        hasn't been through the pipeline yet says <kbd>not indexed yet</kbd>; add it anyway and it comes
+        in marked <kbd>⏳ processing</kbd>, without tags and with empty Code / Datasets cells — they
+        fill themselves in ( only the empty ones ) as soon as the live server has processed it. The
+        list keeps itself current while it's open, so a paper you save with it up appears in it. Ten by
         default; <kbd>show 25</kbd> / <kbd>50</kbd> in the list asks for more, and that choice is
         this browser's.</li>
     <li><b>Where adds land</b> is the dropdown next to the search box: the bottom, the top, or
@@ -3290,7 +3393,10 @@ function boot(){
     labelAutoMove();
     $("#addwhere").value = DOC.options.add_where || "bottom";
     pollRev();
-    offerDraft();     // anything the last session couldn't get to the server
+    // Anything the last session couldn't get to the server -- and then, never
+    // underneath that question, whatever the pipeline finished for the
+    // placeholders while this page was closed.
+    if(offerDraft()) backfillOwed = true; else backfillPending();
   }).catch(()=>{
     $("#savestate").textContent = "server not answering — retrying";
     setTimeout(boot, 3000);

@@ -1787,9 +1787,13 @@ class SnapshotCache:
 	def get( self , force: bool = False ) -> Tuple[ Set[ str ] , Set[ str ] ]:
 		now = time.time()
 
+		# The signature is always taken BEFORE the read it stands for : a commit
+		# landing mid-read then shows up as a changed signature on the next call ,
+		# instead of being stamped as already seen.
 		if force:
+			sig = self._source_sig()
 			self._refresh()
-			self._last_sig     = self._source_sig()
+			self._last_sig     = sig
 			self._last_attempt = now
 			return self._titles , self._dois
 
@@ -1798,8 +1802,9 @@ class SnapshotCache:
 		self._last_attempt = now
 
 		if self._titles is None:
+			sig = self._source_sig()
 			self._refresh()
-			self._last_sig = self._source_sig()
+			self._last_sig = sig
 			return self._titles , self._dois
 
 		sig = self._source_sig()
@@ -1841,6 +1846,11 @@ class SnapshotCache:
 			# answers out of the cache instead of re-copying the SQLite.
 			want = max( limit , 25 )
 			rows , note = snap_module.recent( self.args , want )
+			if not rows and note:
+				# A read that failed ( or a manager with nothing to offer ) is
+				# answered but not cached , so the next click tries again rather
+				# than serving the failure until Zotero next writes.
+				return rows , note
 			self._recent      = rows
 			self._recent_note = note
 			self._recent_n    = want
@@ -2797,8 +2807,15 @@ class Handler( BaseHTTPRequestHandler ):
 			# rides along on it : this poll is the ONLY thing an idle tab does , so
 			# it is also the only way a board locked from another browser reaches
 			# the tabs that were already open when it happened.
+			#
+			# `index` rides along for the same reason : when it moves , the --watch
+			# worker ( or a ` prma reindex ` , picked up by the bare stat in
+			# maybe_reload ) has just processed papers , and /sort fills in the
+			# rows it added before that happened.
 			snap = board.snapshot()
-			self._send_json( 200 , { "rev": snap[ "rev" ] , "locked": snap[ "locked" ] } )
+			self.dash.maybe_reload()
+			self._send_json( 200 , { "rev": snap[ "rev" ] , "locked": snap[ "locked" ] ,
+				"index": getattr( self.dash , "built_at" , None ) } )
 			return
 
 		if path == "/api/errors":

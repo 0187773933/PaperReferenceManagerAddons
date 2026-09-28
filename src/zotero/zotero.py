@@ -3,6 +3,7 @@ import re
 import glob
 import shutil
 import sqlite3
+import time
 from contextlib import contextmanager
 from pprint import pprint
 from pathlib import Path
@@ -36,6 +37,9 @@ class Zotero():
 		else:
 			self.sqlite_path = self.find_db()
 		self.storage = self.sqlite_path.parent / "storage"
+		# Set by _open_copy when the last read had to drop the -wal : that view
+		# is behind , so it must not prune ( see _push_to_db ).
+		self.read_fell_back = False
 
 	def find_db( self ):
 		candidates = [
@@ -73,17 +77,74 @@ class Zotero():
 		conn = None
 		with self._snapshot_lock( cache_db ):
 			try:
-				self._copy_live_db( cache_db )
-				# Opened read-write on purpose : if _copy_live_db caught a
-				# transaction in flight , the -journal it copied alongside is
-				# hot , and SQLite rolls the copy back to the last commit here.
-				conn = sqlite3.connect( cache_db )
-				conn.row_factory = sqlite3.Row
+				conn = self._open_copy( cache_db )
 				yield conn
 			finally:
 				if conn is not None:
 					try: conn.close()
 					except Exception: pass
+
+	def _open_copy( self , cache_db ):
+		"""Copy the live DB -- WAL included -- and open the copy.
+
+		Anything going wrong on the WAL side ( the -wal copy raising , the copy
+		not answering a first query , or a copy that never settled failing its
+		integrity check ) falls back to the copy this has always taken : the
+		main file alone , WAL dropped. That view can only be behind by whatever
+		Zotero hasn't checkpointed yet , so the worst case here is the old
+		behaviour. `read_fell_back` records it , because a view that is behind
+		must not be mistaken for papers having been REMOVED ( see _push_to_db's
+		prune ).
+
+		Both paths refuse a copy that never settled AND fails the check : that
+		raises rather than hand back a torn library , where the old code could
+		return one silently ( a Zotero checkpoint landing mid-copy )."""
+		self.read_fell_back = False
+		try:
+			return self._settled_copy( cache_db , with_wal=True )
+		except ( OSError , sqlite3.Error ) as e:
+			print(
+				f"Zotero :: couldn't read zotero.sqlite-wal alongside the DB ( {e} ) ; "
+				f"reading the main file only -- papers saved since Zotero's last "
+				f"checkpoint may not show yet"
+			)
+			self.read_fell_back = True
+			return self._settled_copy( cache_db , with_wal=False )
+
+	def _settled_copy( self , cache_db , with_wal ):
+		settled = self._copy_live_db( cache_db , with_wal=with_wal )
+		return self._connect_copy( cache_db , verify=not settled )
+
+	def _connect_copy( self , cache_db , verify=False ):
+		# Opened read-write on purpose : a -journal _copy_live_db caught hot is
+		# rolled back to the last commit here , and a copied -wal is replayed
+		# ( SQLite rebuilds its index from the WAL itself , keeping only
+		# committed frames whose checksums and salts check out ). Both happen
+		# on the first read , which the probe below forces -- so a copy that
+		# won't open fails HERE , where _open_copy can still fall back.
+		#
+		# `verify` : the copy never settled ( see _copy_live_db ) , so pay for a
+		# full integrity_check before trusting it -- ~0.13s on a 35 MB library ,
+		# and only ever on that rare path , never on the steady-state one.
+		conn = sqlite3.connect( cache_db )
+		try:
+			conn.row_factory = sqlite3.Row
+			conn.execute( "SELECT count(*) FROM items" ).fetchone()
+			if verify:
+				ok = conn.execute( "PRAGMA integrity_check(1)" ).fetchone()[ 0 ]
+				if ok != "ok":
+					raise sqlite3.DatabaseError( f"copy taken mid-write fails integrity_check ( {ok} )" )
+		except Exception:
+			conn.close()
+			raise
+		return conn
+
+	# Byte 18 of the SQLite header is the file-format write version : 1 for a
+	# rollback journal , 2 for WAL. Zotero has run in both ; which one decides
+	# which sidecar holds the commits a copy of the main file alone would miss.
+	@staticmethod
+	def _is_wal( header ):
+		return len( header ) > 18 and header[ 18 ] == 2
 
 	# SQLite stores a change counter in the file header ( bytes 24..28 ) that
 	# bumps on every commit , plus a version-valid-for number ( 92..96 ).
@@ -91,53 +152,101 @@ class Zotero():
 	# commit while we were reading?" -- compare against PRAGMA quick_check ,
 	# which costs ~0.8s on a 250 MB library and would dominate the ~0.14s
 	# fast path the exists server depends on.
+	#
+	# In WAL mode that counter isn't reliable ( commits land in the -wal , and
+	# only a checkpoint writes the main file ) , so two more things go in :
+	#   - the main file's mtime : a checkpoint writing it mid-copy is what
+	#     would tear our copy of it ;
+	#   - the -wal's 32-byte header ( checkpoint sequence + salts ) , which is
+	#     rewritten whenever the WAL restarts from the top after a checkpoint.
+	#     A restart mid-copy could leave us an old frame SQLite would replay.
+	# Deliberately NOT the -wal's size or mtime : plain appends ( every commit )
+	# are harmless to copy mid-way. Within one WAL generation frames are only
+	# ever added , so what we copied is a prefix , and SQLite drops a torn or
+	# uncommitted tail by checksum. Watching appends too would never settle
+	# while Zotero is busy.
 	def _db_state_token( self , path ):
 		try:
 			with open( path , "rb" ) as f:
 				header = f.read( 100 )
 			if len( header ) < 100:
 				return None
-			return ( header[ 24:28 ] , header[ 92:96 ] , os.stat( path ).st_size )
+			st = os.stat( path )
+			token = ( header[ 24:28 ] , header[ 92:96 ] , st.st_size , st.st_mtime_ns )
 		except OSError:
 			return None
+		if self._is_wal( header ):
+			try:
+				with open( str( path ) + "-wal" , "rb" ) as f:
+					token += ( f.read( 32 ) , )
+			except OSError:
+				token += ( None , )     # no -wal right now ( Zotero closed )
+		return token
 
-	def _copy_live_db( self , cache_db , attempts=3 ):
+	def _copy_live_db( self , cache_db , attempts=6 , with_wal=True ):
 		"""Byte-copy the live zotero.sqlite into the cache.
 
 		A raw copy is the ONLY option here : Zotero holds an EXCLUSIVE lock
 		on its DB while running , so sqlite3's backup API -- and even a plain
-		read-only connection -- fail outright with 'database is locked'.
+		read-only connection -- fail outright with 'database is locked'. The
+		live files are only ever READ ; nothing here opens them as a database
+		or touches the live -shm.
 
-		A raw copy isn't atomic , though , so guard the two ways it can lie :
-		  - Zotero uses a rollback journal ( journal_mode=delete ) , so a copy
-		    taken mid-transaction holds uncommitted pages. Copying the
-		    -journal alongside lets SQLite roll our copy back to the last
-		    commit when it's opened.
-		  - if Zotero commits DURING the copy , the copy can be torn AND the
-		    journal we grabbed goes stale ( applying a stale journal would
-		    itself corrupt the copy ). The change counter catches exactly
-		    that , so we retry.
+		A raw copy isn't atomic , though , so guard the ways it can lie :
+		  - WAL mode ( what current Zotero runs ) : a commit lives in
+		    zotero.sqlite-wal until Zotero checkpoints it into the main file ,
+		    which can be an hour later. The main file alone is that far behind
+		    -- a paper saved a minute ago isn't in it -- so the -wal is copied
+		    alongside. `with_wal=False` skips it : the old , main-file-only
+		    copy _open_copy falls back to.
+		  - rollback-journal mode : a copy taken mid-transaction holds
+		    uncommitted pages. Copying the -journal alongside lets SQLite roll
+		    our copy back to the last commit when it's opened.
+		  - if Zotero commits ( rollback mode ) or checkpoints / restarts its
+		    WAL ( WAL mode ) DURING the copy , the copy can be torn AND the
+		    sidecar we grabbed goes stale ( applying a stale one would itself
+		    corrupt the copy ). The state token catches exactly that , so we
+		    retry -- after a short , growing pause , since a checkpoint is a
+		    burst that is over in milliseconds.
+		Each sidecar is copied only when the header says it's the one in use ,
+		so a leftover -wal beside a rollback-mode DB is never replayed.
+
+		Returns True once a copy settled ( the token didn't move across it ) ,
+		False if every attempt was interrupted -- the caller then checks the
+		copy before trusting it.
 		"""
 		live_journal = Path( str( self.sqlite_path ) + "-journal" )
+		live_wal     = Path( str( self.sqlite_path ) + "-wal" )
 		for attempt in range( attempts ):
+			if attempt:
+				time.sleep( 0.05 * attempt )      # 50 , 100 , ... 250 ms : ~0.75s all told
 			# Clear inherited sidecars first : a -wal / -journal left by an
 			# earlier run would otherwise be replayed into this fresh copy.
 			for sidecar in ( "-wal" , "-shm" , "-journal" ):
 				Path( str( cache_db ) + sidecar ).unlink( missing_ok=True )
 			before = self._db_state_token( self.sqlite_path )
 			shutil.copy2( self.sqlite_path , cache_db )
-			if live_journal.exists():
+			with open( cache_db , "rb" ) as f:
+				wal_mode = self._is_wal( f.read( 20 ) )
+			if wal_mode:
+				if with_wal and live_wal.exists():
+					try:
+						shutil.copy2( live_wal , str( cache_db ) + "-wal" )
+					except FileNotFoundError:
+						pass   # Zotero closed + checkpointed mid-copy ; the token check sees it
+			elif live_journal.exists():
 				try:
 					shutil.copy2( live_journal , str( cache_db ) + "-journal" )
 				except FileNotFoundError:
 					pass   # committed + deleted mid-copy ; the token check sees it
 			after = self._db_state_token( self.sqlite_path )
 			if before is not None and before == after:
-				return
+				return True
 		print(
 			f"Zotero :: zotero.sqlite changed during all {attempts} copy attempts ; "
 			f"proceeding with a possibly mid-write copy"
 		)
+		return False
 
 	@contextmanager
 	def _snapshot_lock( self , cache_db ):
@@ -464,6 +573,14 @@ class Zotero():
 		# 'zotero' source detached , and zotero-only papers get deleted
 		# entirely. Use --no-prune to disable.
 		prune = not getattr( self.args , "no_prune" , False )
+		if prune and self.read_fell_back:
+			# This snapshot is the main file alone ( see _open_copy ) , so it is
+			# missing whatever Zotero hasn't checkpointed yet. A paper added
+			# since then isn't GONE , it's just not in this view -- pruning off it
+			# would delete that paper here and re-add ( and re-process ) it on
+			# the next full read.
+			print( "Zotero :: snapshot read without the -wal ; skipping the prune this time" )
+			prune = False
 		seen_keys = set()
 		non_imported = []
 
