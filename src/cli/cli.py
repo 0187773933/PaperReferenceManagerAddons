@@ -644,6 +644,60 @@ def server( sub , global_parser ):
 		"tui":             False       ,
 	}
 
+def auth( sub , global_parser ):
+	p = sub.add_parser(
+		"auth" ,
+		parents=[ global_parser ] ,
+		help="Dashboard accounts : admins and users log in with one-time links ( no passwords ) , "
+		     "and any account can mint API keys at or below its own role. Anonymous visitors can "
+		     "only view. Edits the same file a running server reads , so changes apply without a "
+		     "restart. Bare ` prma auth ` lists the accounts."
+	)
+	p.add_argument( "--port" , type=int , default=int( os.environ.get( "SERVER_PORT" , "9371" ) ) ,
+		help="The server's port , for the login links this prints when config.yaml has no "
+		     "auth.public_url ( env SERVER_PORT )" )
+	p.set_defaults( _entry=tasks.auth )
+	asub = p.add_subparsers( dest="auth_command" , metavar="<auth-command>" )
+
+	asub.add_parser( "users" , help="List the accounts ( the default )" )
+
+	a = asub.add_parser( "add-user" , help="Create an account and print its one-time login link" )
+	a.add_argument( "auth_name" , metavar="NAME" )
+	a.add_argument( "--role" , dest="auth_role" , choices=( "user" , "admin" ) , default="user" )
+
+	a = asub.add_parser( "link" , help="Print a fresh one-time login link for an account" )
+	a.add_argument( "auth_name" , metavar="NAME" )
+
+	a = asub.add_parser( "set-role" , help="Make an account a user or an admin" )
+	a.add_argument( "auth_name" , metavar="NAME" )
+	a.add_argument( "auth_role" , metavar="ROLE" , choices=( "user" , "admin" ) )
+
+	for name , what in ( ( "disable" , "Disable an account ( its keys stop working until re-enabled )" ) ,
+	                     ( "enable" , "Re-enable a disabled account" ) ,
+	                     ( "delete-user" , "Delete an account with its sessions , links and keys" ) ):
+		a = asub.add_parser( name , help=what )
+		a.add_argument( "auth_name" , metavar="NAME" )
+
+	asub.add_parser( "keys" , help="List every API key" )
+
+	a = asub.add_parser( "create-key" , help="Mint an API key for an account ( printed once )" )
+	a.add_argument( "auth_name" , metavar="NAME" , help="The account that owns the key" )
+	a.add_argument( "--key-name" , dest="auth_key_name" , required=True ,
+		help="What the key is for , e.g. 'cron' or 'CI'" )
+	a.add_argument( "--role" , dest="auth_role" , choices=( "user" , "admin" ) , default="user" ,
+		help="Can't be higher than the owner's role" )
+	a.add_argument( "--days" , dest="auth_days" , type=int , default=None ,
+		help="Expiry in days ( 0 = never ; default auth.api_key_days , 90 )" )
+
+	a = asub.add_parser( "revoke-key" , help="Revoke an API key by id" )
+	a.add_argument( "auth_key_id" , metavar="ID" )
+
+	a = asub.add_parser( "anon-content" ,
+		help="Whether anonymous visitors may open paper content ( PDFs , md , figures ) "
+		     "or only see metadata" )
+	a.add_argument( "auth_switch" , metavar="on|off" , choices=( "on" , "off" ) )
+	return {}
+
 REGISTRARS = (
 	base          ,
 	missing       ,
@@ -674,6 +728,7 @@ REGISTRARS = (
 	review_missing,
 	reindex       ,
 	server        ,
+	auth          ,
 )
 
 def cli():

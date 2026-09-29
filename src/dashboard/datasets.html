@@ -89,7 +89,7 @@
     <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
     <a class="navlink" href="/sort" title="The hand-ordered list">⬒ Sort</a>
     <a class="navlink" href="/tiers" title="The hand-ranked tiers">★ Tiers</a>
-    <button id="xlsx" title="Download the papers you are looking at as .xlsx ( two sheets : one per paper , one per paper-and-dataset )">⇧ XLSX</button>
+    <button id="xlsx" class="needs-login" title="Download the papers you are looking at as .xlsx ( two sheets : one per paper , one per paper-and-dataset )">⇧ XLSX</button>
     <button id="csv"  title="Download the table you are looking at , in this order , as CSV">⇧ CSV</button>
     <button id="reload" title="Re-read the scan and the boards">↻ Reload</button>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
@@ -614,7 +614,7 @@ $( "#footer" ).innerHTML =
   `<br>Library papers only : a paper on a board that isn't in your library has never been scanned , so it has nothing to say here.`;
 
 initTheme();
-load();
+initAuth().then( load );
 </script>
 </body>
 </html>

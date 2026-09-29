@@ -93,6 +93,95 @@ function initTheme(){
   label();
 }
 
+/* ---- who is looking ------------------------------------------------------
+   The server decides every permission ( src/server/auth.py ) ; this only makes
+   the page agree with it , so nobody is offered a button the server would
+   refuse. initAuth() asks /api/me once and sets , on <html> :
+
+     data-role="anon|user|admin"   common.css hides .needs-login until this says
+                                   user or admin -- so a logged-in visitor sees
+                                   the controls appear , and an anonymous one
+                                   never sees them flash
+     data-content="0"              an anonymous visitor on a server whose admin
+                                   has hidden paper content : every link to a
+                                   PDF / md / figure is hidden ( common.css )
+
+   and puts the account chip in the header , next to the theme button. Returns
+   a promise of ME , so a page that has to know before it draws can await it ;
+   calling it again returns the same promise -- unless the server didn't
+   answer , in which case the next call asks again ( a board that boots while
+   the server restarts would otherwise stay "anonymous" for good ). */
+let ME = { role: "anon" , auth_enabled: true , anon_content: true , user: null , csrf: null };
+let _meReady = null;
+const canEdit = () => ME.role === "user" || ME.role === "admin";
+function initAuth(){
+  if( _meReady ) return _meReady;
+  _meReady = ( async () => {
+    try {
+      const r = await fetch( "/api/me" , { cache: "no-store" } );
+      if( !r.ok ) throw new Error( r.statusText );
+      ME = await r.json();
+    } catch( e ) { _meReady = null; }
+    const root = document.documentElement;
+    root.dataset.role    = ME.role || "anon";
+    root.dataset.content = ( canEdit() || ME.anon_content ) ? "1" : "0";
+    authChip();
+    return ME;
+  } )();
+  return _meReady;
+}
+function authChip(){
+  const theme = $( "#toggleTheme" );
+  if( !theme || !ME.auth_enabled || $( "#authchip" ) ) return;
+  const el = document.createElement( "span" );
+  el.id = "authchip";
+  el.innerHTML = canEdit()
+    ? `<a class="navlink" href="/account" title="Your account and API keys">` +
+      `👤 ${esc( ( ME.user || {} ).name || "account" )}${ME.role === "admin" ? " · admin" : ""}</a>`
+    : `<span class="viewonly" title="Anonymous visitors can look but not change anything. ` +
+      `Accounts log in with a one-time link — ask an admin for one.">👁 View only</span>`;
+  theme.before( el );
+}
+
+/* The server just said this login is gone ( a 401 in the middle of a page ) :
+   become the anonymous visitor it now sees , chip and all. */
+function authExpired(){
+  ME = Object.assign( {} , ME , { role: "anon" , csrf: null , user: null , via: null } );
+  document.documentElement.dataset.role    = "anon";
+  document.documentElement.dataset.content = ME.anon_content ? "1" : "0";
+  const chip = $( "#authchip" );
+  if( chip ) chip.remove();
+  authChip();
+}
+
+/* POST as whoever is logged in. Adds the session's CSRF token -- the server
+   refuses a cookie-authorised POST without it -- and , unless `quiet` , turns a
+   refusal into a toast. Resolves to the Response , so callers keep reading its
+   status and body as before. An object body is sent as JSON ; a string or a
+   File goes as-is , typed by `type`. `keepalive` is for the boards' save-on-
+   unload , which used to be a sendBeacon : a beacon can't carry the header. It
+   sends straight away rather than after initAuth() , since the page is going. */
+function postJSON( url , body , opts ){
+  opts = opts || {};
+  const raw  = typeof body === "string" || body instanceof Blob;
+  const send = () => fetch( url , {
+    method: "POST" ,
+    headers: Object.assign( { "Content-Type": opts.type || "application/json" } ,
+      ME.csrf ? { "X-CSRF-Token": ME.csrf } : {} ) ,
+    body: raw ? body : JSON.stringify( body == null ? {} : body ) ,
+    keepalive: !!opts.keepalive ,
+  } );
+  return ( opts.keepalive ? send() : initAuth().then( send ) ).then( res => {
+    if( !opts.quiet ){
+      if( res.status === 401 )      toast( "Log in to do that — anonymous visitors can only view" );
+      else if( res.status === 403 ) res.clone().json().then( d =>
+        toast( d.csrf ? "Your login changed — reload the page" : ( d.error || "Not allowed" ) ) ,
+        () => toast( "Not allowed" ) );
+    }
+    return res;
+  } );
+}
+
 /* ---- the header's height, kept current -----------------------------------
    The two boards pin their column head straight under the page header
    ( top:var(--headh) ), so --headh has to be the header's height at EVERY
@@ -328,10 +417,7 @@ function bindXlsxExport( btnSel , url , nameFn , keys ){
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = "⇧ …";
     try {
-      const res = await fetch( url , {
-        method: "POST" , headers: { "Content-Type": "application/json" } ,
-        body: JSON.stringify( { keys: ks } ) ,
-      } );
+      const res = await postJSON( url , { keys: ks } , { quiet: true } );
       if( !res.ok ) throw new Error( ( await res.json() ).error || res.statusText );
       saveBlob( await res.blob() , nameFn() );
       toast( `${ks.length} papers exported` );
@@ -347,5 +433,8 @@ function bindXlsxExport( btnSel , url , nameFn , keys ){
    are views OVER that index , so both wait on it and both should say so the
    same way. */
 const indexBuildingHtml = DATA =>
-  `<div class="empty">Building the library index… ${esc( ( DATA || {} ).message || "" )}<br>` +
+  ( ( DATA || {} ).status === "idle" && !canEdit() )
+  ? `<div class="empty">The library index hasn't been built on this server yet.<br>` +
+    `<span class="muted">Every column here is read off that index ; log in to build it.</span></div>`
+  : `<div class="empty">Building the library index… ${esc( ( DATA || {} ).message || "" )}<br>` +
   `<span class="muted">Every column here is read off that index ; this page picks up when it lands.</span></div>`;

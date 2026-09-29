@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · log in</title>
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { padding:18px; max-width:560px; margin:40px auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:22px 24px; }
+  .card h2 { margin:0 0 8px; font-size:18px; }
+  .card p { margin:8px 0; color:var(--muted); }
+  .card .err { color:var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma · log in</h1>
+    <div class="grow"></div>
+    <a class="navlink" href="/">← Dashboard</a>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+</header>
+<main><div class="card" id="card"><h2>Logging you in…</h2></div></main>
+<script src="/static/common.js"></script>
+<script>
+/* Where a one-time login link lands : /login#<id>.<secret>. The secret rides in
+   the fragment , which a browser never sends , so it can't end up in a server or
+   proxy log -- and a chat app's link preview , which fetches the URL , can't
+   spend it either. Only this script sends it , once , to POST /api/login , which
+   sets the session cookie ( src/server/auth.py ). */
+initTheme();
+const card = $( "#card" );
+const token = decodeURIComponent( location.hash.replace( /^#/ , "" ) ).trim();
+// Out of the address bar and the history before anything else happens.
+if( location.hash ) history.replaceState( null , "" , location.pathname );
+
+async function login(){
+  if( !token ){
+    const me = await initAuth();
+    card.innerHTML = me.user
+      ? `<h2>You're logged in as ${esc( me.user.name )}</h2><p><a href="/account">Your account</a> · <a href="/">Dashboard</a></p>`
+      : `<h2>No login link here</h2><p>Accounts don't have passwords. An admin sends you a one-time link ` +
+        `that opens this page and logs you in — ask one for yours.</p>`;
+    return;
+  }
+  let r , d = {};
+  try {
+    r = await fetch( "/api/login" , { method: "POST" ,
+      headers: { "Content-Type": "application/json" } , body: JSON.stringify( { token } ) } );
+    d = await r.json();
+  } catch( e ){ d = { error: "the server isn't answering" }; }
+  if( r && r.ok && d.ok ){
+    card.innerHTML = `<h2>Logged in as ${esc( d.user.name )}</h2><p>Taking you to the dashboard…</p>`;
+    setTimeout( () => location.replace( "/" ) , 700 );
+    return;
+  }
+  card.innerHTML = `<h2>That link didn't work</h2><p class="err">${esc( d.error || "unknown error" )}</p>` +
+    `<p>Each link works once. If you've already used this one, ask an admin for a new link.</p>`;
+}
+login();
+</script>
+</body>
+</html>

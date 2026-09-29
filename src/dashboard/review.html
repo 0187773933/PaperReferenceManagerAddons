@@ -53,7 +53,7 @@
     <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     <button id="export-json" title="Download the papers currently shown, as JSON">⇧ JSON</button>
     <button id="export-csv"  title="Download the papers currently shown, one row each, as CSV">⇧ CSV</button>
-    <button id="rebuild" title="Re-screen and re-extract from the boards as they stand now ( minutes )">↻ Rebuild</button>
+    <button id="rebuild" class="needs-login" title="Re-screen and re-extract from the boards as they stand now ( minutes )">↻ Rebuild</button>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
   </div>
   <div class="controls" id="controls" hidden>
@@ -469,7 +469,7 @@ function renderBanner(){
     b.className = "banner warn";
     b.innerHTML = `<div class="msg"><b>No review has been built yet.</b>`
       + `<span>Screening every paper on the sort board and every paper you picked a figure from takes a few minutes, so it is never done on the way to serving this page.</span></div>`
-      + `<button id="build-now">Build it now</button>`;
+      + `<button id="build-now" class="needs-login">Build it now</button>`;
     $("#build-now").addEventListener("click", startRebuild);
     return;
   }
@@ -487,7 +487,7 @@ function renderBanner(){
       + `<span>${[ F.min_year ? `nothing published before ${F.min_year}` : "",
                    F.priority_only ? "priority 1–4 only — the clinical-classification and fingerprinting papers were dropped" : "" ]
                  .filter(Boolean).join("; ")}. Rebuild here to take the whole board.</span></div>`
-      + `<button id="rebuild-3">↻ Rebuild unfiltered</button>`;
+      + `<button id="rebuild-3" class="needs-login">↻ Rebuild unfiltered</button>`;
     $("#rebuild-3").addEventListener("click", startRebuild);
     return;
   }
@@ -495,7 +495,7 @@ function renderBanner(){
     b.className = "banner warn";
     b.innerHTML = `<div class="msg"><b>The boards have moved since this was built.</b>`
       + `<span>Papers added to /sort or figures picked on /images since ${when(STATUS.generated)} are not in what you are looking at.</span></div>`
-      + `<button id="rebuild-2">↻ Rebuild</button>`;
+      + `<button id="rebuild-2" class="needs-login">↻ Rebuild</button>`;
     $("#rebuild-2").addEventListener("click", startRebuild);
     return;
   }
@@ -599,8 +599,10 @@ async function startRebuild(){
   $("#rebuild").disabled = true;
   STATUS = Object.assign({}, STATUS, { building:true, stage:"starting", done:0, total:0 });
   renderBanner();
-  try { await fetch("/api/review/rebuild", { method:"POST" }); }
+  let res;
+  try { res = await postJSON("/api/review/rebuild"); }
   catch(e){ STATUS.building = false; STATUS.error = String(e); renderBanner(); return; }
+  if(!res.ok){ STATUS.building = false; $("#rebuild").disabled = false; renderBanner(); return; }
   if(!poll) poll = setInterval(pollStatus, 1500);
 }
 
@@ -610,6 +612,7 @@ $("#rebuild").addEventListener("click", startRebuild);
    is one setting shared by every prma page , so flipping it here flips the
    dashboard and both boards too. */
 initTheme();
+initAuth();
 
 /* ---- interaction --------------------------------------------------------- */
 document.addEventListener("click", e => {

@@ -100,6 +100,22 @@ button.primary { background:var(--accent); color:var(--accent-ink); border-color
 }
 .navlink:hover { border-color:var(--accent); }
 
+/* ---- accounts ------------------------------------------------------------
+   initAuth() ( common.js ) sets data-role once /api/me answers. Anything that
+   makes the server do work carries .needs-login and stays hidden until the
+   answer is user or admin -- the server refuses it either way ; this is so
+   nobody is offered the button. */
+:root:not([data-role="user"]):not([data-role="admin"]) .needs-login { display:none !important; }
+/* An anonymous visitor on a server whose admin has hidden paper content : every
+   way to the PDF , the full text and the figures goes , nav links included. */
+:root[data-content="0"] :is( a[href^="/pdf"] , a[href^="/md/"] , a[href^="/images"] ,
+  a[href^="/method"] , a.readlink , img[src^="/images/"] ) { display:none !important; }
+#authchip { display:inline-flex; }
+#authchip .viewonly {
+  color:var(--muted); font-size:12px; white-space:nowrap; cursor:help;
+  border:1px dashed var(--line); border-radius:7px; padding:6px 10px;
+}
+
 input[type=search] {
   background:var(--panel2); color:var(--fg); border:1px solid var(--line);
   border-radius:8px; padding:10px 13px; font-size:14px;

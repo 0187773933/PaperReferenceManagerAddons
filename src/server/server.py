@@ -41,6 +41,7 @@ from rapidfuzz import fuzz , process
 
 from ..utils import utils
 from ..tasks import snapshot as snap_module
+from . import auth as auth_mod
 
 # The dashboard's single-page UI lives next to the dashboard data layer so
 # it's easy to edit by hand. Served verbatim at GET / .
@@ -113,6 +114,15 @@ CODE_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 # workbook from POST /api/datasets/export.xlsx .
 DATASETS_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
 	"dashboard" , "datasets.html" )
+
+# Accounts ( src/server/auth.py ). /login is where a one-time login link lands --
+# its script spends the token in the fragment and sets the session cookie ;
+# /account is your own API keys , plus the account list and the anonymous-
+# content switch for admins.
+LOGIN_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "login.html" )
+ACCOUNT_HTML_PATH = Path( __file__ ).resolve().parent.parent.joinpath(
+	"dashboard" , "account.html" )
 
 # The chrome the pages above SHARE : the palette + header styling
 # ( common.css ) , the helpers they all used to redeclare ( common.js ) and the
@@ -989,6 +999,22 @@ def _load_datasets_html():
 		return DATASETS_HTML_PATH.read_text( encoding="utf-8" )
 	except Exception as e:
 		return f"<h1>datasets.html not found</h1><pre>{e}</pre>"
+
+
+def _load_login_html():
+	"""Read the login-link landing page fresh on each request. Falls back to a stub."""
+	try:
+		return LOGIN_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>login.html not found</h1><pre>{e}</pre>"
+
+
+def _load_account_html():
+	"""Read the account page fresh on each request. Falls back to a stub."""
+	try:
+		return ACCOUNT_HTML_PATH.read_text( encoding="utf-8" )
+	except Exception as e:
+		return f"<h1>account.html not found</h1><pre>{e}</pre>"
 
 
 # Serializes status recomputes so a flurry of /status loads can't kick off
@@ -2481,18 +2507,28 @@ class Handler( BaseHTTPRequestHandler ):
 	review: "ReviewState" = None
 	review_missing: "MissingReviewState" = None
 	papermeta: "PaperMeta" = None
+	# Accounts , injected at startup ( both modes ). Every request is resolved to
+	# an Actor on self.actor by auth.gate before any route runs ; routes that
+	# would make the server WORK on a GET check self.actor.can_work.
+	auth: "auth_mod.AuthStore" = None
+	actor: "auth_mod.Actor" = auth_mod.ANON
 
 	def log_message( self , *_ ):
 		return
 
-	def _send_json( self , code: int , payload: Dict ):
+	def _send_json( self , code: int , payload: Dict , headers=None ):
 		raw = json.dumps( payload ).encode( "utf-8" )
 		self.send_response( code )
 		self.send_header( "Content-Type"                , "application/json; charset=utf-8" )
 		self.send_header( "Content-Length"              , str( len( raw ) ) )
+		# Allow-Headers stays Content-Type only : cross-origin page script then
+		# can't send X-CSRF-Token or Authorization , and ACAO * already forbids
+		# it reading anything with the session cookie attached.
 		self.send_header( "Access-Control-Allow-Origin" , "*" )
 		self.send_header( "Access-Control-Allow-Methods", "GET, POST, OPTIONS" )
 		self.send_header( "Access-Control-Allow-Headers", "Content-Type" )
+		for k , v in headers or ():
+			self.send_header( k , v )
 		self.end_headers()
 		self.wfile.write( raw )
 
@@ -2590,12 +2626,20 @@ class Handler( BaseHTTPRequestHandler ):
 		mod  = _report_module( mode )
 		args = self.dash.args
 		path = mod.report_path( args )
-		if not path.exists():
+		if not path.exists() and self.actor.can_work:
 			print( f"server    :: no {mode} report yet ; building it now ( first open )" )
 			mod.rebuild( args )
 		try:
 			page = path.read_text( encoding="utf-8" )
 		except Exception as e:
+			if not self.actor.can_work:
+				# Building it is a whole-library pass ; an anonymous visitor
+				# doesn't get to start one , or to see where it would be written.
+				self._send_html( 200 ,
+					f"<h1>No {mode} report yet</h1>"
+					"<p>It hasn't been built on this server. Log in to build it.</p>"
+					'<p><a href="/">&larr; Dashboard</a></p>' )
+				return
 			cmd  = "prma all-images" if mode == "images" else "prma method-images"
 			kw   = ( "" if mode == "images" else
 				" , plus search terms on the command line or in "
@@ -2666,6 +2710,11 @@ class Handler( BaseHTTPRequestHandler ):
 	def do_GET( self ):
 		path = urlparse( self.path ).path
 
+		# Who is asking , and may they ( src/server/auth.py ). First , so nothing
+		# below -- /api/version included -- runs for a request it refused.
+		if not self.auth.gate( self , "GET" , path ):
+			return
+
 		if path == "/api/version":
 			# A cheap "did the reference library change" token for the DOI-button
 			# userscript : it polls this and , when the token moves , re-queries
@@ -2687,6 +2736,17 @@ class Handler( BaseHTTPRequestHandler ):
 		if self.minimal:
 			# ` prma --exists ` : nothing past the userscript surface exists.
 			self._send_minimal_notice()
+			return
+
+		if self.auth.handle( self , "GET" , path ):
+			return
+
+		if path in ( "/login" , "/login.html" ):
+			self._send_html( 200 , _load_login_html() )
+			return
+
+		if path in ( "/account" , "/account.html" ):
+			self._send_html( 200 , _load_account_html() )
 			return
 
 		if path.startswith( "/static/" ):
@@ -2736,7 +2796,7 @@ class Handler( BaseHTTPRequestHandler ):
 			# start a build if there has never been one , and answer with the
 			# status so the page polls instead of drawing an empty table.
 			self.dash.maybe_reload()
-			if self.dash.status == "idle":
+			if self.dash.status == "idle" and self.actor.can_work:
 				self.dash.ensure_build( refresh=False )
 			self._send_json( 200 , _datasets_payload( self.dash , self.sort ,
 				self.tiers , self.review , self.figstate ) )
@@ -2751,7 +2811,7 @@ class Handler( BaseHTTPRequestHandler ):
 			# start a build if there has never been one , then answer with the
 			# status so the page polls instead of drawing an empty table.
 			self.dash.maybe_reload()
-			if self.dash.status == "idle":
+			if self.dash.status == "idle" and self.actor.can_work:
 				self.dash.ensure_build( refresh=False )
 			self._send_json( 200 , _code_payload( self.dash , self.sort ,
 				self.tiers , self.review , self.figstate ) )
@@ -2840,7 +2900,10 @@ class Handler( BaseHTTPRequestHandler ):
 		if path == "/api/status":
 			# ?regen=1 recomputes fresh from the on-disk DB ( what opening the
 			# page does ) ; otherwise serve the last persisted tally.
-			regen = self._arg( self._qs() , "regen" , "" ) in ( "1" , "true" , "yes" )
+			# Anonymous visitors always get the persisted tally : a recompute is a
+			# whole-library walk plus a write.
+			regen = ( self._arg( self._qs() , "regen" , "" ) in ( "1" , "true" , "yes" )
+				and self.actor.can_work )
 			self._send_json( 200 , _status_payload( self.dash.args , regen=regen ) )
 			return
 
@@ -2922,9 +2985,10 @@ class Handler( BaseHTTPRequestHandler ):
 			# signal to lazily build one. A persisted index is served as-is
 			# ( refresh it explicitly via the Rebuild button / ` prma reindex ` ).
 			self.dash.maybe_reload()
-			if self.dash.status == "idle":
+			if self.dash.status == "idle" and self.actor.can_work:
 				# No index yet : build one from the EXISTING cache ( no network
 				# fetch ). Refreshing the cache is the explicit Rebuild / reindex.
+				# Not for an anonymous visitor -- they get the "not built" status.
 				self.dash.ensure_build( refresh=False )
 			self._send_json( 200 , self.dash.meta() )
 			return
@@ -2975,12 +3039,20 @@ class Handler( BaseHTTPRequestHandler ):
 		self._send_json( 404 , { "error": "not found" } )
 
 	def do_POST( self ):
+		# Every POST but a handful needs an account ( src/server/auth.py ) -- and
+		# a cookie-authorised one needs its CSRF token too.
+		if not self.auth.gate( self , "POST" , urlparse( self.path ).path ):
+			return
+
 		# Minimal mode ( --exists ) serves exactly two POSTs , both of which work off
 		# the SnapshotCache : /exists itself , and /refresh ( force a re-read of the
 		# library , handy when a manager gives us no file to watch ). Everything
 		# else here is dashboard / figure-report state that minimal mode never built.
 		if self.minimal and urlparse( self.path ).path not in ( "/exists" , "/refresh" ):
 			self._send_minimal_notice()
+			return
+
+		if self.auth.handle( self , "POST" , urlparse( self.path ).path ):
 			return
 
 		if urlparse( self.path ).path == "/api/datasets/export.xlsx":
@@ -3236,6 +3308,10 @@ class Handler( BaseHTTPRequestHandler ):
 			if not isinstance( queries , list ):
 				self._send_json( 400 , { "results": [] , "error": "queries must be a list" } )
 				return
+			if len( queries ) > auth_mod.ANON_EXISTS_MAX and not self.actor.can_work:
+				self._send_json( 413 , { "results": [] , "error":
+					f"at most {auth_mod.ANON_EXISTS_MAX} queries per call without an API key" } )
+				return
 
 			cleaned = [
 				{ "id": q.get( "id" ) , "title": q.get( "title" ) or "" , "doi": q.get( "doi" ) or "" }
@@ -3259,6 +3335,27 @@ class Handler( BaseHTTPRequestHandler ):
 		except Exception as e:
 			print( f"server error: {e!r}" )
 			self._send_json( 500 , { "results": [] , "error": str( e ) } )
+
+
+def _auth_banner( store , args ):
+	"""The startup lines about accounts -- and , until an admin has logged in
+	for the first time , that admin's one-time login link. The terminal that
+	started the server already controls the deployment , so printing it here
+	grants nothing new."""
+	if not store.enabled:
+		return [ "accounts       OFF       (auth.enabled: false -- everyone can do everything)" ]
+	if store._broken:
+		return [ "accounts       UNREADABLE (nobody can log in ; see the auth :: line above)" ]
+	n     = len( store.list_users() )
+	anon  = "view + paper content" if store.anon_content() else "view , metadata only"
+	lines = [ f"accounts       {n} account{'s' if n != 1 else ''} ; anonymous = {anon}"
+		"  ( ` prma auth ` to manage , or /account )" ]
+	first = store.bootstrap()
+	if first:
+		name , token = first
+		lines.append( f"first login    {auth_mod.link_base( store , args.host )}/login#{token}"
+			f"   (one-time , logs you in as {name})" )
+	return lines
 
 
 def _normalize_manager( args ):
@@ -3303,6 +3400,9 @@ def run( args ):
 
 	Handler.cache   = cache
 	Handler.minimal = minimal
+	# Accounts : who may do what ( src/server/auth.py ). Both modes -- minimal
+	# mode's /refresh needs an account too.
+	Handler.auth    = auth_mod.AuthStore( args )
 
 	if minimal:
 		# Nothing to inject : the dashboard-backed routes are refused up front by
@@ -3322,6 +3422,8 @@ def run( args ):
 		print( f"version token  {base}/api/version   (userscript change poll)" )
 		print(  "minimal mode   ON       (--exists : no dashboard , no figure reports , "
 			"no background processing ; drop --exists for the full server)" )
+		for ln in _auth_banner( Handler.auth , args ):
+			print( ln )
 		httpd.serve_forever()
 		return
 
@@ -3450,6 +3552,7 @@ def run( args ):
 		header.append( f"watch          ON{sm}  ({bl} ; live progress at {base}/api/jobs)" )
 	else:
 		header.append( "watch          off       (pass --watch to auto-process newly added papers)" )
+	header.extend( _auth_banner( Handler.auth , args ) )
 
 	if tui_on:
 		tui = ServerTUI( worker , header , REQUEST_LOG )

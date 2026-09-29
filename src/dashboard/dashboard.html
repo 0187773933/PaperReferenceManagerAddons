@@ -128,7 +128,7 @@
     <a class="navlink" href="/errors" title="Items the pipeline couldn't fully process">⚠ Errors</a>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
     <button id="toggleSkipped" title="Show / hide the papers you've skipped">🚫 Show skipped</button>
-    <button id="refresh">↻ Rebuild</button>
+    <button id="refresh" class="needs-login">↻ Rebuild</button>
   </div>
   <div class="controls">
     <input type="search" id="q" placeholder='Search…  fMRI NOT EEG · "inner speech" OR aphasia · -review' autocomplete="off">
@@ -266,7 +266,7 @@ const COL_CODE = { key:"code", label:"Code", def:"desc",
 // Skip / hide control. Not sortable. Persisted server-side ( POST /api/skip ) so
 // skipped papers stay hidden across reloads ; the data is never deleted.
 const COL_SKIP = { key:null, label:"",
-  cell:r=>`<td class="skipcell"><button class="skipbtn${r.skipped?' skipped':''}" `+
+  cell:r=>`<td class="skipcell"><button class="skipbtn needs-login${r.skipped?' skipped':''}" `+
           `data-key="${esc(r.key)}" `+
           `title="${r.skipped?'Restore this paper to the list':'Hide this paper from the list'}">`+
           `${r.skipped?'Unskip':'Skip'}</button></td>` };
@@ -517,9 +517,8 @@ $("#view").addEventListener("click", async (e)=>{
   const willSkip = !b.classList.contains("skipped");
   b.disabled = true;
   try {
-    await fetch("/api/skip", { method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ key, skipped: willSkip }) });
+    const res = await postJSON("/api/skip", { key, skipped: willSkip });
+    if(!res.ok){ b.disabled=false; return; }
   } catch(err){ b.disabled=false; return; }
   b.disabled = false;
   const tr = b.closest("tr");
@@ -563,6 +562,13 @@ async function pollUntilReady(){
     $("#view").innerHTML = `<div class="build"><h2>Index build failed</h2><div>${esc(META.error||"")}</div></div>`;
     return;
   }
+  if(META.status === "idle" && !canEdit()){
+    // Never built , and an anonymous visitor doesn't get to start the build
+    // ( the server refused it ) -- so don't spin as if one were running.
+    $("#view").innerHTML = `<div class="build"><h2>No index yet</h2>`+
+      `<div>The library index hasn't been built on this server yet. Log in to build it.</div></div>`;
+    return;
+  }
   showBuilding(META.message);
   pollTimer = setTimeout(pollUntilReady, 2500);
 }
@@ -571,7 +577,9 @@ let timer=null;
 $("#q").addEventListener("input", ()=>{ clearTimeout(timer); timer=setTimeout(newSearch, 200); });
 $("#refresh").addEventListener("click", async ()=>{
   $("#refresh").disabled = true;
-  try { await fetch("/api/refresh",{method:"POST"}); } catch(e){}
+  let ok = false;
+  try { ok = (await postJSON("/api/refresh")).ok; } catch(e){}
+  if(!ok){ $("#refresh").disabled = false; return; }
   showBuilding();
   pollUntilReady();
   $("#refresh").disabled = false;
@@ -586,8 +594,9 @@ $("#toggleSkipped").addEventListener("click", ()=>{
 // Theme : the attribute is already set pre-paint by /static/boot.js ; this
 // labels the header button and persists a flip ( /static/common.js ).
 initTheme();
-
-pollUntilReady();
+// Who is looking ( /static/common.js ) -- first , so the index poll knows
+// whether an unbuilt index is one this visitor can start.
+initAuth().then(pollUntilReady);
 
 // ---- Live --watch processing banner ----------------------------------------
 // Independent of the index-build poll above. Hits /api/jobs on a steady timer:

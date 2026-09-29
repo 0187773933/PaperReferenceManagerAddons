@@ -44,3 +44,14 @@ github:
 # scope is enough ). Leave blank / omit to skip the OSF enrichment.
 osfio:
   api_key: "..."
+
+# The dashboard server's accounts ( ` prma auth ` , src/server/auth.py ). All
+# optional -- these are the defaults. Anonymous visitors can view but change
+# nothing ; logged-in users can do everything ; admins also manage accounts.
+auth:
+  enabled: true           # false : no accounts at all , everyone can do everything
+  session_days: 30        # how long a login lasts
+  login_link_hours: 72    # how long an unused one-time login link stays valid
+  api_key_days: 90        # default expiry for a new API key ( 0 = never )
+  secure_cookies: auto    # auto = Secure cookie when X-Forwarded-Proto is https ; true / false to force
+  public_url: ""          # e.g. https://prma.example.org -- where terminal-printed login links point

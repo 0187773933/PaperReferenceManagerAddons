@@ -105,7 +105,7 @@
     <a class="navlink" href="/datasets" title="The public data every paper stands on">⛁ Datasets</a>
     <button id="export-json" title="Download the candidates currently shown, as JSON">⇧ JSON</button>
     <button id="export-csv"  title="Download the candidates currently shown, one row each, as CSV">⇧ CSV</button>
-    <button id="rebuild" title="Re-screen the whole missing pool as it stands now ( minutes )">↻ Rebuild</button>
+    <button id="rebuild" class="needs-login" title="Re-screen the whole missing pool as it stands now ( minutes )">↻ Rebuild</button>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
   </div>
   <div class="controls" id="controls" hidden>
@@ -566,7 +566,7 @@ function renderBanner(){
     b.innerHTML = `<div class="msg"><b>Nothing has been screened yet.</b>`
       + `<span>Reading ~100,000 abstracts takes minutes, so it is never done on the way to serving this page. `
       + `It needs the dashboard index — if you have never run <code>prma reindex</code>, do that first.</span></div>`
-      + `<button id="build-now">Screen the pool now</button>`;
+      + `<button id="build-now" class="needs-login">Screen the pool now</button>`;
     $("#build-now").addEventListener("click", startRebuild);
     return;
   }
@@ -585,7 +585,7 @@ function renderBanner(){
     b.innerHTML = `<div class="msg"><b>Something this was screened from has moved since.</b>`
       + `<span>The library index, the <a href="/review">/review</a> it borrows dataset values from, or the screen itself `
       + `has changed since ${when(STATUS.generated)} — so what you are looking at is not what a run today would find.</span></div>`
-      + `<button id="rebuild-2">↻ Re-screen</button>`;
+      + `<button id="rebuild-2" class="needs-login">↻ Re-screen</button>`;
     $("#rebuild-2").addEventListener("click", startRebuild);
     return;
   }
@@ -665,8 +665,10 @@ async function startRebuild(){
   $("#rebuild").disabled = true;
   STATUS = Object.assign({}, STATUS, { building:true, stage:"starting", done:0, total:0 });
   renderBanner();
-  try { await fetch("/api/review-missing/rebuild", { method:"POST" }); }
+  let res;
+  try { res = await postJSON("/api/review-missing/rebuild"); }
   catch(e){ STATUS.building = false; STATUS.error = String(e); renderBanner(); return; }
+  if(!res.ok){ STATUS.building = false; $("#rebuild").disabled = false; renderBanner(); return; }
   if(!poll) poll = setInterval(pollStatus, 1500);
 }
 
@@ -675,6 +677,7 @@ $("#rebuild").addEventListener("click", startRebuild);
 /* Labels the header button and persists a flip ( /static/common.js ). The theme
    is one setting shared by every prma page. */
 initTheme();
+initAuth();
 
 /* ---- interaction --------------------------------------------------------- */
 document.addEventListener("click", e => {

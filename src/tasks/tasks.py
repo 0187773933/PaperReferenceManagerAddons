@@ -101,6 +101,11 @@ def server( args ):
 	from ..server.server import run
 	run( args )
 
+def auth( args ):
+	# Dashboard accounts , login links and API keys -- see src/server/auth.py.
+	from ..server.auth import cli
+	cli( args )
+
 def reindex( args ):
 	# Build ( or incrementally refresh ) the dashboard's own full-text index
 	# and persist it to disk. A running ` prma server ` picks the fresh index

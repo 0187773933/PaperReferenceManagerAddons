@@ -505,7 +505,8 @@ async function postState( payload ) {
 	try {
 		const r = await fetch( api( MODE , "state" ) , {
 			method: "POST" ,
-			headers: { "Content-Type": "application/json" } ,
+			headers: Object.assign( { "Content-Type": "application/json" } ,
+				ME.csrf ? { "X-CSRF-Token": ME.csrf } : {} ) ,
 			body: JSON.stringify( payload ) ,
 		} );
 		if ( !r.ok ) throw new Error( "HTTP " + r.status );
@@ -516,6 +517,27 @@ async function postState( payload ) {
 }
 function persistSelected( id , on )  { if ( SERVED ) postState( { kind: "selected" , id , on } ); else saveLocal(); }
 function persistSkipped( key , on )  { if ( SERVED ) postState( { kind: "skipped" , id: key , on } ); else saveLocal(); }
+
+/* Who is looking , when served. This page doesn't load /static/common.js ( it
+   has to work off disk ) , so it asks /api/me itself : an anonymous visitor
+   gets the picks as a read-only view -- the server refuses their writes anyway
+   ( src/server/auth.py ) -- and a logged-in one gets the CSRF token every write
+   has to carry. Off disk there is no server , and the picks are this browser's. */
+let ME = { role: "admin" , csrf: null };
+let VIEWONLY = false;
+async function loadMe() {
+	if ( !SERVED ) return;
+	try {
+		ME = await ( await fetch( "/api/me" , { cache: "no-store" } ) ).json();
+	} catch ( e ) { ME = { role: "anon" , csrf: null }; }
+	VIEWONLY = !( ME.role === "user" || ME.role === "admin" );
+	if ( VIEWONLY ) {
+		const nav = document.getElementById( "nav" );
+		nav.insertAdjacentHTML( "beforeend" , '<span class="navlink" title="Anonymous visitors can look but not pick or skip -- accounts log in with a one-time link from an admin">&#128065; View only</span>' );
+		const clr = document.getElementById( "sel-clear" );
+		if ( clr ) clr.classList.add( "hidden" );
+	}
+}
 
 async function loadState() {
 	if ( SERVED ) {
@@ -878,6 +900,7 @@ function toggleIn( set , value ) {
 }
 
 function toggleCard( card ) {
+	if ( VIEWONLY ) return;
 	/* Insertion order IS the pick order , and re-adding moves an id to the end ,
 	   so "Last pick" stays truthful. */
 	const id = card.dataset.id;
@@ -991,6 +1014,7 @@ function moveCurrent( delta ) {
 	setCurrent( vis.indexOf( curEl ) + delta );
 }
 function toggleSkip( paper ) {
+	if ( VIEWONLY ) return;
 	const key = paper.dataset.key;
 	if ( !key ) return;
 	const wasCurrent = paper.classList.contains( "current" );
@@ -1405,7 +1429,7 @@ window.addEventListener( "scroll" , () => {
 	measureGrid();               // column count + card height , before any placeholder
 	// This report's own curation , and ( on /images ) a read-only look at the
 	// other report's picks. Fetched together -- neither depends on the other.
-	await Promise.all( [ loadState() , loadXref() ] );
+	await Promise.all( [ loadMe() , loadState() , loadXref() ] );
 	restoreView();               // re-activate filters if we just auto-refreshed
 	paintXref();                 // flag the cross-referenced records first , so the
 	paintSelection();            // first apply() can filter on them

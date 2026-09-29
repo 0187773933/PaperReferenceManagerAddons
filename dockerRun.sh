@@ -31,11 +31,13 @@ IMAGE="${IMAGE:-prma-server}"
 CONTAINER="${CONTAINER:-prma-server}"
 
 # --- what to publish ---------------------------------------------------------
-# Loopback by default : the dashboard has no login of any kind , so it is not a
-# thing to hang off a public interface. Reach it from another machine over an
-# SSH tunnel ( ssh -N -L 9371:127.0.0.1:9371 user@thisbox ) rather than by
-# setting BIND_ADDR=0.0.0.0 , unless the box is already behind something that
-# authenticates.
+# Loopback by default. The dashboard has accounts ( ` prma auth ` ) : anonymous
+# visitors can only VIEW , and changing anything or making the server work
+# needs a login. Viewing is still the whole library , though -- and , unless an
+# admin switches it off on /account , the PDFs too. So before setting
+# BIND_ADDR=0.0.0.0 put it behind TLS ( a reverse proxy that sends
+# X-Forwarded-Proto: https , so the session cookie is marked Secure ) , or
+# reach it over an SSH tunnel ( ssh -N -L 9371:127.0.0.1:9371 user@thisbox ).
 BIND_ADDR="${BIND_ADDR:-127.0.0.1}"
 HOST_PORT="${HOST_PORT:-9371}"
 
@@ -51,6 +53,9 @@ HOST_PORT="${HOST_PORT:-9371}"
 #               up. rsync the main machine's output/ into DATA_DIR/output to
 #               bring the PDF-pipeline results ( OCR text , figure crops , md )
 #               over , since this image can't produce them ( see the Dockerfile ).
+#               EXCEPT output/auth/ : that is THIS box's accounts , sessions and
+#               API keys , so rsync with --exclude auth/ or the main machine's
+#               copy replaces them.
 # CONFIG_FILE : config/config.yaml -- gitignored upstream , so the clone has no
 #               copy and it has to come from here. Mounted read-only over just
 #               that one path , leaving the repo's own config/methods.py etc.
@@ -291,6 +296,8 @@ while [ "$WAITED" -lt 120 ] ; do
 	if http_ok "${URL}/api/version" ; then
 		say "up :: ${URL}/"
 		say "logs :: ./dockerRun.sh --logs"
+		say "accounts :: the first admin's login link is in the logs ( 'first login' ) ;"
+		say "            a fresh one any time : docker exec ${CONTAINER} prma auth link admin"
 		exit 0
 	fi
 	if [ -z "$( docker ps -q --filter "name=^/${CONTAINER}$" )" ] ; then

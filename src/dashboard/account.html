@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prma · account</title>
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { padding:18px; max-width:1000px; margin:0 auto; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:18px; }
+  section h2 { margin:0 0 4px; font-size:15px; }
+  section > p { margin:4px 0 12px; color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+  input[type=text], input[type=number], select {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 10px; font-size:13px;
+  }
+  input[type=number] { width:90px; }
+  input.secret { flex:1; min-width:260px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+  .shown { border:1px solid var(--accent); border-radius:8px; padding:10px 12px; margin:10px 0; }
+  .shown p { margin:0 0 6px; font-size:13px; }
+  .shown code { font-size:11px; word-break:break-all; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { text-align:left; color:var(--muted); font-weight:600; font-size:12px; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody td { padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tbody tr:last-child td { border-bottom:none; }
+  td.t { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  td.acts { white-space:nowrap; text-align:right; }
+  td.acts button { padding:4px 9px; font-size:12px; }
+  tr.off td { opacity:.55; }
+  .muted { color:var(--muted); }
+  .empty { color:var(--muted); padding:10px 0; }
+  label.switch { display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
+  label.switch input { margin-top:3px; }
+  code { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>prma · account</h1>
+    <div class="grow"></div>
+    <a class="navlink" href="/">← Dashboard</a>
+    <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
+  </div>
+</header>
+<main id="main"></main>
+<script src="/static/common.js"></script>
+<script>
+/* Your account and your API keys ; for admins , every account , every key , and
+   whether anonymous visitors may open paper content. The rules all live on the
+   server ( src/server/auth.py ) -- a key can't outrank its owner , a key can't
+   mint a key , the last admin can't be demoted -- this page only asks. */
+initTheme();
+
+const t = s => s ? new Date( s * 1000 ).toLocaleString( [] , { dateStyle:"medium" , timeStyle:"short" } ) : "—";
+const main = $( "#main" );
+let KEYS = [] , USERS = [] , ALLKEYS = [] , SETTINGS = {} , DEFAULT_DAYS = 90 , SHOWN = {};
+
+async function getJSON( url ){
+  const r = await fetch( url , { cache: "no-store" } );
+  return r.ok ? r.json() : null;
+}
+// Every write : POST , and say what went wrong in words rather than a status.
+async function call( url , body ){
+  let res , d = {};
+  try { res = await postJSON( url , body , { quiet: true } ); d = await res.json(); }
+  catch( e ){ toast( "The server isn't answering" ); return null; }
+  if( !res.ok || d.ok === false ){ toast( d.error || res.statusText ); return null; }
+  return d;
+}
+// A credential shown once : the secret , a copy button , and what to do with it.
+function shownBox( id , title , value , hint ){
+  return `<div class="shown"><p><b>${esc( title )}</b> — shown once ; copy it now.</p>` +
+    `<div class="row"><input class="secret" type="text" readonly value="${esc( value )}" onfocus="this.select()">` +
+    `<button data-copy="${esc( id )}">Copy</button><button data-dismiss="${esc( id )}">Done</button></div>` +
+    ( hint ? `<p class="muted">${hint}</p>` : "" ) + `</div>`;
+}
+const loginUrl = token => `${location.origin}/login#${token}`;
+
+async function load(){
+  const me = await initAuth();
+  if( !me.auth_enabled ){
+    main.innerHTML = `<section><h2>Accounts are off</h2><p>This server runs with <code>auth.enabled: false</code> ` +
+      `in config.yaml , so everyone who can reach it can do everything.</p></section>`;
+    return;
+  }
+  if( !canEdit() ){
+    main.innerHTML = `<section><h2>You're not logged in</h2><p>Anonymous visitors can look around but not change ` +
+      `anything. Accounts don't have passwords — an admin sends you a one-time login link.</p></section>`;
+    return;
+  }
+  const k = await getJSON( "/api/keys" ) || {};
+  KEYS = k.keys || []; DEFAULT_DAYS = k.default_days ?? 90;
+  if( me.role === "admin" ){
+    const [ u , ak , st ] = await Promise.all( [
+      getJSON( "/api/admin/users" ) , getJSON( "/api/admin/keys" ) , getJSON( "/api/admin/settings" ) ] );
+    USERS = ( u || {} ).users || []; ALLKEYS = ( ak || {} ).keys || []; SETTINGS = st || {};
+  }
+  render();
+}
+
+function render(){
+  const admin = ME.role === "admin";
+  const viaKey = ME.via === "key";
+  let h = `<section><h2>${esc( ME.user.name )}</h2>` +
+    `<p>${admin ? "Admin — you can do everything , including managing the other accounts." : "You can do everything except manage the other accounts."}` +
+    `${viaKey ? " ( You're using an API key — managing keys needs the browser session. )" : ""}</p>` +
+    `<div class="row"><button id="logout">Log out</button></div></section>`;
+
+  h += `<section><h2>Your API keys</h2>` +
+    `<p>For scripts and cron jobs : send <code>Authorization: Bearer &lt;key&gt;</code>. A key acts as you , ` +
+    `at the role it was made with — never more than your account has now. Revoking one stops it on the next request.</p>` +
+    `<div class="row"><input type="text" id="kname" placeholder="what it's for — e.g. cron" maxlength="64">` +
+    `<select id="krole"><option value="user">user</option>${admin ? `<option value="admin">admin</option>` : ""}</select>` +
+    `<label class="muted">expires in <input type="number" id="kdays" min="0" max="3650" value="${esc( DEFAULT_DAYS )}"> days ( 0 = never )</label>` +
+    `<button class="primary" id="kcreate">Create key</button></div>` +
+    ( SHOWN.key ? shownBox( "key" , `Key “${SHOWN.key.name}”` , SHOWN.key.token ,
+        `<code>curl -H 'Authorization: Bearer ${esc( SHOWN.key.token )}' ${esc( location.origin )}/api/me</code>` ) : "" ) +
+    keyTable( KEYS , false ) + `</section>`;
+
+  if( admin ){
+    h += `<section><h2>Anonymous visitors</h2>` +
+      `<p>Anyone who can reach this server can view it without logging in , but can't change anything. ` +
+      `Paper content — the PDFs , full text and figure crops — is often under copyright ; switch it off to show them metadata only.</p>` +
+      `<label class="switch"><input type="checkbox" id="anoncontent"${SETTINGS.anon_content ? " checked" : ""}>` +
+      `<span>Let anonymous visitors open paper content ( PDFs , md / full text , figures and the figure reports )</span></label></section>`;
+
+    h += `<section><h2>Accounts</h2>` +
+      `<p>There are no passwords : a new account gets a one-time login link , and so does anyone who lost their session. ` +
+      `A disabled account's keys stop working until it's enabled again.</p>` +
+      `<div class="row"><input type="text" id="uname" placeholder="name" maxlength="64">` +
+      `<select id="urole"><option value="user">user</option><option value="admin">admin</option></select>` +
+      `<button class="primary" id="ucreate">Add account</button></div>` +
+      ( SHOWN.link ? shownBox( "link" , `Login link for ${SHOWN.link.name}` , loginUrl( SHOWN.link.token ) ,
+          "Works once. Send it to them over something private." ) : "" ) +
+      userTable() + `</section>`;
+
+    h += `<section><h2>Every API key</h2><p>All accounts' keys. Revoke one you don't recognise.</p>` +
+      keyTable( ALLKEYS , true ) + `</section>`;
+  }
+  main.innerHTML = h;
+}
+
+function keyTable( keys , owners ){
+  if( !keys.length ) return `<div class="empty">No keys.</div>`;
+  return `<table><thead><tr><th>Name</th>${owners ? "<th>Owner</th>" : ""}<th>Role</th><th>Created</th>` +
+    `<th>Expires</th><th>Last used</th><th></th></tr></thead><tbody>` +
+    keys.map( k => `<tr${k.effective === "none" ? ` class="off"` : ""}><td>${esc( k.name )}</td>` +
+      ( owners ? `<td>${esc( k.owner || "?" )}</td>` : "" ) +
+      `<td>${esc( k.effective === k.role ? k.role : `${k.effective} ( asked for ${k.role} )` )}</td>` +
+      `<td class="t">${t( k.created_at )}</td><td class="t">${k.expires_at ? t( k.expires_at ) : "never"}</td>` +
+      `<td class="t">${t( k.last_used_at )}</td>` +
+      `<td class="acts"><button data-revoke="${esc( k.id )}" data-admin="${owners ? 1 : ""}">Revoke</button></td></tr>` ).join( "" ) +
+    `</tbody></table>`;
+}
+
+function userTable(){
+  if( !USERS.length ) return `<div class="empty">No accounts.</div>`;
+  return `<table><thead><tr><th>Name</th><th>Role</th><th>Last login</th><th>Keys</th><th></th></tr></thead><tbody>` +
+    USERS.map( u => `<tr${u.enabled ? "" : ` class="off"`}><td>${esc( u.name )}${u.id === ME.user.id ? ` <span class="muted">( you )</span>` : ""}` +
+      `${u.enabled ? "" : ` <span class="muted">— disabled</span>`}</td>` +
+      `<td><select data-role="${esc( u.id )}"><option value="user"${u.role === "user" ? " selected" : ""}>user</option>` +
+      `<option value="admin"${u.role === "admin" ? " selected" : ""}>admin</option></select></td>` +
+      `<td class="t">${t( u.last_login_at )}</td><td>${u.keys}</td>` +
+      `<td class="acts">${u.enabled ? `<button data-link="${esc( u.id )}">New login link</button> ` : ""}` +
+      `<button data-enable="${esc( u.id )}" data-on="${u.enabled ? "" : 1}">${u.enabled ? "Disable" : "Enable"}</button> ` +
+      `<button data-delete="${esc( u.id )}">Delete</button></td></tr>` ).join( "" ) +
+    `</tbody></table>`;
+}
+
+main.addEventListener( "click" , async e => {
+  const b = e.target.closest( "button" );
+  if( !b ) return;
+  if( b.id === "logout" ){
+    if( await call( "/api/logout" ) ) location.replace( "/" );
+    return;
+  }
+  if( b.dataset.copy ){
+    const inp = b.closest( ".shown" ).querySelector( "input" );
+    inp.select();
+    try { await navigator.clipboard.writeText( inp.value ); toast( "Copied" ); }
+    catch( err ){ toast( "Selected — press ⌘C / Ctrl+C to copy" ); }
+    return;
+  }
+  if( b.dataset.dismiss ){ delete SHOWN[ b.dataset.dismiss ]; render(); return; }
+  if( b.id === "kcreate" ){
+    const d = await call( "/api/keys" , { name: $( "#kname" ).value , role: $( "#krole" ).value ,
+      days: $( "#kdays" ).value } );
+    if( d ){ SHOWN.key = { name: d.key.name , token: d.token }; load(); }
+    return;
+  }
+  if( b.dataset.revoke ){
+    if( !confirm( "Revoke this key? Anything using it stops working on its next request." ) ) return;
+    if( await call( b.dataset.admin ? "/api/admin/keys/revoke" : "/api/keys/revoke" , { id: b.dataset.revoke } ) ){
+      toast( "Revoked" ); load();
+    }
+    return;
+  }
+  if( b.id === "ucreate" ){
+    const d = await call( "/api/admin/users" , { name: $( "#uname" ).value , role: $( "#urole" ).value } );
+    if( d ){ SHOWN.link = { name: d.user.name , token: d.token }; load(); }
+    return;
+  }
+  if( b.dataset.link ){
+    const d = await call( "/api/admin/users/link" , { id: b.dataset.link } );
+    if( d ){ SHOWN.link = { name: d.user.name , token: d.token }; render(); }
+    return;
+  }
+  if( b.dataset.enable ){
+    const on = !!b.dataset.on;
+    if( !on && !confirm( "Disable this account? They're logged out, and their API keys stop working until it's enabled again." ) ) return;
+    if( await call( "/api/admin/users/update" , { id: b.dataset.enable , enabled: on } ) ) load();
+    return;
+  }
+  if( b.dataset.delete ){
+    if( !confirm( "Delete this account, with its sessions, login links and API keys? This can't be undone." ) ) return;
+    if( await call( "/api/admin/users/delete" , { id: b.dataset.delete } ) ) load();
+  }
+} );
+
+main.addEventListener( "change" , async e => {
+  const el = e.target;
+  if( el.id === "anoncontent" ){
+    const d = await call( "/api/admin/settings" , { anon_content: el.checked } );
+    if( d ){ SETTINGS = d; toast( d.anon_content ? "Anonymous visitors can open paper content" : "Anonymous visitors see metadata only" ); }
+    else el.checked = !el.checked;
+    return;
+  }
+  if( el.dataset.role ){
+    const d = await call( "/api/admin/users/update" , { id: el.dataset.role , role: el.value } );
+    if( d ){
+      toast( `${d.user.name} is now ${d.user.role}` );
+      // Demoting yourself takes this page's admin half away with it.
+      if( d.user.id === ME.user.id ) location.reload(); else load();
+    } else load();
+  }
+} );
+
+load();
+</script>
+</body>
+</html>

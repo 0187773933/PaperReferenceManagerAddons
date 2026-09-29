@@ -292,7 +292,7 @@
     <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     <button id="autotag" title="Fill in modalities from the ` prma modalities ` stamp for every row that has none">⚡ Auto-tag</button>
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
-    <button id="refsbtn" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
+    <button id="refsbtn" class="needs-login" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
     <button id="importbtn" title="Import a CSV — merge into this list or replace it">⇩ Import CSV</button>
     <button id="exportbtn" title="Download the whole tier list as CSV">⇧ Export CSV</button>
     <button id="helpbtn" title="How this page works">?</button>
@@ -377,6 +377,9 @@ let dirty = false, saving = false, saveTimer = null;
 // false so a page that never reaches the server is an ordinary broken page
 // rather than a silently read-only one.
 let LOCKED = false;
+// What the SERVER says about the latch. LOCKED above is what this tab obeys :
+// the latch , or an anonymous visitor ( see setLocked ).
+let SERVER_LOCKED = false;
 
 // ---- chip colours ---------------------------------------------------------
 // A pastel wheel. Every modality and every tag gets one, so a row's chips are a
@@ -500,7 +503,15 @@ function reorderVocab(kind, what, onto, before){
 // it is what catches a tab that was already open when the lock went on.
 // ---------------------------------------------------------------------------
 function setLocked(on){
-  LOCKED = !!on;
+  // Anonymous visitors get the same read-only board a lock gives everyone --
+  // the server refuses their saves either way ( src/server/auth.py ) -- with
+  // the badge saying why.
+  SERVER_LOCKED = !!on;
+  LOCKED = SERVER_LOCKED || !canEdit();
+  $("#lockstate").textContent = SERVER_LOCKED ? "🔒 View only" : "🔒 View only — log in to edit";
+  $("#lockstate").title = SERVER_LOCKED
+    ? "This list is in view-only mode for everyone — nothing typed here is saved"
+    : "Anonymous visitors can look but not change anything — accounts log in with a one-time link from an admin";
   if(LOCKED) document.documentElement.dataset.locked = "1";
   else delete document.documentElement.dataset.locked;
   // The controls that CHANGE the list. Note who ISN'T here : Export, the filter,
@@ -516,14 +527,13 @@ function setLocked(on){
 // letting a click land on nothing.
 function guard(){
   if(!LOCKED) return false;
+  if(!SERVER_LOCKED){ toast("View only — log in to edit this list", 4000); return true; }
   toast("View only — this list is locked for everyone", 4000);
   return true;
 }
 async function setLock(on){
   try {
-    const r = await (await fetch("/api/tiers/lock", { method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ locked: !!on }) })).json();
+    const r = await (await postJSON("/api/tiers/lock", { locked: !!on }, { quiet:true })).json();
     if(!r || !r.ok){ toast("Could not change the lock"); return; }
     REV = r.rev;
     setLocked(r.locked); renderAll();
@@ -553,10 +563,21 @@ async function save(){
   if(saving){ saveTimer = setTimeout(save, 400); return; }
   saving = true;
   try {
-    const res = await fetch("/api/tiers", { method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ doc: DOC }) });
+    const res = await postJSON("/api/tiers", { doc: DOC }, { quiet:true });
     const r = await res.json();
+    // 401 : the login expired ( or was revoked ) while this tab had the list
+    // open ; 403 + csrf : it was replaced in another tab. Nothing typed here is
+    // lost -- the draft is kept and offered back once you're logged in again.
+    if(res.status === 401 || (res.status === 403 && r && r.csrf)){
+      dirty = false; saving = false;
+      writeDraft();
+      if(res.status === 401) authExpired();
+      setLocked(SERVER_LOCKED); renderAll();
+      toast(res.status === 401
+        ? "Your login has expired — log in again ; your unsaved changes are kept in this browser and offered back"
+        : "Your login changed in another tab — reload the page ; your unsaved changes are kept in this browser", 12000);
+      return;
+    }
     // 403 : the list was locked while this tab had it open. Retrying would never
     // work, so take the lock instead and put the server's copy back on screen --
     // what's in this browser is an edit that was never allowed.
@@ -660,6 +681,9 @@ function docSig(d){
 // Called once, after the first load. A draft that matches what came back was
 // saved after all ( the beacon below landed ) and is dropped without a word.
 function offerDraft(){
+  // Not to an anonymous visitor : they couldn't save it , and it stays in this
+  // browser until someone logged in opens the list here.
+  if(!canEdit()) return;
   const d = readDraft();
   if(!d || !d.doc || !d.doc.tiers) return;
   if(docSig(d.doc) === docSig(DOC)){ clearDraft(); return; }
@@ -699,7 +723,9 @@ async function pollRev(){
     // The lock first, and regardless of the rev / dirty checks below : a list
     // that just went view-only has to stop taking edits in THIS tab now, not
     // whenever it next happens to be safe to reload.
-    if(d && typeof d.locked === "boolean" && d.locked !== LOCKED){
+    if(d && typeof d.locked === "boolean" && d.locked !== SERVER_LOCKED && !canEdit()){
+      setLocked(d.locked);            // only the badge changes for an anonymous visitor
+    } else if(d && typeof d.locked === "boolean" && d.locked !== SERVER_LOCKED){
       setLocked(d.locked); renderAll();
       toast(d.locked ? "🔒 This list was just locked — view only"
                      : "🔓 This list was just unlocked — you can edit again", 6000);
@@ -1260,8 +1286,7 @@ async function parseRefs(body, type, label){
   toast(`Reading ${label}…`, 20000);
   let d;
   try {
-    d = await (await fetch("/api/refs/parse", { method:"POST",
-      headers:{ "Content-Type": type }, body })).json();
+    d = await (await postJSON("/api/refs/parse", body, { type })).json();
   } catch(e){ toast("Could not read that ( offline? )", 4000); return; }
   if(!d || !d.ok){ toast(`Could not read that — ${esc((d&&d.error)||"no answer from the server")}`, 6000); return; }
   if(!(d.refs||[]).length){ toast(`No references found in ${label}`, 4000); return; }
@@ -1282,7 +1307,7 @@ document.addEventListener("keydown", e=>{ if(e.key === "e" || e.key === "E") edi
 document.addEventListener("keyup",   e=>{ if(e.key === "e" || e.key === "E") editHeld = false; }, true);
 window.addEventListener("blur", ()=>{ editHeld = false; });
 $("#refsbtn").addEventListener("click", ()=>{
-  if(editHeld){ editHeld = false; setLock(!LOCKED); return; }
+  if(editHeld){ editHeld = false; setLock(!SERVER_LOCKED); return; }
   if(guard()) return;
   sheet(`
     <h3>Import a reference list</h3>
@@ -2102,8 +2127,13 @@ window.addEventListener("beforeunload", e=>{
   writeDraft();
   let sent = false;
   try {
-    sent = navigator.sendBeacon("/api/tiers",
-      new Blob([ JSON.stringify({ doc: DOC }) ], { type:"application/json" }));
+    // keepalive has the beacon's 64 KB budget ; past it , the "are you sure"
+    // below is what's left.
+    const body = JSON.stringify({ doc: DOC });
+    if(new Blob([ body ]).size < 64000){
+      postJSON("/api/tiers", body, { keepalive:true, quiet:true }).catch(()=>{});
+      sent = true;
+    }
   } catch(err){}
   if(!sent){ e.preventDefault(); e.returnValue = ""; }
 });
@@ -2387,7 +2417,8 @@ labelMode();
 // restart comes back by itself, and whatever draft this browser is holding is
 // offered as soon as it does.
 function boot(){
-  loadDoc().then(()=>{
+  // Who is looking first : setLocked needs to know whether this is an account.
+  initAuth().then(loadDoc).then(()=>{
     pollRev();
     offerDraft();     // anything the last session couldn't get to the server
   }).catch(()=>{
