@@ -791,16 +791,61 @@ class PaperMeta:
 		self._mods   = {}      # paper key -> ( mtime , used[] , inferred , stale )
 		self._lib    = None    # paper key -> library row , rebuilt when the index
 		self._lib_at = None    #              is ( keyed on dash.built_at )
+		self._alias  = {}      # lowercased key / DOI -> library key
+		self._titles = {}      # _title_key( title ) -> library key ( None = ambiguous )
 
 	def _lib_index( self ):
 		"""key -> library row , off the dashboard's in-memory pool. Rebuilt only
-		when the index itself was rebuilt."""
+		when the index itself was rebuilt -- and the alias tables _resolve reads
+		along with it."""
 		built = getattr( self.dash , "built_at" , None )
 		if self._lib is None or self._lib_at != built:
 			rows = getattr( self.dash , "library" , None ) or []
 			self._lib    = { r.get( "key" ) : r for r in rows if r.get( "key" ) }
+			self._alias , self._titles = {} , {}
+			for key , r in self._lib.items():
+				self._alias.setdefault( key.lower() , key )
+				if r.get( "doi" ):
+					self._alias.setdefault( str( r[ "doi" ] ).lower() , key )
+				t = self._title_key( r.get( "title" ) )
+				if len( t ) >= self.MIN_TITLE:
+					self._titles[ t ] = None if t in self._titles else key
 			self._lib_at = built
 		return self._lib
+
+	# A title shorter than this ( as _title_key has it ) is too generic to name
+	# one paper.
+	MIN_TITLE = 20
+
+	@staticmethod
+	def _title_key( title ):
+		"""A title with case , punctuation AND spacing gone : a sheet typed by hand
+		has 'Multi modal' where the library has 'Multimodal'."""
+		return utils.normalize_title( str( title or "" ) ).replace( " " , "" )
+
+	def _resolve( self , key , title=None ):
+		"""The library key a board row's key stands for , or None. A board row
+		keeps whatever key it arrived with , and an imported sheet spells them its
+		own way : DOIs lowercased ( '10.48550/arxiv…' for the library's
+		'10.48550/arXiv…' -- DOIs are case-insensitive , the key lookup isn't ) ,
+		'zotero:ABCD1234' for the library's 'nodoi-zotero-ABCD1234'. Last resort ,
+		for a key that carries no DOI at all : the row's title , when exactly one
+		library paper has it."""
+		lib = self._lib_index()
+		if key in lib:
+			return key
+		k = key.strip()
+		if k.lower().startswith( "zotero:" ):
+			hit = self._alias.get( ( "nodoi-zotero-" + k[ 7: ].strip() ).lower() )
+			if hit:
+				return hit
+		doi = utils.normalize_doi( k )
+		hit = self._alias.get( ( doi or k ).lower() )
+		if hit:
+			return hit
+		if title and not doi:
+			return self._titles.get( self._title_key( title ) )
+		return None
 
 	def _modalities( self , key ):
 		"""( used , inferred , stale ) for one paper from the ` prma modalities `
@@ -836,19 +881,29 @@ class PaperMeta:
 		self._mods[ key ] = ( mtime , used , inferred , stale )
 		return used , inferred , stale
 
-	def meta( self , keys , want_mods=False , want_links=False ):
+	def meta( self , keys , want_mods=False , want_links=False , titles=None ):
 		"""What a page needs to draw a row it only knows the KEY of : the library
 		identity ( title / DOI / year ) , which links exist for it , and
 		optionally the modality stamp and the code / data links. Keys that aren't
 		library papers come back with in_library=false and nothing else -- the
-		page already holds their title / DOI from the search hit that added them."""
+		page already holds their title / DOI from the search hit that added them.
+
+		A key that only NAMES a library paper ( see _resolve ; `titles` is
+		key -> the row's title , for the keys with no DOI in them ) answers as
+		that paper , under the key it was asked by , with "key" saying the
+		library's own -- which the board adopts , so every other surface that
+		joins on the key finds the paper too."""
 		lib , out = self._lib_index() , {}
-		for key in ( keys or [] )[ :500 ]:
-			if not isinstance( key , str ) or not key:
+		titles = titles if isinstance( titles , dict ) else {}
+		for asked in ( keys or [] )[ :500 ]:
+			if not isinstance( asked , str ) or not asked:
 				continue
-			row   = lib.get( key ) or {}
+			key   = self._resolve( asked , titles.get( asked ) )
+			row   = ( lib.get( key ) or {} ) if key else {}
+			key   = key or asked
 			entry = {
 				"in_library": bool( row ) ,
+				"key":        key if row else "" ,
 				"title":      row.get( "title" ) or "" ,
 				"doi":        row.get( "doi" ) or "" ,
 				"year":       row.get( "year" ) ,
@@ -883,7 +938,7 @@ class PaperMeta:
 				entry[ "data" ]  = row.get( "dataset_links" ) or []
 				entry[ "names" ] = [ { "name": n , "url": ds_vocab.home( n ) }
 					for n in ( row.get( "dataset_names" ) or [] ) ]
-			out[ key ] = entry
+			out[ asked ] = entry
 		return out
 
 
@@ -3201,7 +3256,7 @@ class Handler( BaseHTTPRequestHandler ):
 
 		if self.path in ( "/api/paper-meta" , "/api/tiers/meta" ):
 			# Per-row lookup for the board pages :
-			# { "keys": [ ... ] , "mods": bool , "links": bool }.
+			# { "keys": [ ... ] , "mods": bool , "links": bool , "titles": { key: title } }.
 			# POST rather than GET because the key list is a few hundred DOIs long.
 			# ( /api/tiers/meta is the original spelling , kept working. )
 			try:
@@ -3214,7 +3269,8 @@ class Handler( BaseHTTPRequestHandler ):
 					return
 				self._send_json( 200 , { "ok": True , "meta": self.papermeta.meta(
 					keys , want_mods=bool( data.get( "mods" ) ) ,
-					want_links=bool( data.get( "links" ) ) ) } )
+					want_links=bool( data.get( "links" ) ) ,
+					titles=data.get( "titles" ) ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return

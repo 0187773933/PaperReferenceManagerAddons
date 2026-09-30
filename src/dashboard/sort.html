@@ -869,6 +869,7 @@ async function pollRev(){
       }
     }
     if(backfillOwed) backfillPending();
+    if(adoptOwed) adoptLibraryKeys();
     if(recentOpen()) refreshRecent();
   } catch(e){}
   setTimeout(pollRev, 6000);
@@ -877,20 +878,28 @@ async function pollRev(){
 // for everything a new row is filled in from -- the modality stamp, and the code
 // / data links ( see prefill ) -- and ask again even for a key already here,
 // since those are the parts a scan changes.
+//
+// A row whose key only NAMES a library paper -- an imported sheet's lowercased
+// DOI, its zotero:ABCD1234, a title-only row -- is answered as that paper, with
+// m.key the library's own key ( see adoptLibraryKeys ). The titles go along for
+// the keys that have no DOI in them : a title is all the server can match those by.
 async function fetchMeta(keys, fresh){
   keys = Array.from(new Set(keys.filter(k=>k && (fresh || !META[k]))));
-  if(!keys.length) return {};
   const got = {};
+  const rows = new Map(DOC.items.concat(staged()).map(it=>[ it.key, it ]));
   for(let i=0; i<keys.length; i+=60){
+    const part = keys.slice(i,i+60), titles = {};
+    part.forEach(k=>{ const it = rows.get(k); if(it && it.title && !/^10\./.test(k)) titles[k] = it.title; });
     try {
       const r = await (await fetch("/api/paper-meta", { method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ keys: keys.slice(i,i+60), mods: !!fresh, links: !!fresh }) })).json();
+        body: JSON.stringify({ keys: part, mods: !!fresh, links: !!fresh, titles }) })).json();
       Object.assign(META, r.meta || {});
       Object.assign(got,  r.meta || {});
     } catch(e){}
   }
-  repaintLinks();
+  if(keys.length) repaintLinks();
+  adoptLibraryKeys();
   return got;
 }
 
@@ -960,17 +969,21 @@ function renderColHead(){
     shownCols().map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
     (LOCKED?"":`<div></div>`);
 }
+const libKey = it => { const m = META[it.key]; return (m && m.in_library && m.key) || it.key; };
 function rowLinks(it){
   const m = META[it.key] || {};
   const doi = it.doi || m.doi || "", wid = it.wid || m.wid || "";
   // DOI + Proxy are the same two anchors every prma surface offers
   // ( /static/common.js ) ; the rest is what a board row can additionally reach.
   const out = doiLinks(doi);
-  if(m.pdf)       out.push(`<a href="/pdf?key=${encodeURIComponent(it.key)}" target="_blank">PDF</a>`);
+  // The library's own key, which a row spelled some other way hasn't adopted
+  // yet -- or can't, on a view-only board ( see adoptLibraryKeys ).
+  const lk = libKey(it);
+  if(m.pdf)       out.push(`<a href="/pdf?key=${encodeURIComponent(lk)}" target="_blank">PDF</a>`);
   else if(it.pdf) out.push(`<a href="${esc(it.pdf)}" target="_blank" rel="noopener">PDF</a>`);
   if(wid)       out.push(`<a href="https://openalex.org/${esc(wid)}" target="_blank" rel="noopener">OA</a>`);
   if(m.montage) out.push(`<a href="${esc(m.montage)}" target="_blank" title="Figure montage">Figures</a>`);
-  if(m.has_md)  out.push(`<a href="${mdHref(it.key)}" class="mdlink" target="_blank" rel="noopener" title="The rendered Markdown, with figures">MD</a>`);
+  if(m.has_md)  out.push(`<a href="${mdHref(lk)}" class="mdlink" target="_blank" rel="noopener" title="The rendered Markdown, with figures">MD</a>`);
   if(m.methods) out.push(`<a href="${esc(m.methods)}" target="_blank" title="The extracted Methods section">Methods</a>`);
   return out.join(" ");
 }
@@ -1818,6 +1831,40 @@ async function backfillPending(){
     if(changed){ markDirty(); renderPaintbar(); renderCounts(); }
     repaintLinks();
   } finally { backfilling = false; }
+}
+// A row keeps the key it arrived with, and an imported sheet spells keys its own
+// way -- '10.48550/arxiv…' for the library's '10.48550/arXiv…', 'zotero:ABCD1234'
+// for 'nodoi-zotero-ABCD1234'. The paper-meta lookup sees through that ( m.key is
+// the library's own key ), and here the row takes that key for good : /pdf, /md,
+// /code, /datasets and /review all find a paper by its exact key, so a row still
+// spelled the sheet's way is a paper none of them can see. Runs after every
+// lookup ( fetchMeta ). Never over another row that already has the key -- that
+// is a duplicate for you to settle, not two rows to fold together -- and never
+// while a dialog is up : like backfillPending, `adoptOwed` has pollRev try again
+// once it's closed.
+let adoptOwed = false;
+function adoptLibraryKeys(){
+  if(LOCKED) return;
+  if($("#overlay").classList.contains("show")){ adoptOwed = true; return; }
+  adoptOwed = false;
+  const all = DOC.items.concat(staged()), taken = new Set(all.map(it=>it.key));
+  let n = 0;
+  all.forEach(it=>{
+    const m = META[it.key], k = m && m.in_library && m.key;
+    if(!k || k === it.key || taken.has(k)) return;
+    const old = it.key;
+    taken.delete(old); taken.add(k);
+    META[k] = m;
+    if(SEL.has(old)){ SEL.delete(old); SEL.add(k); }
+    if(SOFF.has(old)){ SOFF.delete(old); SOFF.add(k); }
+    if(old in STAGEHOW){ STAGEHOW[k] = STAGEHOW[old]; delete STAGEHOW[old]; }
+    if(m.doi && (!it.doi || lc(it.doi) === lc(m.doi))) it.doi = m.doi;
+    it.key = k;
+    n++;
+  });
+  if(!n) return;
+  markDirty(); renderAll();
+  toast(`Matched ${n} row(s) to their paper in your library`, 5000);
 }
 function removeItem(key){
   if(guard()) return;
@@ -2757,7 +2804,7 @@ function toCSV(){
     const m = META[it.key] || {};
     lines.push([ i+1, it.key, it.title||m.title||"", it.year||m.year||"", (it.tags||[]).join("; ") ]
       .concat(DOC.columns.map(c=>(it.fields||{})[c.id]||""))
-      .concat([ m.has_md ? fileStem(it.key)+".md" : "" ])
+      .concat([ m.has_md ? fileStem(libKey(it))+".md" : "" ])
       .map(csvCell).join(","));
   });
   return lines.join("\n");
@@ -2826,7 +2873,10 @@ function docFromCSV(rows, merge){
     const fields = {};
     extra.forEach(x=>{ fields[x.id] = cell(x.i); });
     const year = parseInt(cell(idx.year), 10);
-    const existing = doc.items.find(x=>x.key===key);
+    // DOIs are case-insensitive, and a sheet's zotero:ABCD1234 is the row that
+    // took the library's nodoi-zotero-ABCD1234 ( see adoptLibraryKeys ).
+    const same = lc(key), alias = same.replace(/^zotero:/, "nodoi-zotero-");
+    const existing = doc.items.find(x=>lc(x.key)===same || lc(x.key)===alias);
     if(existing){
       if(title) existing.title = title;
       if(!isNaN(year)) existing.year = year;
@@ -3053,12 +3103,16 @@ function mergeSheet(src, rows, how){
   // A key that IS a DOI answers as a DOI too : otherwise a sheet row carrying
   // only that DOI would mint a second row under the same key, and the server
   // keeps the first of two -- which, in the sheet's order, could be the new one.
+  // And a row that took the library's key for a sheet's zotero:ABCD1234 ( see
+  // adoptLibraryKeys ) still answers to the sheet's spelling.
   const known = new Map();
   const index = it=>{
     const put = k => { if(k && !known.has(k)) known.set(k, it); };
     put(lc(it.key));
     if(it.doi) put("doi:"+lc(it.doi));
     if(/^10\./.test(it.key||"")) put("doi:"+lc(it.key));
+    const z = /^nodoi-zotero-(.+)$/i.exec(it.key||"");
+    if(z) put(lc("zotero:"+z[1]));
     const t = ntitle(it.title);
     if(t) put("t:"+t);
   };
