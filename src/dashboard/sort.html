@@ -2458,14 +2458,26 @@ function applyNumber(input){
   const want = parseInt(String(input.value).replace(/[^0-9]/g,""), 10);
   if(isNaN(want) || want === f.idx+1){ input.value = f.idx+1; return; }
   const to = Math.max(0, Math.min(want-1, DOC.items.length-1));
+  const y  = window.scrollY;
   moveTo(f.it.key, to > f.idx ? to+1 : to);
   const again = rowEl(f.it.key);
-  if(again){
-    const el = again.querySelector(".numin");
-    if(el){ el.focus(); el.select(); }
-    again.classList.add("flash");
-    again.scrollIntoView({ block:"nearest" });
+  if(!again) return;
+  const el = again.querySelector(".numin");
+  again.classList.add("flash");
+  // Chasing the row is only right in YOUR order, where it really did go to the
+  // number you typed. In a lens it stays where the SORT puts it -- and among
+  // rows the sort ties it shifts a little -- so scrolling after it would drag
+  // you somewhere you never asked to go. Same rule as the shelf above : it
+  // flashes where it is, and the page doesn't chase it. ( The scroll is pinned
+  // rather than left alone because re-rendering the board restores the caret,
+  // and a plain focus() scrolls. )
+  if(VIEW){
+    window.scrollTo(0, y);
+    if(el){ el.focus({ preventScroll:true }); el.select(); }
+    return;
   }
+  if(el){ el.focus(); el.select(); }
+  again.scrollIntoView({ block:"nearest" });
 }
 $("#board").addEventListener("keydown", e=>{
   if(!e.target.matches(".numin")) return;
