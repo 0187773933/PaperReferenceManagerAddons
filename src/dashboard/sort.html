@@ -341,6 +341,27 @@
   #toast.show { display:flex; }
   #toast button { padding:3px 9px; font-size:12px; }
 
+  /* ---- back to the top ----------------------------------------------------
+     Five hundred rows is a long way up with only a scrollbar. The button owns
+     the bottom-right corner while it is up, because it is the one that STAYS ;
+     the toast is the passer-by, so it steps over it and takes the corner back
+     the moment the button goes away. */
+  #totop {
+    position:fixed; right:18px; bottom:18px; z-index:80; display:none;
+    background:var(--panel); color:var(--fg); border:1px solid var(--line);
+    border-radius:999px; padding:8px 14px; font-size:13px; cursor:pointer;
+    box-shadow:0 2px 10px rgba(0,0,0,.18);
+  }
+  #totop.show { display:block; }
+  #totop:hover { border-color:var(--accent); }
+  body.hasfab #toast { bottom:72px; }
+
+  /* Looking at the list in someone else's order ( see VIEW ). There is no
+     honest place a drop could land -- the row would not stay where you let go
+     of it -- so the grips go, and the number box is how you move a paper from
+     inside a lens. */
+  :root[data-view] .numc .grip { display:none !important; }
+
   /* ---- view-only mode ------------------------------------------------------
      The latch is the SERVER's ( src/db/boardlock.py ) and the same answer for
      every browser, so this is what the board looks like to EVERYONE while it is
@@ -400,6 +421,8 @@
       <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     </nav>
     <span class="paintnote" id="paintnote"></span>
+    <button id="undoact" title="Nothing to undo yet" disabled>↶</button>
+    <button id="redoact" title="Nothing to redo" disabled>↷</button>
     <button id="helpbtn" title="How this page works">?</button>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
     <span id="lockstate" title="This board is in view-only mode for everyone — nothing typed here is saved">🔒 View only</span>
@@ -418,8 +441,8 @@
     <button id="importbtn" title="Import a CSV file, or a Google Sheet by its link">⇩ Import CSV / Sheet</button>
     <button id="pulltiers" title="Copy every paper from the /tiers board into this one">⇄ Pull from Tiers</button>
     <button id="exportbtn" title="Download the whole board as CSV">⇧ Export CSV</button>
-    <select id="orderby" title="Reorder the whole list once — the order stays yours afterwards">
-      <option value="">⇅ Order by…</option>
+    <select id="orderby" title="Look at the list stacked another way. The board itself never changes — every row keeps the number you gave it, and ⇅ manual puts the view back.">
+      <option value="">⇅ manual — your own order</option>
       <option value="tags">tags ( group them )</option>
       <option value="year">year, newest first</option>
       <option value="year_asc">year, oldest first</option>
@@ -427,6 +450,7 @@
       <option value="title">title A–Z</option>
       <option value="added">when added</option>
     </select>
+    <button id="keeporder" style="display:none" title="Make the order you are looking at your own order — this is the one that changes the board">⇩ Keep this order</button>
     <button id="automove" title="Off: tagging never moves a row. On: a row jumps to sit with the others sharing its tags.">⇥ Auto-move: off</button>
     <button id="autotag" title="Tag every untagged row from its ` prma modalities ` stamp">⚡ Auto-tag</button>
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
@@ -483,6 +507,7 @@
 </main>
 <div id="acpop"></div>
 <div id="overlay"><div class="sheet" id="sheet"></div></div>
+<button id="totop" title="Back to the top of the list">↑ Top</button>
 <div id="toast"></div>
 <!-- $ , $$ , esc , fmt , PROXY , mdHref() , doiLinks() , codeLinks() ,
      initTheme() , trackHeadHeight() -- the helpers every prma page used to write out for itself.
@@ -625,7 +650,7 @@ function setLocked(on){
   // filter, the search, the theme -- reading is the whole point of the mode --
   // and 📋 Import refs, which is the way back out ( see below ) and can't be
   // disabled because a disabled button fires no clicks at all.
-  $$("#orderby,#automove,#autotag,#addcol,#importbtn,#pulltiers,#addwhere")
+  $$("#orderby,#keeporder,#automove,#autotag,#addcol,#importbtn,#pulltiers,#addwhere")
     .forEach(el=>{ el.disabled = LOCKED; });
   $("#refsbtn").title = LOCKED
     ? "This board is in view-only mode — nothing can be imported into it right now"
@@ -650,12 +675,99 @@ async function setLock(on){
   } catch(e){ toast("Could not change the lock ( server not answering? )"); }
 }
 
+// ---- undo / redo ----------------------------------------------------------
+// A stack of whole documents, in memory only. There are three nets under this
+// board and they catch different things : the draft in localStorage below is
+// crash recovery and keeps ONE copy ; output/cache/sort-history/ on the server
+// keeps the last forty saves ; this is the one that steps BACKWARDS while you
+// work. It stays in the heap and dies with the tab -- twenty-five copies of a
+// half-megabyte board would blow the localStorage quota many times over.
+//
+// Steps are COALESCED : markDirty fires on every keystroke, so a burst of
+// typing inside 600 ms is one step rather than one per letter.
+const HISTMAX = 25;
+const cloneDoc = d => JSON.parse(JSON.stringify(d));
+let UNDO = [], REDO = [], HBASE = null, histTimer = null, applyingHistory = false;
+function paintHistory(){
+  const u = $("#undoact"), r = $("#redoact");
+  if(!u || !r) return;
+  u.disabled = !UNDO.length;
+  r.disabled = !REDO.length;
+  u.title = UNDO.length ? `Undo — ${UNDO.length} step(s) back ( ⌘Z )` : "Nothing to undo yet";
+  r.title = REDO.length ? `Redo — ${REDO.length} step(s) forward ( ⇧⌘Z )` : "Nothing to redo";
+}
+// HBASE is the board as it stood when the step now open began. Until the timer
+// fires nothing is on the stack, so a burst of typing costs one clone, not one
+// per keystroke.
+function pushHistory(){
+  if(applyingHistory || !HBASE) return;
+  clearTimeout(histTimer);
+  histTimer = setTimeout(flushHistory, 600);
+}
+// Close the step that is open. The timer calls it ; so do undo and redo, so an
+// edit still inside the coalescing window is on the stack before we step off it.
+function flushHistory(){
+  if(!histTimer) return;
+  clearTimeout(histTimer); histTimer = null;
+  UNDO.push(HBASE);
+  if(UNDO.length > HISTMAX) UNDO.shift();
+  REDO.length = 0;
+  HBASE = cloneDoc(DOC);
+  paintHistory();
+}
+function applyHistory(doc){
+  applyingHistory = true;
+  DOC = doc;
+  // The same three repairs loadDoc makes -- a step can come from a draft or an
+  // import, and those are the fields an older document may be missing.
+  if(!DOC.options) DOC.options = { auto_move:false };
+  if(!Array.isArray(DOC.staging)) DOC.staging = [];
+  DOC.items.forEach(sortTags);
+  DOC.staging.forEach(sortTags);
+  renderAll();
+  markDirty();                  // it saves ; pushHistory sees the flag and skips
+  applyingHistory = false;
+  paintHistory();
+}
+function undo(){
+  if(guard()) return;
+  flushHistory();
+  if(!UNDO.length){ toast("Nothing to undo"); return; }
+  REDO.push(cloneDoc(DOC));
+  if(REDO.length > HISTMAX) REDO.shift();
+  const doc = UNDO.pop();
+  HBASE = cloneDoc(doc);
+  applyHistory(doc);
+}
+function redo(){
+  if(guard()) return;
+  flushHistory();
+  if(!REDO.length){ toast("Nothing to redo"); return; }
+  UNDO.push(cloneDoc(DOC));
+  if(UNDO.length > HISTMAX) UNDO.shift();
+  const doc = REDO.pop();
+  HBASE = cloneDoc(doc);
+  applyHistory(doc);
+}
+// The document underneath was replaced -- a first load, another tab's save, or
+// a lock throwing this tab's copy away. Stepping back into what we were holding
+// would push a board the server has already moved past over someone else's work.
+function resetHistory(){
+  clearTimeout(histTimer); histTimer = null;
+  UNDO.length = REDO.length = 0;
+  HBASE = cloneDoc(DOC);
+  paintHistory();
+}
+$("#undoact").addEventListener("click", undo);
+$("#redoact").addEventListener("click", redo);
+
 // ---- load / save ----------------------------------------------------------
 function markDirty(){
   // The backstop. Every change to the document comes through here, so a locked
   // board can't be saved even if something slipped past the controls above --
   // and you hear about it instead of watching an edit quietly not stick.
   if(guard()) return;
+  pushHistory();
   dirty = true;
   $("#savestate").textContent = "unsaved…";
   $("#savestate").classList.add("dirty");
@@ -724,6 +836,7 @@ async function loadDoc(){
   $("#savestate").classList.remove("dirty");
   $("#savestate").textContent = DOC.updated_at ? ("saved " + DOC.updated_at.replace("T"," ").slice(0,16)) : "empty board";
   STAGEHOW = Object.assign(readHow(), STAGEHOW);
+  resetHistory();      // whatever just landed is the new zero to step back to
   renderAll();
   pruneHow();
   fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
@@ -996,6 +1109,49 @@ function tagsCell(it){
       `<span class="x" data-drop="${esc(v)}" title="Remove">×</span></span>`).join("")+
     `<input class="chipin" placeholder="+" autocomplete="off"></div>`;
 }
+// ---- the order you are LOOKING at -----------------------------------------
+// DOC.items is ALWAYS the order you put the papers in : dragging a row and
+// typing into a number box are the only things that ever change it. "Order by"
+// is a lens over a COPY, so a sort can never cost you an ordering -- the number
+// on every row stays your own position however the list is stacked, and the
+// number boxes still move papers in YOUR order from inside a sorted view.
+// ⇩ Keep this order is the one control here that touches the document.
+let VIEW = "";
+const BY = {
+  year:     (a,b)=>(b.year||0)-(a.year||0),
+  year_asc: (a,b)=>(a.year||9999)-(b.year||9999),
+  cites:    (a,b)=>((META[b.key]||{}).cited_by||0)-((META[a.key]||{}).cited_by||0),
+  title:    (a,b)=>lc(a.title||a.key).localeCompare(lc(b.title||b.key)),
+  added:    (a,b)=>String(a.added_at||"").localeCompare(String(b.added_at||"")),
+};
+function viewItems(){
+  if(!VIEW || !DOC.items.length) return DOC.items;
+  if(VIEW === "tags"){
+    // Group papers carrying the same tags together, keeping each group in the
+    // order you already put it in, and groups in the order they first appear.
+    const order = [], groups = new Map();
+    DOC.items.forEach(it=>{
+      const sig = tagSig(it) || "~";     // untagged sorts last
+      if(!groups.has(sig)){ groups.set(sig, []); order.push(sig); }
+      groups.get(sig).push(it);
+    });
+    order.sort((a,b)=> (a==="~") - (b==="~") );
+    return order.flatMap(sig=>groups.get(sig));
+  }
+  return BY[VIEW] ? DOC.items.slice().sort(BY[VIEW]) : DOC.items;
+}
+// key -> the number drawn on its row : its place in YOUR order, never in the
+// view. One map per redraw rather than a findItem() per row.
+const manualNo = () => new Map(DOC.items.map((it,i)=>[it.key, i+1]));
+// The select keeps showing the lens you are in ( it is not a one-shot any more ),
+// ⇩ Keep this order appears only while there is something to keep, and the
+// grips go away for as long as a drop would have nowhere honest to land.
+function labelView(){
+  $("#keeporder").style.display = VIEW ? "" : "none";
+  if(VIEW) document.documentElement.dataset.view = VIEW;
+  else delete document.documentElement.dataset.view;
+}
+
 function rowHtml(it, n){
   const m = META[it.key] || {};
   const title = it.title || m.title || it.key;
@@ -1004,7 +1160,7 @@ function rowHtml(it, n){
   const loose = (m.in_library === false) ? " " + looseBadge(it) : "";
   return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
     `<div class="c numc">`+
-      `<input class="numin" value="${n}" title="Type a position and press ↵ to send it there" `+
+      `<input class="numin" value="${n}" title="Where this paper sits in YOUR order — type a number and press ↵ to send it there, from any view" `+
         `inputmode="numeric" autocomplete="off"${RO()}>`+
       `<span class="grip" title="Drag to move it up or down">⠿</span></div>`+
     `<div class="c titlec">`+
@@ -1031,8 +1187,9 @@ function renderBoard(){
               num:  a.classList.contains("numin"),
               start: a.selectionStart, end: a.selectionEnd, val: a.value };
   }
+  const no = manualNo();
   $("#board").innerHTML = DOC.items.length
-    ? DOC.items.map((it,i)=>rowHtml(it, i+1)).join("")
+    ? viewItems().map(it=>rowHtml(it, no.get(it.key))).join("")
     : `<div class="empty">Nothing here yet — search above and press ↵ ( or double-click a hit ) to add papers.</div>`;
   applyFilter();
   if(focus){
@@ -1120,7 +1277,7 @@ function selectRow(key, e){
     SEL.has(key) ? SEL.delete(key) : SEL.add(key);
     selAnchor = key;
   } else if(e && e.shiftKey && selAnchor){
-    const keys = DOC.items.map(it=>it.key);
+    const keys = viewItems().map(it=>it.key);   // the range you can SEE
     let a = keys.indexOf(selAnchor), b = keys.indexOf(key);
     if(a>=0 && b>=0){
       if(a>b){ const t=a; a=b; b=t; }
@@ -2204,8 +2361,12 @@ document.addEventListener("drop", e=>{
   clearDropMarks();
   if(!t){ dragKey = dragHit = null; return; }
   e.preventDefault();
+  // t.index is a position in YOUR order ( dropTarget reads findItem().idx ),
+  // which in a lens is not where the pointer is. Grips are hidden while one is
+  // on, so only a paper dragged in from the search can get here -- and it goes
+  // where "add to ..." says rather than somewhere arbitrary.
   if(dragKey) moveTo(dragKey, t.index);
-  else if(dragHit) addPaper(dragHit, t.index);
+  else if(dragHit) addPaper(dragHit, VIEW ? insertIndex() : t.index);
   dragKey = dragHit = null;
 });
 document.addEventListener("dragend", ()=>{
@@ -2606,36 +2767,29 @@ $("#tagfilterany").addEventListener("click", ()=>{
   $("#tagfilterany").classList.toggle("on", filterAll);
   applyFilter(); renderPaintbar();
 });
-// One-shot reorder. It rewrites the list once and hands it straight back to you
-// -- nothing keeps re-sorting behind your back.
+// Picking an order re-stacks what you are LOOKING at and leaves the board
+// alone ( see viewItems ). Nothing here is a change to the document, so nothing
+// here saves -- and your own order is always one pick away.
 $("#orderby").addEventListener("change", ()=>{
-  const how = $("#orderby").value;
-  $("#orderby").value = "";
-  if(!how || !DOC.items.length) return;
-  const before = DOC.items.slice();
-  const by = {
-    year:     (a,b)=>(b.year||0)-(a.year||0),
-    year_asc: (a,b)=>(a.year||9999)-(b.year||9999),
-    cites:    (a,b)=>((META[b.key]||{}).cited_by||0)-((META[a.key]||{}).cited_by||0),
-    title:    (a,b)=>lc(a.title||a.key).localeCompare(lc(b.title||b.key)),
-    added:    (a,b)=>String(a.added_at||"").localeCompare(String(b.added_at||"")),
-  }[how];
-  if(how === "tags"){
-    // Group papers carrying the same tags together, keeping each group in the
-    // order you already put it in, and groups in the order they first appear.
-    const order = [], groups = new Map();
-    DOC.items.forEach(it=>{
-      const sig = tagSig(it) || "~";     // untagged sorts last
-      if(!groups.has(sig)){ groups.set(sig, []); order.push(sig); }
-      groups.get(sig).push(it);
-    });
-    order.sort((a,b)=> (a==="~") - (b==="~") );
-    DOC.items = order.flatMap(sig=>groups.get(sig));
-  } else DOC.items.sort(by);
-  markDirty(); renderBoard();
-  toast(`Reordered by ${how.replace("_"," ")}`, 5000, "Undo", ()=>{
-    DOC.items = before; markDirty(); renderBoard();
-  });
+  VIEW = $("#orderby").value;
+  labelView();
+  renderBoard();
+  toast(VIEW
+    ? `Looking at the list by ${VIEW.replace("_"," ")} — your own order is untouched, and every row still shows its number in it`
+    : "Back in your own order", 6000);
+});
+// ... and the one control that DOES rewrite the list : the order on screen
+// becomes the order in the file. It goes through markDirty like any other edit,
+// so ↶ puts the old one back.
+$("#keeporder").addEventListener("click", ()=>{
+  if(guard()) return;
+  if(!VIEW || !DOC.items.length) return;
+  const how = VIEW;
+  DOC.items = viewItems().slice();
+  VIEW = ""; $("#orderby").value = "";
+  labelView();
+  markDirty(); renderAll();
+  toast(`Kept — ${how.replace("_"," ")} is your own order now ( ↶ undoes it )`, 7000);
 });
 function labelAutoMove(){
   const on = !!DOC.options.auto_move;
@@ -2754,6 +2908,11 @@ window.addEventListener("scroll", ()=>{
   if(toolsFrame) return;
   toolsFrame = requestAnimationFrame(()=>{
     toolsFrame = 0;
+    // ↑ Top rides this frame rather than a scroll listener of its own. body
+    // .hasfab is what lifts the toast off the corner while the button is there.
+    const up = window.scrollY > 400;
+    $("#totop").classList.toggle("show", up);
+    document.body.classList.toggle("hasfab", up);
     if(toolsOpen()){ if(!toolsAway()) floatTools(false); }
     else if(toolsAway() && $("#results").classList.contains("show") && document.activeElement === $("#q")) floatTools(true);
   });
@@ -2768,6 +2927,17 @@ function stowTools(e){
 }
 window.addEventListener("wheel", stowTools, { passive:true });
 window.addEventListener("touchmove", stowTools, { passive:true });
+
+// ↑ Top. Smooth unless the machine is set to reduce motion -- and with a jump
+// behind it, because some renderers quietly drop a smooth scroll and leave you
+// exactly where you were.
+const motionOK = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+$("#totop").addEventListener("click", ()=>{
+  const from = window.scrollY;
+  if(!motionOK){ window.scrollTo(0, 0); return; }
+  window.scrollTo({ top:0, behavior:"smooth" });
+  setTimeout(()=>{ if(from > 0 && window.scrollY === from) window.scrollTo(0, 0); }, 250);
+});
 
 document.addEventListener("keydown", e=>{
   if(e.key==="Escape"){
@@ -2787,6 +2957,14 @@ document.addEventListener("keydown", e=>{
     $("#q").focus({ preventScroll:true }); $("#q").select();
   }
   if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); }
+  // ⌘Z inside a note or a title box is the BROWSER's undo -- the one that puts
+  // a word back -- and it stays that way. The board step is still on the stack
+  // once you leave the field.
+  if((e.metaKey||e.ctrlKey) && /^[zyZY]$/.test(e.key)){
+    if(/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    if(e.shiftKey || e.key === "y" || e.key === "Y") redo(); else undo();
+  }
 });
 window.addEventListener("beforeunload", e=>{ if(dirty){ e.preventDefault(); e.returnValue = ""; } });
 
@@ -2800,9 +2978,12 @@ function toCSV(){
   const head = [ "#","DOI_or_Key","Title","Year","Tags" ]
     .concat(DOC.columns.map(c=>c.label)).concat([ "MD_File" ]);
   const lines = [ head.map(csvCell).join(",") ];
-  DOC.items.forEach((it,i)=>{
+  // The rows in the order you are LOOKING at, each numbered with its place in
+  // YOUR order -- so an export taken from a year view still points at the board.
+  const no = manualNo();
+  viewItems().forEach(it=>{
     const m = META[it.key] || {};
-    lines.push([ i+1, it.key, it.title||m.title||"", it.year||m.year||"", (it.tags||[]).join("; ") ]
+    lines.push([ no.get(it.key), it.key, it.title||m.title||"", it.year||m.year||"", (it.tags||[]).join("; ") ]
       .concat(DOC.columns.map(c=>(it.fields||{})[c.id]||""))
       .concat([ m.has_md ? fileStem(libKey(it))+".md" : "" ])
       .map(csvCell).join(","));
@@ -3443,9 +3624,21 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         where you change them, and they're saved with the board.</li>
     <li><b>Tagging never moves a row.</b> <kbd>⇥ Auto-move</kbd> ( off by default ) changes that: with it
         on, a re-tagged row slides down to sit with the others carrying the same tags.</li>
-    <li><b>⇅ Order by…</b> reorders the whole list once — by tags, year, citations, title or when you
-        added it — and the toast undoes it. After that the order is yours again.</li>
+    <li><b>⇅ Order by…</b> is a way of <b>looking</b> at the list — by tags, year, citations, title or
+        when you added it — not a change to it. The board stays in your own order underneath, so every
+        row keeps the number you gave it, and you can still type a new number into any row from inside
+        a sorted view: the paper moves in your order while the view leaves it where the sort puts it.
+        Dragging is the one thing a sorted view can't do, since a dropped row wouldn't stay where you
+        let go of it — the grips come back with <kbd>⇅ manual</kbd>. When you want a sort to
+        <b>become</b> your order, <kbd>⇩ Keep this order</kbd> commits it, and <kbd>↶</kbd> undoes that
+        like any other change.</li>
     <li><b>Delete</b> a paper with <kbd>🗑</kbd> — the toast will undo it.</li>
+    <li><b>↶ / ↷</b> in the header step the whole board back and forward — about 25 changes deep,
+        <kbd>⌘Z</kbd> and <kbd>⇧⌘Z</kbd> — which covers the drags and the typed numbers the toast
+        never offered an undo for. A burst of typing counts as one step. Inside a text box
+        <kbd>⌘Z</kbd> is still the browser's own undo, putting a word back rather than the board.
+        The stack lives in this tab: a reload starts it fresh, and the server's history in
+        <code>output/cache/sort-history/</code> is the longer net behind it.</li>
     <li><b>Columns</b>: <kbd>＋ Column</kbd> adds a free-text column, double-click a name to rename,
         shift-click to delete. Everything you type is saved a moment later ( <kbd>⌘S</kbd> forces it ),
         on the shelf as well as on the list.</li>
