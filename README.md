@@ -30,6 +30,24 @@
 
 20. `prma auth` : **accounts for the dashboard**. Anonymous visitors can view everything but change nothing: no edits, imports, exports, rebuilds, or lazy builds. A logged-in **user** can do everything. An **admin** can also manage the other accounts and choose whether anonymous visitors may open paper *content* (PDFs, md/full text, figures) or only metadata. There are no passwords. An account logs in with a one-time link (`/login#…`). On first start the server prints the first admin's link, and it keeps printing a fresh one on each start until an admin has logged in. Any account can mint **API keys** on `/account`, sent as `Authorization: Bearer <key>`. A key carries a role no higher than its owner's, re-checked on every request, and a key can't mint another key. Shell commands: `prma auth` (list), `add-user NAME [--role admin]`, `link NAME`, `set-role NAME ROLE`, `disable` / `enable` / `delete-user NAME`, `keys`, `create-key NAME --key-name X [--role] [--days]`, `revoke-key ID`, `anon-content on|off`. State lives in `output/auth/auth.json`. Changes apply to a running server without a restart. `auth.enabled: false` in `config.yaml` turns accounts off, so everyone can do everything (the old behaviour); see `config/config.example.yaml`.
 
+21. **API for `/sort`** : everything the board page does, as named operations a script can send with an API key. `POST /api/sort/ops` takes `{ "ops": [ … ] }` and runs the batch **atomically**: either every op succeeds and the board is saved once as one version, or nothing is saved and the answer names the op that failed. The ops cover:
+    
+    - **Rows:** `add` (by key, DOI, OpenAlex WID or title, pre-tagged and with Code/Datasets filled in, as from the search box), `remove`, `move`, `reorder`, `sort`, `update`.
+    - **Cells:** `set_cell` (`replace` / `append` / `prepend` / `fill`).
+    - **Tags:** `tag`, plus `tag_create` / `tag_delete` / `tag_rename` / `tag_color` / `tag_order`.
+    - **Columns:** `column_add` / `column_rename` / `column_delete` / `column_move` / `column_fold`.
+    - **Settings:** `options`.
+    - **Staging shelf:** `stage` (paste a reference list), `stage_add`, `stage_drop`.
+    - **Bulk:** `auto_tag`, `refill`, `pull_tiers`.
+    
+    A row is named by its key, its DOI, or `"#N"` for its position. A position is `N`, `"top"`, `"bottom"`, `"placed"`, `{"after": row}` or `{"before": row}`. Add `"dry_run": true` to preview a batch, or `"if_rev": <rev>` to refuse it if the board moved since you read it. `GET /api/sort/schema` describes every op and its parameters. `GET /api/sort/rows` (filters: `?q=`, `?tags=a,b&match=all`, `?shelf=1`) reads the board as flat rows. `GET /api/sort/export.csv` exports it. `GET /api/sort/history` with `POST /api/sort/restore {id}` puts an earlier version back. Open `/sort` tabs picks edits up within a few seconds, and a tab that was mid-edit merges its save with them instead of writing over them.
+    
+    ```bash
+    curl -H "Authorization: Bearer $PRMA_API_KEY" -H "Content-Type: application/json" \
+      -d '{"ops":[{"op":"move","row":"#12","to":1},{"op":"set_cell","row":"#1","col":"Notes","value":"key paper","mode":"append"},{"op":"tag","rows":["#1","#2"],"add":["premier"]}]}' \
+      http://127.0.0.1:9371/api/sort/ops
+    ```
+
 ## Todo
 
 - [ ] support non-doi items

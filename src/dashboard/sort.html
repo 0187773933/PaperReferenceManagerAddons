@@ -22,10 +22,11 @@
   .navlink { padding:6px 11px; }
   .savestate { font-size:12px; color:var(--muted); min-width:104px; text-align:right; }
   .savestate.dirty { color:var(--warn); }
-  /* The pinned bar is ONE line however long the note gets : the note takes
-     what's left of it and trails off ( its whole text is its tooltip ), so it
-     never wraps the bar -- or moves the column head pinned under it. */
-  header .paintnote { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Getting around a long list, in the pinned bar so it's in reach from
+     anywhere down it : ⚓ Anchor, ⤓ To anchor, Jump to. Its auto margin is what
+     keeps ↶ ↷ ? 🌙 and the save stamp over on the right. */
+  .jumpctl { display:flex; gap:8px; align-items:center; margin-right:auto; }
+  #jumpto { width:88px; padding:6px 9px; font-size:13px; }
 
   /* #tools : everything the bar doesn't pin. In its place under the bar it's
      part of the page and scrolls away with the list ; .float drops it down over
@@ -117,7 +118,6 @@
   .tagrow button { padding:2px 7px; font-size:11px; }
   .newtag { width:120px !important; padding:3px 8px !important; font-size:12px !important; border-radius:11px !important; }
   body.painting .row { cursor:crosshair; }
-  .paintnote { color:var(--accent); font-size:12px; }
 
   main { padding:12px 16px 140px; }
   .colhead, .row { display:grid; grid-template-columns:var(--grid); align-items:stretch; }
@@ -179,6 +179,9 @@
   .numc .grip { display:block; cursor:grab; font-size:11px; color:var(--muted); opacity:.6; user-select:none; }
   .numc .grip:hover { opacity:1; color:var(--accent); }
   .numc .grip:active { cursor:grabbing; }
+  /* The ⚓ on the row ⤓ To anchor brings you back to -- this browser's, not the board's. */
+  .numc .anchormark { display:none; font-size:11px; line-height:1.3; color:var(--accent); user-select:none; }
+  .row.anchored .numc .anchormark { display:block; }
   /* The title is TEXT, not a link : as a link it took the browser's visited
      colour the moment you opened the paper from any other prma page, so half
      the board turned gold for reasons that had nothing to do with the board.
@@ -397,9 +400,9 @@
 </head>
 <body>
 <!-- The header is two parts ( see the "header" section of the script ). The bar
-     is pinned : the board, its counts, where else you can go, the note on what
-     you're in the middle of, save state. Everything under it is #tools, which
-     scrolls away with the list.
+     is pinned : the board, its counts, where else you can go, the anchor and
+     Jump to for getting around the list, save state. Everything under it is
+     #tools, which scrolls away with the list.
 
      As FEW rows as possible sit between the title and the tags, because the
      tags and the board itself are what the page is for. So the nav links ride
@@ -420,7 +423,12 @@
       <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx">{ } Code</a>
       <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
     </nav>
-    <span class="paintnote" id="paintnote"></span>
+    <span class="jumpctl">
+      <button id="anchorbtn" title="Select a row, then click here to drop the anchor on it" disabled>⚓ Anchor</button>
+      <button id="toanchor" title="No anchor yet — select a row and click ⚓ Anchor" disabled>⤓ To anchor</button>
+      <input id="jumpto" type="text" inputmode="numeric" autocomplete="off" placeholder="Jump to #"
+             title="Type a row's number and press ↵ to scroll to it">
+    </span>
     <button id="undoact" title="Nothing to undo yet" disabled>↶</button>
     <button id="redoact" title="Nothing to redo" disabled>↷</button>
     <button id="helpbtn" title="How this page works">?</button>
@@ -533,6 +541,9 @@ let META  = {};             // paper key -> /api/paper-meta entry
 let armed = null;           // tag armed for click-to-tag painting
 let SEL   = new Set();      // keys of the selected rows ( outlined ) -- see selectRow
 let selAnchor = null;       // where a shift-click range starts from
+let ANCHOR = null;          // key of the ⚓ row ( this browser's ) -- see renderAnchor
+const ANCHOR_KEY = "prma-sort-anchor";
+try { ANCHOR = localStorage.getItem(ANCHOR_KEY) || null; } catch(e){}
 let TAGF  = new Set();      // tags the board is filtered down to ( see applyFilter )
 let filtering = false;      // the tag bar is a filter right now, not a brush
 let filterAll = false;      // ... and a row needs ALL of TAGF, not just one
@@ -542,6 +553,9 @@ let SOFF  = new Set();      // staged keys whose checkbox is OFF ( this browser 
 // ran, worth a badge while you review it and meaningless a day later.
 let STAGEHOW = {};
 let dirty = false, saving = false, saveTimer = null;
+// Bumped on every edit ( markDirty ), so a save can tell whether you typed while
+// it was out -- in which case what it sent is not everything there is.
+let EDITS = 0;
 // View-only : the server's answer, not this browser's ( see setLocked ). Starts
 // false so a page that never reaches the server is an ordinary broken page
 // rather than a silently read-only one.
@@ -769,6 +783,7 @@ function markDirty(){
   if(guard()) return;
   pushHistory();
   dirty = true;
+  EDITS++;
   $("#savestate").textContent = "unsaved…";
   $("#savestate").classList.add("dirty");
   queueDraft();
@@ -780,8 +795,12 @@ async function save(){
   if(LOCKED){ dirty = false; return; }
   if(saving){ saveTimer = setTimeout(save, 400); return; }
   saving = true;
+  const sent = EDITS;
   try {
-    const res = await postJSON("/api/sort", { doc: DOC }, { quiet:true });
+    // base_rev : the version this copy started from. When something else wrote
+    // in between ( an agent's ops, another tab ) the server merges rather than
+    // writing this over it -- see BoardState.replace in src/server/server.py .
+    const res = await postJSON("/api/sort", { doc: DOC, base_rev: REV }, { quiet:true });
     const r = await res.json();
     // 401 : the login expired ( or was revoked ) while this tab had the board
     // open ; 403 + csrf : it was replaced in another tab. Nothing typed here is
@@ -805,11 +824,30 @@ async function save(){
       toast("🔒 This board was locked while you had it open — your unsaved changes were dropped", 9000);
       return;
     }
-    if(r && r.ok){
-      REV = r.rev; dirty = false;
-      clearDraft();
-      $("#savestate").classList.remove("dirty");
-      $("#savestate").textContent = "saved " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+    // 409 : the board moved on further than the server can merge this copy into
+    // ( a long-idle tab across a server restart ). Nothing is lost : this copy is
+    // kept as the draft, the server's is loaded, and the usual "Unsaved work
+    // found" question puts it to you.
+    if(res.status === 409 && r && r.conflict){
+      dirty = false; saving = false;
+      writeDraft(); await loadDoc(); offerDraft();
+      return;
+    }
+    if(r && r.ok && r.merged){
+      // Merged with a change made somewhere else. Take the merged board -- unless
+      // you typed while the save was out, in which case keep the old base so the
+      // next save merges again ( and carries what you just typed ).
+      if(EDITS === sent){ dirty = false; clearDraft(); adoptDoc(r.doc, r.rev); }
+      $("#savestate").classList.toggle("dirty", dirty);
+      $("#savestate").textContent = dirty ? "unsaved…"
+        : "saved " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+      toast(`Saved — merged with changes ${r.merged_with ? "by "+r.merged_with : "made elsewhere"}`, 5000);
+    } else if(r && r.ok){
+      REV = r.rev;
+      if(EDITS === sent){ dirty = false; clearDraft(); }
+      $("#savestate").classList.toggle("dirty", dirty);
+      $("#savestate").textContent = dirty ? "unsaved…"
+        : "saved " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       // The server caps the shelf ( tiers.MAX_STAGED ). If it ever keeps fewer
       // rows than we sent, you hear about it rather than finding out on the next
       // reload.
@@ -819,6 +857,19 @@ async function save(){
     } else { $("#savestate").textContent = "save failed — retrying"; retrySave(); }
   } catch(e){ $("#savestate").textContent = "save failed ( offline? ) — retrying"; retrySave(); }
   saving = false;
+}
+// The board as the server has it now replaces this tab's copy -- a merged save
+// coming back. Same repairs as loadDoc, and the same fresh undo history : the
+// steps on it are boards without the change that was just merged in.
+function adoptDoc(doc, rev){
+  DOC = doc; REV = rev;
+  if(!DOC.options) DOC.options = { auto_move:false };
+  if(!Array.isArray(DOC.staging)) DOC.staging = [];
+  DOC.items.forEach(sortTags);
+  DOC.staging.forEach(sortTags);
+  resetHistory();
+  renderAll();
+  fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
 }
 // A save that didn't land is not a save you have to remember to redo : the draft
 // below is already in this browser and we keep trying, so a server that comes
@@ -941,7 +992,7 @@ window.addEventListener("beforeunload", e=>{
   try {
     // keepalive has the beacon's 64 KB budget ; past it , the "are you sure"
     // below is what's left.
-    const body = JSON.stringify({ doc: DOC });
+    const body = JSON.stringify({ doc: DOC, base_rev: REV });
     if(new Blob([ body ]).size < 64000){
       postJSON("/api/sort", body, { keepalive:true, quiet:true }).catch(()=>{});
       sent = true;
@@ -969,7 +1020,10 @@ async function pollRev(){
                      : "🔓 This board was just unlocked — you can edit again", 6000);
       if(!d.locked) backfillPending();     // what it couldn't fill while locked
     }
-    if(d && d.rev !== REV && !dirty && !saving){ await loadDoc(); toast("Reloaded — the board changed in another tab"); }
+    if(d && d.rev !== REV && !dirty && !saving){
+      await loadDoc();
+      toast(d.by ? `Reloaded — ${d.by} changed the board` : "Reloaded — the board changed in another tab");
+    }
     // The index moved : the --watch worker ( or a ` prma reindex ` ) has just
     // processed papers, so the placeholders fill in, and an open Recently added
     // list drops the "not indexed yet" it no longer needs.
@@ -1162,6 +1216,7 @@ function rowHtml(it, n){
     `<div class="c numc">`+
       `<input class="numin" value="${n}" title="Where this paper sits in YOUR order — type a number and press ↵ to send it there, from any view" `+
         `inputmode="numeric" autocomplete="off"${RO()}>`+
+      `<span class="anchormark" title="The anchor — ⤓ To anchor brings you back here">⚓</span>`+
       `<span class="grip" title="Drag to move it up or down">⠿</span></div>`+
     `<div class="c titlec">`+
       `<div class="tt">${inner}${loose}</div>`+
@@ -1242,29 +1297,8 @@ function renderPaintbar(){
       `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
   }).join("");
   $("#tagchips").appendChild(PBCTL);
-  renderNote();
+  renderAnchor();   // every selection change comes through here
   document.body.classList.toggle("painting", !!armed && !filtering);
-}
-// One line in the pinned bar, saying whichever of these is true : what the
-// board is filtered to, what's selected, what you're painting. It's in the bar
-// rather than by the chips so it's still in sight halfway down the list --
-// which is exactly where a filter you've forgotten about hides rows from you.
-function renderNote(shown){
-  const bits = [];
-  if(TAGF.size || $("#filter").value.trim()){
-    if(shown == null) shown = $$(".row:not(.hide)").length;
-    bits.push(`showing ${shown} of ${DOC.items.length}`+
-      (TAGF.size ? ` · ${filterAll?"all of":"any of"} ${Array.from(TAGF).join(", ")}` : ""));
-  } else if(filtering){
-    bits.push("click tags to show only the papers carrying them");
-  }
-  if(!filtering){
-    const sel = selectedItems();
-    if(sel.length) bits.push(`${sel.length} row(s) selected — click a tag in the tag bar to toggle it on them ( Esc clears )`);
-    else if(armed) bits.push(`painting “${armed}” — click rows to toggle it ( Esc to stop )`);
-  }
-  const note = $("#paintnote");
-  note.textContent = note.title = bits.join("   ·   ");
 }
 const hasTag = (it,v) => (it.tags||[]).some(t=>lc(t)===lc(v));
 function selectedItems(){
@@ -2464,20 +2498,17 @@ function applyNumber(input){
   if(!again) return;
   const el = again.querySelector(".numin");
   again.classList.add("flash");
-  // Chasing the row is only right in YOUR order, where it really did go to the
-  // number you typed. In a lens it stays where the SORT puts it -- and among
-  // rows the sort ties it shifts a little -- so scrolling after it would drag
-  // you somewhere you never asked to go. Same rule as the shelf above : it
-  // flashes where it is, and the page doesn't chase it. ( The scroll is pinned
-  // rather than left alone because re-rendering the board restores the caret,
-  // and a plain focus() scrolls. )
-  if(VIEW){
-    window.scrollTo(0, y);
-    if(el){ el.focus({ preventScroll:true }); el.select(); }
-    return;
-  }
-  if(el){ el.focus(); el.select(); }
-  again.scrollIntoView({ block:"nearest" });
+  // The page never chases the row -- in your order or in a lens. You renumbered
+  // it, you didn't ask to follow it : it flashes at its new spot and you stay
+  // where you were. It keeps the caret only while that spot is in view ; a caret
+  // left in a row off-screen would drag you there on the next Tab. ( The scroll
+  // is pinned rather than left alone because re-rendering the board restores
+  // the caret, and a plain focus() scrolls. )
+  window.scrollTo(0, y);
+  if(!el) return;
+  const r = again.getBoundingClientRect();
+  if(r.bottom > 0 && r.top < innerHeight){ el.focus({ preventScroll:true }); el.select(); }
+  else el.blur();
 }
 $("#board").addEventListener("keydown", e=>{
   if(!e.target.matches(".numin")) return;
@@ -2746,7 +2777,7 @@ function matchesTags(it){
 }
 function applyFilter(){
   const q = $("#filter").value.trim();
-  let shown = 0, pruned = false;
+  let pruned = false;
   $$(".row").forEach(row=>{
     const f = findItem(row.dataset.key);
     if(!f) return;
@@ -2756,11 +2787,11 @@ function applyFilter(){
       Object.values(f.it.fields||{}).join(" ") ].join(" ") : "";
     const hide = (q && !textHas(hay, q)) || !matchesTags(f.it);
     row.classList.toggle("hide", hide);
-    if(hide){ if(SEL.delete(row.dataset.key)) pruned = true; }
-    else shown++;
+    if(hide && SEL.delete(row.dataset.key)) pruned = true;
   });
   if(pruned) paintSelection();
-  renderNote(shown);
+  // Every full redraw comes through here too, and its fresh rows need their ⚓.
+  renderAnchor();
 }
 // 🔎 : the tag bar stops being a brush and becomes a filter. Turning it off
 // clears the filter -- a hidden row you've forgotten about is worse than none.
@@ -2889,8 +2920,8 @@ initTheme();
 
 // ---- the header : a pinned bar, and the tools that scroll away ------------
 // A long list needs the window, so only the bar ( <header> ) is pinned : the
-// board, its counts, the links to the other pages, the note on what you're in
-// the middle of, save state. Everything else is #tools -- what happens to the
+// board, its counts, the links to the other pages, the anchor and Jump to ( see
+// below ), save state. Everything else is #tools -- what happens to the
 // board, the search, the tag bar. At the top of the page it sits under the bar
 // as part of the page, so it scrolls away with the list instead of riding over
 // it.
@@ -2949,6 +2980,71 @@ $("#totop").addEventListener("click", ()=>{
   if(!motionOK){ window.scrollTo(0, 0); return; }
   window.scrollTo({ top:0, behavior:"smooth" });
   setTimeout(()=>{ if(from > 0 && window.scrollY === from) window.scrollTo(0, 0); }, 250);
+});
+
+// ⚓ Anchor · ⤓ To anchor · Jump to : getting around a long list from the pinned
+// bar. The anchor is a bookmark kept in THIS browser ( ANCHOR_KEY ), not in the
+// board -- nothing here is an edit, so it works view-only and logged out too. It
+// is held by the paper's key, so it follows the paper wherever it's moved to ; a
+// paper deleted off the board keeps its anchor, so ↶ brings both back.
+// Jump to takes the number on a row's box -- its place in YOUR order, in a lens too.
+// Centred in what you can SEE -- the window less the pinned bar and column head
+// ( or the tools, if / has them down ) -- not in the whole window, where the
+// bar would sit on top of it. A row taller than that lands with its top showing.
+function scrollToRow(el){
+  const top  = toolsOpen() ? TOOLS.getBoundingClientRect().bottom
+                           : $("header").offsetHeight + $("#colwrap").offsetHeight;
+  const r    = el.getBoundingClientRect();
+  const room = innerHeight - top;
+  const y    = window.scrollY + r.top - top - Math.max(0, (room - r.height) / 2);
+  window.scrollTo({ top: Math.max(0, y), behavior: motionOK ? "smooth" : "auto" });
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");  // flashes again on a second visit
+}
+// The topmost selected row in the order on screen. ( Declarations, not consts :
+// the first render runs before this point in the file. )
+function anchorPick(){ const r = $("#board .row.selected"); return r ? r.dataset.key : null; }
+function renderAnchor(){
+  $$("#board .row.anchored").forEach(r=>r.classList.remove("anchored"));
+  const row = ANCHOR && rowEl(ANCHOR);
+  if(row) row.classList.add("anchored");
+  const pick = anchorPick(), btn = $("#anchorbtn");
+  btn.disabled = !pick;
+  btn.classList.toggle("on", !!pick && pick === ANCHOR);
+  btn.title = !pick          ? "Select a row, then click here to drop the anchor on it"
+            : pick === ANCHOR ? "Lift the anchor off this row"
+            : ANCHOR          ? "Move the anchor to the selected row"
+                              : "Drop the anchor on the selected row";
+  const f = ANCHOR && findItem(ANCHOR);
+  $("#toanchor").disabled = !f;
+  $("#toanchor").title = f ? `Scroll to the anchor — #${f.idx+1} ${f.it.title || f.it.key}`
+                           : "No anchor yet — select a row and click ⚓ Anchor";
+}
+$("#anchorbtn").addEventListener("click", ()=>{
+  const pick = anchorPick();
+  if(!pick) return;
+  ANCHOR = pick === ANCHOR ? null : pick;
+  try { ANCHOR ? localStorage.setItem(ANCHOR_KEY, ANCHOR) : localStorage.removeItem(ANCHOR_KEY); } catch(e){}
+  renderAnchor();
+  const f = ANCHOR && findItem(ANCHOR);
+  toast(f ? `⚓ Anchored at #${f.idx+1}` : "Anchor lifted", 2500);
+});
+$("#toanchor").addEventListener("click", ()=>{
+  const row = ANCHOR && rowEl(ANCHOR);
+  if(!row || row.classList.contains("hide")){ toast("The anchored paper is hidden by the filter", 3500); return; }
+  scrollToRow(row);
+});
+$("#jumpto").addEventListener("keydown", e=>{
+  const box = e.target;
+  if(e.key === "Escape"){ e.stopPropagation(); box.value = ""; box.blur(); return; }  // not the selection too
+  if(e.key !== "Enter") return;
+  e.preventDefault();
+  const want = parseInt(String(box.value).replace(/[^0-9]/g,""), 10);
+  if(isNaN(want) || !DOC.items.length) return;
+  const n   = Math.max(1, Math.min(want, DOC.items.length));
+  const row = rowEl(DOC.items[n-1].key);
+  box.value = n; box.select();    // the next number just types over it
+  if(!row || row.classList.contains("hide")){ toast(`#${n} is hidden by the filter`, 3500); return; }
+  scrollToRow(row);
 });
 
 document.addEventListener("keydown", e=>{
@@ -3540,12 +3636,17 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         ( <kbd>🆕 Recently added</kbd>, <kbd>Filter the list…</kbd> ) — and one for finding a
         paper. The links to the other pages, <kbd>?</kbd> and <kbd>🌙</kbd> ride up in the pinned
         bar, which had a window's worth of space next to the save stamp doing nothing.</li>
-    <li><b>Only the top bar stays put</b> — the board, its counts, the other pages, the note on
-        what's filtered or selected, save state. The tools and the tag bar scroll away with the
+    <li><b>Only the top bar stays put</b> — the board, its counts, the other pages, the anchor and
+        <kbd>Jump to</kbd>, save state. The tools and the tag bar scroll away with the
         list, so a long list gets the whole window. <kbd>/</kbd> brings the search back down over
         the list from anywhere without losing your place, and a search you're in the middle of
         follows you as you add from it; it goes away again when you scroll by hand ( unless
         you're typing in it ), on <kbd>Esc</kbd>, or when you scroll back up to it.</li>
+    <li><b>Getting around a long list</b>: select a row and click <kbd>⚓ Anchor</kbd> to mark it
+        ( click it again on that row to lift it ), and <kbd>⤓ To anchor</kbd> scrolls back to it from
+        anywhere. The anchor follows the paper when you move it, and it is this browser's own
+        bookmark, not part of the board. Type a row's number into <kbd>Jump to #</kbd> and press
+        <kbd>↵</kbd> to scroll to it — the number on its box, so it works in any view.</li>
     <li><b>Search</b> ( <kbd>/</kbd> ) <b>matches titles</b>: type any piece of a title and the
         closest titles come back, best first — nothing has to match exactly, so a typo, a missing
         word or two words the wrong way round still land the paper ( pasting a DOI works too ).

@@ -83,8 +83,9 @@ DEFAULTS = {
 ANON_POSTS = { "/exists" , "/api/paper-meta" , "/api/tiers/meta" , "/api/login" }
 
 # GETs that only ever feed an edit flow : the /sort board's "recent" list ( it
-# reads the reference manager's own sqlite ) and your own key list.
-USER_GETS = { "/api/recent" , "/api/keys" }
+# reads the reference manager's own sqlite ) , your own key list , and the
+# /sort board's saved versions ( read back to restore one ).
+USER_GETS = { "/api/recent" , "/api/keys" , "/api/sort/history" }
 
 # Paper CONTENT , as opposed to what is known ABOUT a paper : the PDF , its
 # full text , and the figures cut from it. Anonymous visitors see these only
@@ -314,6 +315,11 @@ class AuthStore:
 			"last_login_at": u.get( "last_login_at" ) ,
 			"keys":          sum( 1 for k in self._doc[ "keys" ].values() if k.get( "user" ) == uid ) ,
 		}
+
+	def key_name( self , kid ):
+		"""The name an API key was minted under -- what a board says made a change."""
+		with self._lock:
+			return ( ( self._doc or {} ).get( "keys" , {} ).get( kid ) or {} ).get( "name" ) or ""
 
 	def _key_public( self , kid , k ):
 		owner = self._doc[ "users" ].get( k.get( "user" ) ) or {}

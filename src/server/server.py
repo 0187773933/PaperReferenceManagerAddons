@@ -27,10 +27,11 @@ import html
 import json
 import time
 import shutil
+import copy
 import contextlib
 import mimetypes
 import threading
-from collections import deque
+from collections import deque , OrderedDict
 from http.server import BaseHTTPRequestHandler , HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -538,6 +539,15 @@ class BoardLocked( Exception ):
 	"""Raised by BoardState.replace when the board is in view-only mode."""
 
 
+class BoardConflict( Exception ):
+	"""A write that can't be reconciled with what's stored : an agent's if_rev
+	the board has moved past , or a page save whose base version is gone."""
+
+	def __init__( self , rev ):
+		super().__init__( f"the board is at rev {rev}" )
+		self.rev = rev
+
+
 class BoardState:
 	"""In-memory holder for ONE hand-curated board document -- the tier list
 	( src/db/tiers.py , /tiers ) or the tag-sectioned sort board
@@ -553,7 +563,12 @@ class BoardState:
 
 	`store` is the src/db module that owns the file -- load / save / default_doc
 	is the whole interface , which is why a second board cost a module and one
-	more instance rather than a second copy of any of this.
+	more instance rather than a second copy of any of this. A store that also
+	has merge() ( src/db/sortboard.py ) gets merged saves -- see replace().
+
+	`rev` starts from the clock rather than 0 , so a rev a page picked up before a
+	restart can never be mistaken for one of this run's. The last REVS versions
+	are kept by rev , which is what a page's save is merged against.
 
 	A board also carries a VIEW-ONLY latch ( src/db/boardlock.py ) : one server-
 	side boolean , the same for every browser that opens the page. While it is on
@@ -561,14 +576,33 @@ class BoardState:
 	half that matters -- a tab left open from before the lock would otherwise
 	still beacon its document back over the top on the way out."""
 
+	REVS = 32
+
 	def __init__( self , args , store , name ):
-		self.args   = args
-		self.store  = store
-		self.name   = name
-		self._lock  = threading.Lock()
-		self.doc    = None
-		self.rev    = 0
-		self.locked = False
+		self.args     = args
+		self.store    = store
+		self.name     = name
+		self._lock    = threading.Lock()
+		self.doc      = None
+		self.rev      = int( time.time() * 1000 )
+		self.boot_rev = self.rev
+		self.locked   = False
+		self.last_by  = ""            # who made the last write , for the other tabs' toast
+		self._revs    = OrderedDict() # rev -> the document as it stood at that rev
+
+	def _current( self ):
+		return self.doc if self.doc is not None else self.store.default_doc()
+
+	def _bump( self , by ):
+		"""A new version ( call under the lock ) : bump rev , remember it."""
+		self.rev    += 1
+		self.last_by = by or ""
+		self._remember()
+
+	def _remember( self ):
+		self._revs[ self.rev ] = self._current()
+		while len( self._revs ) > self.REVS:
+			self._revs.popitem( last=False )
 
 	def load( self ):
 		"""Populate from disk ( call at startup ). Never raises."""
@@ -580,22 +614,67 @@ class BoardState:
 			print( f"{self.name} :: could not load the board ( {e} )" )
 			self.doc = None
 		self.locked = boardlock.load( self.args , self.name )
+		with self._lock:
+			self._remember()
 
 	def snapshot( self ):
 		with self._lock:
-			doc = self.doc if self.doc is not None else self.store.default_doc()
-			return { "rev": self.rev , "doc": doc , "locked": self.locked }
+			return { "rev": self.rev , "doc": self._current() , "locked": self.locked ,
+				"by": self.last_by }
 
-	def replace( self , doc ):
+	def replace( self , doc , base_rev=None , by="" ):
 		"""Write a whole document ( the page's save ). Returns the normalized
 		document as stored , with the new rev. Raises BoardLocked when the board
-		is in view-only mode -- see the class docstring."""
+		is in view-only mode -- see the class docstring.
+
+		`base_rev` is the version the page's copy started from. When something
+		else has written since -- an agent's ops , another tab -- the page's
+		document is missing that change , so instead of writing it over the top
+		this merges the three ( store.merge ) and says so ( merged: true , with
+		the merged document the page should adopt ). A base too old to have been
+		kept is a BoardConflict , unless nothing has been written since the
+		server started -- that's a tab left open across a restart , and the file
+		is still exactly what it last saved."""
 		with self._lock:
 			if self.locked:
 				raise BoardLocked( self.name )
+			merge  = getattr( self.store , "merge" , None )
+			merged = False
+			prev   = self.last_by
+			if base_rev is not None and base_rev != self.rev and merge is not None:
+				base = self._revs.get( base_rev )
+				if base is not None:
+					doc    = merge( base , doc , self._current() )
+					merged = True
+				elif self.rev != self.boot_rev:
+					raise BoardConflict( self.rev )
 			self.doc = self.store.save( self.args , doc )
-			self.rev += 1
-			return { "rev": self.rev , "doc": self.doc }
+			self._bump( by )
+			out = { "rev": self.rev , "doc": self.doc }
+			if merged:
+				out[ "merged" ] = True
+				out[ "merged_with" ] = prev
+			return out
+
+	def apply( self , fn , by="" , dry_run=False , if_rev=None ):
+		"""Run `fn( doc )` against a COPY of the board and save the result as one
+		new version -- the agent ops ( src/db/sortops.py ). Whatever `fn` raises
+		propagates with nothing saved. `if_rev` : refuse ( BoardConflict ) unless
+		the board is still at that rev. `dry_run` : hand back what WOULD be saved
+		and save nothing ( allowed on a locked board -- it changes nothing )."""
+		with self._lock:
+			if if_rev is not None and if_rev != self.rev:
+				raise BoardConflict( self.rev )
+			if self.locked and not dry_run:
+				raise BoardLocked( self.name )
+			work   = copy.deepcopy( self._current() )
+			result = fn( work )
+			if dry_run:
+				return { "rev": self.rev , "doc": self.store.normalize( work ) ,
+					"result": result , "dry_run": True }
+			self.doc = self.store.save( self.args , work )
+			self._bump( by )
+			return { "rev": self.rev , "doc": self.doc , "result": result }
 
 	def set_lock( self , on ):
 		"""Turn the view-only latch on / off , persisted. `rev` is bumped so the
@@ -604,7 +683,7 @@ class BoardState:
 		from ..db import boardlock
 		with self._lock:
 			self.locked = boardlock.save( self.args , self.name , on )
-			self.rev   += 1
+			self._bump( self.last_by )
 			return { "rev": self.rev , "locked": self.locked }
 
 
@@ -2431,6 +2510,119 @@ def lookup( cache: SnapshotCache , queries: List[ Dict ] ) -> List[ Dict ]:
 	return results
 
 
+def _paper_index( rows ):
+	"""A pool , indexed for _paper_match : by normalized DOI , by normalized
+	title , and the title list the fuzzy match runs over."""
+	by_doi , by_title , titles = {} , {} , []
+	for r in ( rows or [] ):
+		d = utils.normalize_doi( r.get( "doi" ) or "" )
+		if d:
+			by_doi.setdefault( d , r )
+		t = utils.normalize_title( r.get( "title" ) or "" )
+		if t and t not in by_title:
+			by_title[ t ] = r
+			titles.append( t )
+	return by_doi , by_title , titles
+
+
+def _paper_match( doi , title , idx ):
+	"""( row , how ) for a reference in one indexed pool -- the /exists policy :
+	a DOI settles it outright , and a title is only fuzzy-matched when there is
+	no DOI to go on. how = "doi" | "title" | "fuzzy" , or ( None , "" )."""
+	by_doi , by_title , titles = idx
+	if doi:
+		return ( by_doi[ doi ] , "doi" ) if doi in by_doi else ( None , "" )
+	if not title:
+		return None , ""
+	if title in by_title:
+		return by_title[ title ] , "title"
+	hit = process.extractOne( title , titles , scorer=fuzz.token_sort_ratio ,
+		score_cutoff=TITLE_THRESHOLD )
+	return ( by_title[ hit[ 0 ] ] , "fuzzy" ) if hit else ( None , "" )
+
+
+def _external_rows( dash ):
+	"""Every paper you DON'T have but know about : the works your library cites
+	and the works citing it."""
+	return ( getattr( dash , "references" , None ) or [] ) + ( getattr( dash , "cited_by" , None ) or [] )
+
+
+_WID_RE = re.compile( r"(?:https?://(?:www\.)?openalex\.org/)?(W\d{4,})" , re.I )
+
+
+def _resolve_paper( dash , papermeta , spec , cache=None ):
+	"""The paper an agent's `add` names -> a hit dict newItem can take , or
+	sortops.OpError saying why not ( with the closest titles , when it was a
+	title that didn't land ).
+
+	In the order a person would look : the library by key / alias / DOI ( the
+	same aliasing the board's own rows get , PaperMeta._resolve ) ; an OpenAlex
+	WID or a DOI in the papers the library cites or is cited by ; then a TITLE ,
+	under the same policy as /exists and Import refs -- exact , or a fuzzy match
+	close enough to be the same paper. Never a "best guess" : a title that only
+	resembles something is an error listing what it resembles.
+
+	`cache` : a dict kept for one batch , so twenty adds index the pools once."""
+	from ..db.sortops import OpError
+	lib   = papermeta._lib_index()
+	cache = {} if cache is None else cache
+
+	def idx( name ):
+		if name not in cache:
+			cache[ name ] = _paper_index( lib.values() if name == "lib" else _external_rows( dash ) )
+		return cache[ name ]
+
+	def from_lib( row , how ):
+		return { "key": row[ "key" ] , "title": row.get( "title" ) or "" , "doi": row.get( "doi" ) or "" ,
+			"wid": row.get( "wid" ) or "" , "year": row.get( "year" ) , "journal": row.get( "journal" ) or "" ,
+			"pdf": "" , "pdf_local": True , "in_library": True , "matched": how }
+
+	def from_ext( row , how ):
+		return { "key": row.get( "wid" ) or row.get( "key" ) , "title": row.get( "title" ) or "" ,
+			"doi": row.get( "doi" ) or "" , "wid": row.get( "wid" ) or "" , "year": row.get( "year" ) ,
+			"journal": row.get( "journal" ) or "" , "pdf": row.get( "pdf" ) or "" ,
+			"pdf_local": False , "in_library": False , "matched": how }
+
+	k = papermeta._resolve( spec )
+	if k and k in lib:
+		return from_lib( lib[ k ] , "key" )
+	m = _WID_RE.fullmatch( spec.strip() )
+	if m:
+		wid = m.group( 1 ).upper()
+		for r in lib.values():
+			if ( r.get( "wid" ) or "" ).upper() == wid:
+				return from_lib( r , "wid" )
+		for r in _external_rows( dash ):
+			if ( r.get( "wid" ) or "" ).upper() == wid:
+				return from_ext( r , "wid" )
+		raise OpError( f"no paper {wid} in your library or the papers it cites / is cited by" )
+	doi = utils.normalize_doi( spec ) or ""
+	if doi:
+		row , how = _paper_match( doi , "" , idx( "ext" ) )
+		if row:
+			return from_ext( row , how )
+		raise OpError( f"no paper with DOI {doi} in your library or the papers it cites / is "
+			"cited by -- add it as an object { doi , title , ... } to put it on anyway" )
+	title = utils.normalize_title( spec )
+	if len( title ) < 8:
+		raise OpError( f"{spec!r} is too short to find a paper by" )
+	row , how = _paper_match( "" , title , idx( "lib" ) )
+	if row:
+		return from_lib( row , how )
+	row , how = _paper_match( "" , title , idx( "ext" ) )
+	if row:
+		return from_ext( row , how )
+	near = []
+	try:
+		for pool in ( "library" , "external" ):
+			for h in ( dash.search( spec , pool , "relevance" , 3 , mode="title" ) or {} ).get( "results" ) or []:
+				near.append( f"{h.get( 'key' )} | {h.get( 'title' )}" )
+	except Exception:
+		pass
+	raise OpError( f"no paper titled {spec!r} -- use its key or DOI" +
+		( ". Closest : " + " ; ".join( near[ :6 ] ) if near else "" ) )
+
+
 def _refs_payload( dash , text ):
 	"""Somebody else's bibliography , resolved against this library.
 
@@ -2457,36 +2649,12 @@ def _refs_payload( dash , text ):
 	if not refs:
 		return { "ok": True , "refs": [] }
 
-	def index( rows ):
-		by_doi , by_title , titles = {} , {} , []
-		for r in ( rows or [] ):
-			d = utils.normalize_doi( r.get( "doi" ) or "" )
-			if d:
-				by_doi.setdefault( d , r )
-			t = utils.normalize_title( r.get( "title" ) or "" )
-			if t and t not in by_title:
-				by_title[ t ] = r
-				titles.append( t )
-		return by_doi , by_title , titles
-
-	def match( doi , title , idx ):
-		by_doi , by_title , titles = idx
-		if doi:
-			return ( by_doi[ doi ] , "doi" ) if doi in by_doi else ( None , "" )
-		if not title:
-			return None , ""
-		if title in by_title:
-			return by_title[ title ] , "title"
-		hit = process.extractOne( title , titles , scorer=fuzz.token_sort_ratio ,
-			score_cutoff=TITLE_THRESHOLD )
-		return ( by_title[ hit[ 0 ] ] , "fuzzy" ) if hit else ( None , "" )
-
-	lib_idx = index( getattr( dash , "library" , None ) )
+	match   = _paper_match
+	lib_idx = _paper_index( getattr( dash , "library" , None ) )
 	# Everything you DON'T have but know about : a cited work carries a WID and ,
 	# often , an open-access pdf url -- so even an unmatched reference can arrive
 	# with working links.
-	ext_idx = index( ( getattr( dash , "references" , None ) or [] ) +
-	                 ( getattr( dash , "cited_by"   , None ) or [] ) )
+	ext_idx = _paper_index( _external_rows( dash ) )
 
 	out = []
 	for r in refs:
@@ -2535,6 +2703,14 @@ def _disposition( kind , filename ):
 
 class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
 	daemon_threads = True
+
+	def handle_error( self , request , client_address ):
+		# The browser hanging up mid-reply isn't a server fault : a PDF viewer
+		# drops its first request and re-fetches , a tab closes while a big file
+		# is still going out. Only those are quiet ; anything else still prints.
+		if isinstance( sys.exc_info()[ 1 ] , ( BrokenPipeError , ConnectionResetError , ConnectionAbortedError ) ):
+			return
+		super().handle_error( request , client_address )
 
 
 class Handler( BaseHTTPRequestHandler ):
@@ -2762,6 +2938,146 @@ class Handler( BaseHTTPRequestHandler ):
 				return board
 		return None
 
+	# -- the /sort board , for agents ( src/db/sortops.py ) --------------------
+
+	def _body_json( self ):
+		length = int( self.headers.get( "Content-Length" , "0" ) )
+		body   = self.rfile.read( length ) if length > 0 else b"{}"
+		return json.loads( body.decode( "utf-8" , errors="replace" ) )
+
+	def _actor_label( self ):
+		"""Who a board write came from , in the words the other tabs' toast uses."""
+		a = self.actor
+		if a.via == "key":
+			kn = self.auth.key_name( a.key_id ) if self.auth else ""
+			return f"{a.name or 'someone'} · API key “{kn}”" if kn else f"{a.name or 'someone'} · API key"
+		return a.name or ( "local" if a.via == "local" else "" )
+
+	def _board_meta( self , keys , mods=False , links=False , titles=None ):
+		"""PaperMeta.meta over any number of keys ( it takes 500 per call )."""
+		out , keys = {} , list( keys or [] )
+		for i in range( 0 , len( keys ) , 500 ):
+			out.update( self.papermeta.meta( keys[ i : i + 500 ] , want_mods=mods ,
+				want_links=links , titles=titles ) )
+		return out
+
+	def _sort_ctx( self ):
+		"""What the agent ops need from this server : the library lookups."""
+		from ..db    import sortops
+		from ..utils import methods as methods_vocab
+		try:
+			vocab = list( methods_vocab.labels( self.dash.args ) )
+		except Exception:
+			vocab = []
+		cache = {}
+
+		def resolve( spec ):
+			if not getattr( self.dash , "library" , None ) and self.dash.status != "ready":
+				raise sortops.OpError( f"the library index isn't built yet ( {self.dash.status} ) "
+					"-- try again in a minute , or add the paper as an object { doi , title , ... }" )
+			return _resolve_paper( self.dash , self.papermeta , spec , cache )
+		return sortops.Ctx(
+			resolve=resolve ,
+			meta=lambda keys , mods=False , links=False , titles=None:
+				self._board_meta( keys , mods , links , titles ) ,
+			parse_refs=lambda text: _refs_payload( self.dash , text ).get( "refs" ) or [] ,
+			tiers_doc=lambda: ( self.tiers.snapshot() if self.tiers else {} ).get( "doc" ) or {} ,
+			modalities=vocab )
+
+	def _sort_api_get( self , path ):
+		"""GET /api/sort/{schema,rows,export.csv,history}. True when handled."""
+		from ..db import sortops , sortboard
+		if path == "/api/sort/schema":
+			self._send_json( 200 , { "ok": True , **sortops.schema() } )
+			return True
+		if path == "/api/sort/rows":
+			qs    = self._qs()
+			snap  = self.sort.snapshot()
+			doc   = snap[ "doc" ]
+			shelf = self._arg( qs , "shelf" , "0" ) in ( "1" , "true" , "yes" )
+			meta  = None
+			if self._arg( qs , "meta" , "0" ) in ( "1" , "true" , "yes" ):
+				rows = doc.get( "staging" if shelf else "items" ) or []
+				meta = self._board_meta( [ r[ "key" ] for r in rows ] )
+			view = sortops.rows_view( doc , meta=meta ,
+				q=self._arg( qs , "q" , "" ) ,
+				tags=[ t.strip() for t in self._arg( qs , "tags" , "" ).split( "," ) if t.strip() ] ,
+				match=self._arg( qs , "match" , "any" ) , shelf=shelf ,
+				limit=self._arg_int( qs , "limit" , 500 ) , offset=self._arg_int( qs , "offset" , 0 ) )
+			self._send_json( 200 , { "ok": True , "rev": snap[ "rev" ] , "locked": snap[ "locked" ] , **view } )
+			return True
+		if path == "/api/sort/export.csv":
+			doc  = self.sort.snapshot()[ "doc" ]
+			meta = self._board_meta( [ r[ "key" ] for r in doc.get( "items" ) or [] ] )
+			self._send_download( sortops.to_csv( doc , meta ).encode( "utf-8" ) ,
+				f"prma-sort-{time.strftime( '%Y-%m-%d' )}.csv" , "text/csv; charset=utf-8" )
+			return True
+		if path == "/api/sort/history":
+			self._send_json( 200 , { "ok": True , "versions": sortboard.snapshots( self.sort.args ) } )
+			return True
+		return False
+
+	def _sort_api_post( self , path ):
+		"""POST /api/sort/{ops,restore}. True when handled."""
+		from ..db import sortops , sortboard
+		if path not in ( "/api/sort/ops" , "/api/sort/restore" ):
+			return False
+		try:
+			data = self._body_json()
+			if not isinstance( data , dict ):
+				raise ValueError( "the body must be a JSON object" )
+		except ValueError as e:
+			self._send_json( 400 , { "ok": False , "error": f"bad JSON body ( {e} )" } )
+			return True
+		by = self._actor_label()
+
+		def summary( doc ):
+			return { "list": len( doc.get( "items" ) or [] ) , "shelf": len( doc.get( "staging" ) or [] ) }
+		try:
+			if path == "/api/sort/restore":
+				snap = sortboard.read_snapshot( self.sort.args , data.get( "id" ) )
+				if snap is None:
+					self._send_json( 404 , { "ok": False , "error": "no saved version with that id -- "
+						"see GET /api/sort/history" } )
+					return True
+
+				def put_back( doc ):
+					doc.clear()
+					doc.update( copy.deepcopy( snap ) )
+				r = self.sort.apply( put_back , by=by )
+				self._send_json( 200 , { "ok": True , "rev": r[ "rev" ] , "restored": data.get( "id" ) ,
+					"summary": summary( r[ "doc" ] ) } )
+				return True
+
+			if_rev = data.get( "if_rev" )
+			if if_rev is not None and ( isinstance( if_rev , bool ) or not isinstance( if_rev , int ) ):
+				self._send_json( 400 , { "ok": False , "error": "`if_rev` must be the rev number" } )
+				return True
+			if self.dash is not None and self.dash.status == "idle":
+				# The add / stage ops look papers up in the index ; nudge it into
+				# building rather than answer "not built" forever.
+				self.dash.ensure_build( refresh=False )
+			ctx = self._sort_ctx()
+			ops = data.get( "ops" )
+			r   = self.sort.apply( lambda doc: sortops.apply_ops( doc , ctx , ops ) , by=by ,
+				dry_run=bool( data.get( "dry_run" ) ) , if_rev=if_rev )
+			out = { "ok": True , "rev": r[ "rev" ] , "results": r[ "result" ] , "summary": summary( r[ "doc" ] ) }
+			if r.get( "dry_run" ):
+				out[ "dry_run" ] = True
+				out[ "doc" ]     = r[ "doc" ]
+			self._send_json( 200 , out )
+		except sortops.OpFailure as e:
+			self._send_json( 400 , { "ok": False , "index": e.index , "op": e.op , "error": e.msg } )
+		except BoardLocked:
+			self._send_json( 403 , { "ok": False , "locked": True ,
+				"error": "this board is in view-only mode" } )
+		except BoardConflict as e:
+			self._send_json( 409 , { "ok": False , "conflict": True , "rev": e.rev ,
+				"error": f"the board has moved on ( it is at rev {e.rev} ) -- re-read it and retry" } )
+		except Exception as e:
+			self._send_json( 500 , { "ok": False , "error": str( e ) } )
+		return True
+
 	def do_GET( self ):
 		path = urlparse( self.path ).path
 
@@ -2901,6 +3217,9 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_json( 200 , self.review_missing.status() )
 			return
 
+		if path.startswith( "/api/sort/" ) and self._sort_api_get( path ):
+			return
+
 		board = self._board( path , "" )
 		if board:
 			# The whole curated document , plus the modality vocabulary the page's
@@ -2930,6 +3249,7 @@ class Handler( BaseHTTPRequestHandler ):
 			snap = board.snapshot()
 			self.dash.maybe_reload()
 			self._send_json( 200 , { "rev": snap[ "rev" ] , "locked": snap[ "locked" ] ,
+				"by": snap.get( "by" ) or "" ,
 				"index": getattr( self.dash , "built_at" , None ) } )
 			return
 
@@ -3213,12 +3533,18 @@ class Handler( BaseHTTPRequestHandler ):
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
 
+		if self._sort_api_post( urlparse( self.path ).path ):
+			return
+
 		board = self._board( urlparse( self.path ).path , "" )
 		if board:
 			# Save a board ( /api/tiers or /api/sort ). The page owns the document
-			# and posts it back WHOLE ( body : { "doc": { ... } } ) -- see
-			# src/db/tiers.py for why that's the right granularity here and what
-			# it does to protect the version it replaces.
+			# and posts it back WHOLE ( body : { "doc": { ... } , "base_rev": n } )
+			# -- see src/db/tiers.py for why that's the right granularity here and
+			# what it does to protect the version it replaces. base_rev is the
+			# version the page's copy started from : when something else wrote in
+			# between , the save is MERGED rather than written over it ( see
+			# BoardState.replace ).
 			try:
 				length = int( self.headers.get( "Content-Length" , "0" ) )
 				body   = self.rfile.read( length ) if length > 0 else b"{}"
@@ -3227,7 +3553,16 @@ class Handler( BaseHTTPRequestHandler ):
 				if not isinstance( doc , dict ):
 					self._send_json( 400 , { "ok": False , "error": "body needs a 'doc' object" } )
 					return
-				self._send_json( 200 , { "ok": True , **board.replace( doc ) } )
+				base = data.get( "base_rev" )
+				base = base if isinstance( base , int ) and not isinstance( base , bool ) else None
+				self._send_json( 200 , { "ok": True , **board.replace( doc , base_rev=base ,
+					by=self._actor_label() ) } )
+			except BoardConflict as e:
+				# The page's copy started from a version too old to merge against.
+				# It keeps what it has as a draft and offers it back over the
+				# reloaded board ( sort.html :: save ).
+				self._send_json( 409 , { "ok": False , "conflict": True , "rev": e.rev ,
+					"error": "the board changed too much since this page loaded it" } )
 			except BoardLocked:
 				# View-only ( src/db/boardlock.py ). The page already knows and has
 				# greyed itself out ; what lands here is a tab that was open BEFORE

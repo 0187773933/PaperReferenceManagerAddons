@@ -47,6 +47,7 @@ Keys , columns , history and the write-whole contract are all exactly as
 src/db/tiers.py describes them -- read that docstring first.
 """
 
+import re
 import time
 
 from ..utils import utils
@@ -209,7 +210,13 @@ def _snapshot( args , current ):
 	try:
 		d = history_dir( args )
 		d.mkdir( parents=True , exist_ok=True )
-		dest = d.joinpath( f"sort-{time.strftime( '%Y%m%d-%H%M%S' )}.json" )
+		# To the millisecond : an agent's batches can land several to a second ,
+		# and each one's predecessor is a version it may want to restore. The
+		# digits run straight on from the seconds , so these names still sort in
+		# time order among the older sort-YYYYmmdd-HHMMSS.json ones.
+		t    = time.time()
+		dest = d.joinpath( f"sort-{time.strftime( '%Y%m%d-%H%M%S' , time.localtime( t ) )}"
+			f"{int( t * 1000 ) % 1000:03d}.json" )
 		if not dest.exists():
 			dest.write_bytes( current.read_bytes() )
 		for f in sorted( d.glob( "sort-*.json" ) )[ : -HISTORY_KEEP ] if HISTORY_KEEP else []:
@@ -219,3 +226,215 @@ def _snapshot( args , current ):
 				pass
 	except Exception as e:
 		print( f"sort :: could not snapshot previous version ( {e} )" )
+
+
+# ---------------------------------------------------------------------------
+# History , for an agent to read back and restore from
+# ---------------------------------------------------------------------------
+
+_SNAP_RE = re.compile( r"^sort-\d{8}-\d{6}(\d{3})?$" )
+
+
+def snapshots( args ):
+	"""The saved versions in sort-history/ , newest first : { id , at , list ,
+	shelf }. An unreadable one is listed with its counts as None."""
+	out = []
+	try:
+		files = sorted( history_dir( args ).glob( "sort-*.json" ) , reverse=True )
+	except Exception:
+		return out
+	for f in files:
+		if not _SNAP_RE.match( f.stem ):
+			continue
+		d = f.stem[ 5: ]
+		row = { "id": f.stem , "at": f"{d[ :4 ]}-{d[ 4:6 ]}-{d[ 6:8 ]}T{d[ 9:11 ]}:{d[ 11:13 ]}:{d[ 13:15 ]}"
+			+ ( f".{d[ 15: ]}" if len( d ) > 15 else "" ) ,
+			"list": None , "shelf": None }
+		try:
+			doc = utils.read_json( f )
+			row[ "list" ]  = len( doc.get( "items" ) or [] )
+			row[ "shelf" ] = len( doc.get( "staging" ) or [] )
+		except Exception:
+			pass
+		out.append( row )
+	return out
+
+
+def read_snapshot( args , sid ):
+	"""One saved version by its id ( as snapshots() lists it ) , normalized.
+	None for an id that isn't one -- never a path outside sort-history/ ."""
+	if not isinstance( sid , str ) or not _SNAP_RE.match( sid ):
+		return None
+	p = history_dir( args ).joinpath( sid + ".json" )
+	if not p.exists():
+		return None
+	return normalize( utils.read_json( p ) )
+
+
+# ---------------------------------------------------------------------------
+# Merge : a page's save over a board that moved underneath it
+# ---------------------------------------------------------------------------
+#
+# The page posts the WHOLE document. When something else wrote in between -- an
+# agent's ops , another tab -- that document is missing their change , and
+# writing it as-is would quietly undo it. So the page says which version it
+# started from ( base_rev ) and the server merges three ways : the BASE it
+# started from , MINE ( what it posted ) and THEIRS ( what is stored now ).
+#
+# The rule everywhere is "mine if I changed it , theirs otherwise" , at the
+# finest grain the document has :
+#
+#   where a row is   list / shelf / gone -- whichever side moved it wins , so a
+#                    delete on either side beats an edit on the other
+#   a row's fields   title , year , ... each on its own ; each CELL on its own
+#   a row's tags     a set : theirs , less what I took off , plus what I put on
+#   the list order   mine if I reordered the rows we share , theirs otherwise ;
+#                    the rows only the other side has go in after the nearest
+#                    row before them that survived
+#   columns , tags   the same keyed merge , by column id / tag name
+#   options          key by key
+
+_ROW_SCALARS = ( "title" , "authors" , "doi" , "wid" , "pdf" , "year" , "journal" ,
+	"placed" , "pending" , "added_at" )
+
+
+def _pick( b , m , t ):
+	return m if m != b else t
+
+
+def _weave( primary , secondary , keep ):
+	"""`primary`'s order , restricted to `keep` , with whatever only `secondary`
+	has slotted in after its nearest predecessor there."""
+	out  = [ k for k in primary if k in keep ]
+	have = set( out )
+	for i , k in enumerate( secondary ):
+		if k not in keep or k in have:
+			continue
+		at = 0
+		for j in range( i - 1 , -1 , -1 ):
+			if secondary[ j ] in have:
+				at = out.index( secondary[ j ] ) + 1
+				break
+		out.insert( at , k )
+		have.add( k )
+	out.extend( sorted( k for k in keep if k not in have ) )
+	return out
+
+
+def _reordered( base , mine ):
+	"""Did MINE change the relative order of the keys it shares with BASE ?"""
+	shared = set( base ) & set( mine )
+	return [ k for k in mine if k in shared ] != [ k for k in base if k in shared ]
+
+
+def _order( b , m , t , keep ):
+	if _reordered( b , m ):
+		return _weave( m , t , keep )
+	return _weave( t , m , keep )
+
+
+def _merge_keyed( b , m , t , key , entry ):
+	"""A keyed list ( columns , vocab tags ) : present unless a side that had it
+	in BASE dropped it , each entry merged by `entry( b , m , t )` , in order."""
+	bm = { key( x ): x for x in b }
+	mm = { key( x ): x for x in m }
+	tm = { key( x ): x for x in t }
+	keep = set()
+	for k in set( mm ) | set( tm ):
+		if k in mm and k in tm:
+			keep.add( k )
+		elif k in mm and k not in bm:    # I added it
+			keep.add( k )
+		elif k in tm and k not in bm:    # they added it
+			keep.add( k )
+	order = _order( [ key( x ) for x in b ] , [ key( x ) for x in m ] ,
+		[ key( x ) for x in t ] , keep )
+	out = []
+	for k in order:
+		if k in mm and k in tm:
+			out.append( entry( bm.get( k ) , mm[ k ] , tm[ k ] ) )
+		else:
+			out.append( mm.get( k ) or tm.get( k ) )
+	return out
+
+
+def _merge_dict( b , m , t ):
+	b , m , t = b or {} , m or {} , t or {}
+	return { k: _pick( b.get( k ) , m.get( k ) , t.get( k ) ) for k in list( t ) + [ k for k in m if k not in t ] }
+
+
+def _merge_row( b , m , t ):
+	"""One paper both sides still have."""
+	if b is None:
+		# Both added it : mine where it says something , theirs otherwise.
+		row = dict( t )
+		for f in _ROW_SCALARS:
+			if m.get( f ) not in ( None , "" , False ):
+				row[ f ] = m[ f ]
+		row[ "fields" ] = { k: ( m.get( "fields" , {} ).get( k ) or t.get( "fields" , {} ).get( k ) or "" )
+			for k in set( m.get( "fields" ) or {} ) | set( t.get( "fields" ) or {} ) }
+		row[ "tags" ] = list( { s.lower(): s for s in ( t.get( "tags" ) or [] ) + ( m.get( "tags" ) or [] ) }.values() )
+		return row
+	row = dict( t )
+	for f in _ROW_SCALARS:
+		row[ f ] = _pick( b.get( f ) , m.get( f ) , t.get( f ) )
+	row[ "fields" ] = _merge_dict( b.get( "fields" ) , m.get( "fields" ) , t.get( "fields" ) )
+	bt = { s.lower() for s in b.get( "tags" ) or [] }
+	mt = { s.lower() for s in m.get( "tags" ) or [] }
+	off  = bt - mt
+	tags = [ s for s in ( t.get( "tags" ) or [] ) if s.lower() not in off ]
+	have = { s.lower() for s in tags }
+	for s in m.get( "tags" ) or []:
+		if s.lower() not in bt and s.lower() not in have:
+			tags.append( s )
+			have.add( s.lower() )
+	row[ "tags" ] = tags
+	return row
+
+
+def merge( base , mine , theirs ):
+	"""Three-way merge of whole board documents -- see the block comment above.
+	All three are expected normalized ; the result is normalized."""
+	base , mine , theirs = ( normalize( d ) for d in ( base , mine , theirs ) )
+
+	def where( doc ):
+		out = {}
+		for loc in ( "items" , "staging" ):
+			for r in doc.get( loc ) or []:
+				out[ r[ "key" ] ] = ( loc , r )
+		return out
+	B , M , T = where( base ) , where( mine ) , where( theirs )
+	result = {}
+	for k in set( B ) | set( M ) | set( T ):
+		bl = B[ k ][ 0 ] if k in B else None
+		ml = M[ k ][ 0 ] if k in M else None
+		tl = T[ k ][ 0 ] if k in T else None
+		loc = ml if ml != bl else tl
+		if loc is None:
+			continue
+		b , m , t = ( X[ k ][ 1 ] if k in X else None for X in ( B , M , T ) )
+		row = _merge_row( b , m , t ) if ( m is not None and t is not None ) else ( m or t )
+		result[ k ] = ( loc , row )
+
+	lists = {}
+	for loc in ( "items" , "staging" ):
+		keep = { k for k , ( l , _ ) in result.items() if l == loc }
+		seq  = lambda d: [ r[ "key" ] for r in d.get( loc ) or [] ]
+		lists[ loc ] = [ result[ k ][ 1 ] for k in _order( seq( base ) , seq( mine ) , seq( theirs ) , keep ) ]
+
+	columns = _merge_keyed( base[ "columns" ] , mine[ "columns" ] , theirs[ "columns" ] ,
+		lambda c: c[ "id" ] ,
+		lambda b , m , t: { "id": t[ "id" ] , "label": _pick( ( b or {} ).get( "label" ) , m[ "label" ] , t[ "label" ] ) } )
+	tags = _merge_keyed( base[ "vocab" ][ "tags" ] , mine[ "vocab" ][ "tags" ] , theirs[ "vocab" ][ "tags" ] ,
+		lambda v: v[ "name" ].lower() ,
+		lambda b , m , t: { "name": _pick( ( b or {} ).get( "name" ) , m[ "name" ] , t[ "name" ] ) ,
+		                    "color": _pick( ( b or {} ).get( "color" ) , m.get( "color" ) , t.get( "color" ) ) } )
+	return normalize( {
+		"version":    VERSION ,
+		"updated_at": theirs.get( "updated_at" ) ,
+		"options":    _merge_dict( base[ "options" ] , mine[ "options" ] , theirs[ "options" ] ) ,
+		"columns":    columns ,
+		"items":      lists[ "items" ] ,
+		"staging":    lists[ "staging" ] ,
+		"vocab":      { "tags": tags } ,
+	} )
