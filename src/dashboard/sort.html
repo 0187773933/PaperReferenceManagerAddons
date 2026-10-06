@@ -596,6 +596,8 @@
         <span class="pblabel" title="The bar to the left is every tag on this board: click a chip to paint it onto rows, drag one to move it along the bar">Tags:</span>
         <button class="pbtn" id="tagfilter" title="Turn the tag bar into a filter: click tags to show only the papers carrying them">🔎 Filter</button>
         <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen tags · all = it needs every one · none = it has none of them — click to switch">any</button>
+        <input class="chipin newtag" id="tagfind" placeholder="🔎 find a tag" autocomplete="off"
+          title="Type part of a tag's name, then ↵ ( or click one ) to add it to the filter — 🔎 Filter turns on by itself">
         <button class="pbtn" id="tagedit" title="Pick the colour every tag's chips are drawn in">🎨 Colors</button>
       </span>
     </div>
@@ -1418,7 +1420,7 @@ function renderCounts(){
 //                           outline = every one has it, dashed = some do, and a
 //                           click flips it on all of them.
 //   otherwise            -- a click arms the tag for painting ( click rows ).
-// The bar's own controls -- + new tag, the label, 🔎 Filter, any, 🎨 Colors --
+// The bar's own controls -- + new tag, the label, 🔎 Filter, any, find, 🎨 Colors --
 // live at the END of the chip flow, and are REAL elements with their listeners
 // already on them. So they are captured once here and moved back to the end
 // after each redraw ; rewriting them as markup every time would throw those
@@ -2483,6 +2485,7 @@ function acTargets(input){
   return [];
 }
 function acOptions(input){
+  if(input.id === "tagfind") return findOptions(input.value);
   const targets = acTargets(input);
   // Offer what at least one target hasn't got : with several rows picked, a tag
   // some of them are missing is exactly the one you're reaching for.
@@ -2498,8 +2501,10 @@ function acRender(){
   const term = AC.input.value.trim();
   const body = AC.opts.map((v,i)=>`<div class="acopt ${i===AC.idx?'sel':''}" data-v="${esc(v)}">${esc(v)}</div>`).join("");
   const isNew = term && !AC.opts.some(v=>lc(v)===lc(term));
-  pop.innerHTML = (body + (isNew?`<div class="acnew">↵ creates “${esc(term)}”</div>`:"")) ||
-    `<div class="acnew">type to create a new one</div>`;
+  pop.innerHTML = AC.input.id === "tagfind"
+    ? body || `<div class="acnew">${term ? `no tag matches “${esc(term)}”` : "every tag is in the filter"}</div>`
+    : (body + (isNew?`<div class="acnew">↵ creates “${esc(term)}”</div>`:"")) ||
+      `<div class="acnew">type to create a new one</div>`;
   const r = AC.input.getBoundingClientRect();
   pop.style.left = (r.left + window.scrollX) + "px";
   pop.style.top  = (r.bottom + window.scrollY + 4) + "px";
@@ -2511,6 +2516,7 @@ function acCommit(value){
   if(!input) return;
   const v = (value != null ? value : input.value).trim();
   if(!v){ acClose(); return; }
+  if(input.id === "tagfind"){ findCommit(v); return; }
   const board = input.closest(".row");
   const srow  = input.closest(".srow");
   const n = acTargets(input).filter(it=>addTag(it, v)).length;
@@ -3007,15 +3013,42 @@ function applyFilter(){
 }
 // 🔎 : the tag bar stops being a brush and becomes a filter. Turning it off
 // clears the filter -- a hidden row you've forgotten about is worse than none.
-$("#tagfilter").addEventListener("click", ()=>{
-  filtering = !filtering;
+function setFiltering(on){
+  filtering = on;
   if(!filtering) TAGF.clear();
   else armed = null;
   $("#tagfilter").classList.toggle("on", filtering);
   $("#tagfilter").textContent = filtering ? "🔎 Filtering" : "🔎 Filter";
   $("#tagfilterany").style.display = filtering ? "" : "none";
   applyFilter(); renderPaintbar();
-});
+}
+$("#tagfilter").addEventListener("click", ()=>setFiltering(!filtering));
+// 🔎 find a tag : with this many tags, the chip you want is easier typed than
+// spotted. The bar's tags narrowed to what you type -- names that START with it
+// first -- minus the ones already in the filter ; ↵ ( or a click ) adds the
+// highlighted one to the filter, switching 🔎 Filter on if it was off. It rides
+// on the chip inputs' autocomplete ( acOptions / acRender / acCommit ).
+function findOptions(text){
+  const term = text.trim();
+  const left = tagOptions().filter(v=>!(filtering && TAGF.has(v)));
+  if(!term) return left;
+  const starts = left.filter(v=>lc(v).startsWith(lc(term)));
+  return starts.concat(left.filter(v=>!lc(v).startsWith(lc(term)) && textHas(v, term)));
+}
+function findCommit(v){
+  const tag = tagOptions().find(t=>lc(t)===lc(v)) || AC.opts[AC.idx];
+  if(!tag){ toast(`No tag “${v}” on this board`); return; }
+  const box = $("#tagfind");
+  acClose();
+  box.value = "";
+  TAGF.add(tag);
+  if(filtering){ applyFilter(); renderPaintbar(); }
+  else setFiltering(true);
+  box.focus();
+}
+// The bar is redrawn under the box on every pick, which can leave it focused
+// with no popup attached -- typing brings the popup back.
+$("#tagfind").addEventListener("input", e=>{ if(AC.input !== e.target) acOpen(e.target); });
 // any → all → none → any. On none the picked chips are struck through : they
 // are the tags a paper must not have.
 $("#tagfilterany").addEventListener("click", ()=>{
@@ -4552,7 +4585,7 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         same way every time. Tags you make are saved with the board and are still here after a
         restart.</li>
     <li>The tag bar's own controls — <kbd>+ new tag</kbd>, <kbd>🔎 Filter</kbd>,
-        <kbd>🎨 Colors</kbd> — sit at the <b>end</b> of the chips rather than in front of them,
+        <kbd>🔎 find a tag</kbd>, <kbd>🎨 Colors</kbd> — sit at the <b>end</b> of the chips rather than in front of them,
         so they take whatever is left of the last line of chips instead of a line of their own.</li>
     <li><b>Rearrange the tag bar</b> by dragging a chip along it — put the modalities together,
         your own judgements next to each other, whatever grouping you think in. The order is
@@ -4594,7 +4627,10 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         paper held in place; <kbd>◂ Hide Extra Columns</kbd> folds them again. Which way round is
         a setting of this browser, not of the board.</li>
     <li><b>Only show some of them</b>: <kbd>🔎 Filter</kbd> turns the tag bar into a filter — click
-        tags and the board narrows to the papers carrying them. The button next to it switches how:
+        tags and the board narrows to the papers carrying them — or, with too many chips to spot the
+        one you want, type part of its name into <kbd>🔎 find a tag</kbd> and press <kbd>↵</kbd> ( or
+        click it in the list ) to add it to the filter ; <kbd>🔎 Filter</kbd> switches on by itself.
+        The button next to it switches how:
         <kbd>any</kbd> ( one of the tags is enough ), <kbd>all</kbd> ( every one ) or <kbd>none</kbd>
         ( only the papers carrying <i>none</i> of them — pick <kbd>fMRI</kbd> on <kbd>none</kbd> to see
         everything that isn't fMRI ; the picked chips are struck through ). <kbd>Filter the list…</kbd>, at the end of the action
