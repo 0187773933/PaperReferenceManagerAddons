@@ -596,6 +596,11 @@ class BoardState:
 		self._revs    = OrderedDict() # rev -> the document as it stood at that rev
 		self.slug     = ""            # one of the other sort lists : its slug ( SortLists )
 		self.gone     = False         # ... and that list has since been deleted
+		# Told about every write this board takes ( on_write( board , before ,
+		# after , by ) -> what it did , or None ) -- AFTER the lock is let go , so
+		# it is free to write to the other boards. SortLists hangs the cross-list
+		# mirroring of tags and cells here ( src/db/sortsync.py ).
+		self.on_write = None
 
 	def _current( self ):
 		return self.doc if self.doc is not None else self.store.default_doc()
@@ -656,10 +661,11 @@ class BoardState:
 			merge  = getattr( self.store , "merge" , None )
 			merged = False
 			prev   = self.last_by
+			before = self._current()
 			if base_rev is not None and base_rev != self.rev and merge is not None:
 				base = self._revs.get( base_rev )
 				if base is not None:
-					doc    = merge( base , doc , self._current() )
+					doc    = merge( base , doc , before )
 					merged = True
 				elif self.rev != self.boot_rev:
 					raise BoardConflict( self.rev )
@@ -669,14 +675,16 @@ class BoardState:
 			if merged:
 				out[ "merged" ] = True
 				out[ "merged_with" ] = prev
-			return out
+		return self._wrote( out , before , by )
 
-	def apply( self , fn , by="" , dry_run=False , if_rev=None ):
+	def apply( self , fn , by="" , dry_run=False , if_rev=None , mirror=True ):
 		"""Run `fn( doc )` against a COPY of the board and save the result as one
 		new version -- the agent ops ( src/db/sortops.py ). Whatever `fn` raises
 		propagates with nothing saved. `if_rev` : refuse ( BoardConflict ) unless
 		the board is still at that rev. `dry_run` : hand back what WOULD be saved
-		and save nothing ( allowed on a locked board -- it changes nothing )."""
+		and save nothing ( allowed on a locked board -- it changes nothing ).
+		`mirror=False` keeps the write to this board alone ( a restore puts back
+		THIS list's past , not every list's -- see on_write )."""
 		with self._lock:
 			if self.gone:
 				raise BoardGone( self.name )
@@ -684,14 +692,48 @@ class BoardState:
 				raise BoardConflict( self.rev )
 			if self.locked and not dry_run:
 				raise BoardLocked( self.name )
-			work   = copy.deepcopy( self._current() )
+			before = self._current()
+			work   = copy.deepcopy( before )
 			result = fn( work )
 			if dry_run:
 				return { "rev": self.rev , "doc": self.store.normalize( work ) ,
 					"result": result , "dry_run": True }
 			self.doc = self.store.save( self.args , work )
 			self._bump( by )
-			return { "rev": self.rev , "doc": self.doc , "result": result }
+			out = { "rev": self.rev , "doc": self.doc , "result": result }
+		return self._wrote( out , before , by ) if mirror else out
+
+	def _wrote( self , out , before , by ):
+		"""( outside the lock ) Tell on_write about a write that just landed ; what
+		it did comes back on the answer as `mirrored`. Its failing never fails
+		the write , which has already happened."""
+		if self.on_write is None:
+			return out
+		try:
+			did = self.on_write( self , before , out[ "doc" ] , by )
+		except Exception as e:
+			print( f"{self.name} :: mirroring to the other lists failed ( {e!r} )" )
+			did = None
+		if did:
+			out[ "mirrored" ] = did
+		return out
+
+	def absorb( self , fn , by="" ):
+		"""Take an edit made on ANOTHER board ( SortLists' mirroring ) : `fn( doc )`
+		on a copy , saved as one new version when it says it changed something
+		( a count > 0 ). Never tells on_write -- an edit passed along is not passed
+		along again. -> "locked" / "gone" when it was refused , else the count."""
+		with self._lock:
+			if self.gone:
+				return "gone"
+			if self.locked:
+				return "locked"
+			work = copy.deepcopy( self._current() )
+			n    = fn( work )
+			if n:
+				self.doc = self.store.save( self.args , work )
+				self._bump( by )
+			return n
 
 	def set_lock( self , on ):
 		"""Turn the view-only latch on / off , persisted. `rev` is bumped so the
@@ -718,7 +760,12 @@ class SortLists:
 	Create / rename / delete run under one lock , and rename / delete also hold
 	the board's own : no save may land half way through its directory moving.
 	A deleted list's BoardState is marked `gone` , so a tab still open on it gets
-	a refusal instead of writing the file back into existence."""
+	a refusal instead of writing the file back into existence.
+
+	Every list -- the main board too -- reports its writes to mirror() , which
+	makes the same tag and cell edits on every other list holding those papers
+	( src/db/sortsync.py ). A list in view-only mode is passed over : nothing
+	writes to a locked board , this included."""
 
 	MAIN_NAME = "Main"
 
@@ -727,6 +774,7 @@ class SortLists:
 		self.main    = main
 		self._lock   = threading.Lock()
 		self._boards = {}
+		main.on_write = self.mirror
 
 	def _load( self , slug ):
 		"""( call under the lock ) The board for an existing slug , or None."""
@@ -739,8 +787,38 @@ class SortLists:
 		b = BoardState( self.args , sortlists.ListStore( slug ) , f"sort/{slug}" )
 		b.slug = slug
 		b.load()
+		b.on_write = self.mirror
 		self._boards[ slug ] = b
 		return b
+
+	def mirror( self , src , before , after , by ):
+		"""A write `src` just took ( BoardState.on_write ) : its tag and cell edits ,
+		made on every other list that holds those papers. Called with no board's
+		lock held , and each list takes its own in turn , so two lists mirroring
+		into each other at once can't deadlock. -> one entry per list it reached ,
+		for the answer to the write ( `mirrored` ) -- the page says when one was
+		passed over for being view-only."""
+		from ..db import sortlists , sortsync
+		ch = sortsync.changes( before , after )
+		if not ch:
+			return None
+		where = self.name( src.slug )
+		# What the other tabs on those lists toast : "Reloaded — Ana ( on “Main” ) changed the board".
+		label = f"{by} ( on “{where}” )" if by else f"an edit on “{where}”"
+		boards = [ self.main ] + [ self.get( s ) for s in sortlists.all_slugs( self.args ) ]
+		out , seen = [] , { id( src ) }
+		for b in boards:
+			if b is None or id( b ) in seen:
+				continue
+			seen.add( id( b ) )
+			if not sortsync.touches( b.snapshot()[ "doc" ] , ch ):
+				continue                     # none of these papers is on it
+			did = b.absorb( lambda doc: sortsync.apply( doc , ch , after ) , by=label )
+			if did in ( "locked" , "gone" ):
+				out.append( { "list": b.slug , "name": self.name( b.slug ) , "skipped": did } )
+			elif did:
+				out.append( { "list": b.slug , "name": self.name( b.slug ) , "papers": did } )
+		return out or None
 
 	def get( self , slug ):
 		"""The BoardState for a list -- "" / "main" for the main board , a slug it
@@ -3285,7 +3363,9 @@ class Handler( BaseHTTPRequestHandler ):
 				def put_back( doc ):
 					doc.clear()
 					doc.update( copy.deepcopy( snap ) )
-				r = board.apply( put_back , by=by )
+				# This list's past only : putting back yesterday's tags here must not
+				# roll back every other list that shares those papers.
+				r = board.apply( put_back , by=by , mirror=False )
 				self._send_json( 200 , { "ok": True , "rev": r[ "rev" ] , "restored": data.get( "id" ) ,
 					"summary": summary( r[ "doc" ] ) } )
 				return True
@@ -3303,6 +3383,8 @@ class Handler( BaseHTTPRequestHandler ):
 			r   = board.apply( lambda doc: sortops.apply_ops( doc , ctx , ops ) , by=by ,
 				dry_run=bool( data.get( "dry_run" ) ) , if_rev=if_rev )
 			out = { "ok": True , "rev": r[ "rev" ] , "results": r[ "result" ] , "summary": summary( r[ "doc" ] ) }
+			if r.get( "mirrored" ):
+				out[ "mirrored" ] = r[ "mirrored" ]   # the other lists that got the same tag / cell edits
 			if r.get( "dry_run" ):
 				out[ "dry_run" ] = True
 				out[ "doc" ]     = r[ "doc" ]

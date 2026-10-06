@@ -31,6 +31,30 @@
      keeps ↶ ↷ ? 🌙 over on the right. */
   .jumpctl { display:flex; gap:8px; align-items:center; margin-right:auto; }
   #jumpto { width:88px; padding:6px 9px; font-size:13px; }
+  /* The pinned bar is ONE row, however narrow the window -- a second row is a
+     row less of the board, on every screen, all the way down the list. So it
+     never wraps : when everything won't fit it gives things up, in this order,
+     until the row does ( see fitBar ) :
+       .fit1  the room between and inside its buttons
+       .fit2  the words on the anchor and jump buttons ( the arrows stay, the
+              tooltips say the rest ) , and every count but the papers
+       .fit3  the page title, and the glyphs on the links to the other pages
+       .fit4  their words instead ( glyphs back -- ✎ Review and ✎ Missing
+              only look alike this far down )
+     and only past all four -- a phone -- does it wrap after all. Nothing in
+     it shrinks or wraps its own text, so "doesn't fit" is something fitBar
+     can measure. */
+  .titlebar { flex-wrap:nowrap; }
+  .titlebar > *, .titlebar :is(.navlinks, .jumpctl, .counts) > * { flex-shrink:0; }
+  .titlebar :is(.navlinks, .counts) { flex-wrap:nowrap; }
+  .titlebar :is(button, .navlink, .counts span) { white-space:nowrap; }
+  .titlebar.fit1 { gap:6px; }
+  .titlebar.fit1 :is(.navlinks, .jumpctl, .counts) { gap:5px; }
+  .titlebar.fit1 :is(button, .navlink) { padding:6px 7px; }
+  .titlebar.fit2 .jumpctl .w, .titlebar.fit2 .counts > span:not(:first-child) { display:none; }
+  .titlebar.fit2 #listbtn { max-width:140px; }
+  .titlebar.fit3 h1, .titlebar.fit3:not(.fit4) .navlinks .g, .titlebar.fit4 .navlinks .w { display:none; }
+  .titlebar.fitwrap { flex-wrap:wrap; }
 
   /* #tools : everything the bar doesn't pin. In its place under the bar it's
      part of the page and scrolls away with the list ; .float drops it down over
@@ -168,14 +192,6 @@
   #board.dropinto { box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   .row { border-bottom:1px solid var(--line); background:var(--row); }
   .row:last-child { border-bottom:none; }
-  /* Only the rows near the screen are drawn. The board runs to hundreds of
-     rows with a textarea per column in each, and laying out, painting and
-     layering all of them on every frame is what made scrolling stutter. A row
-     off screen keeps its place at the height it had when it was last drawn
-     ( `auto` ) -- or, one never drawn yet, at --rowh , the average of the ones
-     that have been ( see measureRowH ). renderBoard hands every row its old
-     height back inline , so a redraw lands each row exactly where it was. */
-  #board > .row { content-visibility:auto; contain-intrinsic-size:auto var(--rowh, 96px); }
   .row:hover { background:var(--panel2); }
   .row.dragging { opacity:.4; }
   .row.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
@@ -258,14 +274,6 @@
   }
   .notecell textarea:hover { border-color:var(--line); }
   .notecell textarea:focus { outline:none; border-color:var(--accent); background:var(--panel2); min-height:110px; }
-  /* A cell scrolls its own text only once you are in it. At rest a long one
-     is clipped, so a wheel or a swipe passing over it always moves the page
-     instead of catching on the cell part way down -- and the browser isn't
-     keeping a scroller for every one of them. `.editing` as well as :focus
-     so switching windows mid-note doesn't take the scrollbar away and rewrap
-     the text ; :focus for a view-only board, which never gets .editing . */
-  .notecell textarea { overflow:hidden; }
-  .notecell textarea:focus, .cellbox.editing > textarea { overflow:auto; }
   .cellbox .lnk {
     /* inset:0 over .cellbox , whose box IS the textarea's : 5px / 7px of padding
        here is the textarea's 1px border plus its 4px / 6px. */
@@ -492,24 +500,26 @@
       <div id="listpop"></div>
     </span>
     <div class="counts" id="counts"></div>
+    <!-- .w : the words a tight window takes off a button, leaving its glyph ;
+         .g : a link's glyph, which goes first ( see .fit1 … .fit4 in the style ). -->
     <nav class="navlinks">
-      <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
-      <a class="navlink" href="/tiers" title="The other board: tier buckets you place papers in">★ Tiers</a>
-      <a class="navlink" href="/review" title="What this list adds up to: every paper on it screened, with the numbers pulled out of its own text">✎ Review</a>
-      <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone">✎ Missing</a>
-      <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx">{ } Code</a>
-      <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names">⛁ Datasets</a>
+      <a class="navlink" href="/" title="Back to the search dashboard"><span class="g">←</span><span class="w"> Dashboard</span></a>
+      <a class="navlink" href="/tiers" title="The other board: tier buckets you place papers in"><span class="g">★</span><span class="w"> Tiers</span></a>
+      <a class="navlink" href="/review" title="What this list adds up to: every paper on it screened, with the numbers pulled out of its own text"><span class="g">✎</span><span class="w"> Review</span></a>
+      <a class="navlink" href="/review-missing" title="The same three criteria run over the papers you do NOT have — the &quot;All missing&quot; pool, screened on title and abstract alone"><span class="g">✎</span><span class="w"> Missing</span></a>
+      <a class="navlink" href="/code" title="Every paper ` prma code ` found a repo for , with a column for each board that holds it — sortable , filterable , exportable to xlsx"><span class="g">{ }</span><span class="w"> Code</span></a>
+      <a class="navlink" href="/datasets" title="The public data every paper stands on — the archives it links and the collections it only names"><span class="g">⛁</span><span class="w"> Datasets</span></a>
     </nav>
     <span class="jumpctl">
-      <button id="anchorbtn" title="Select a row, then click here to drop the anchor on it" disabled>⚓ Anchor</button>
-      <button id="toanchor" title="No anchor yet — select a row and click ⚓ Anchor" disabled>⤓ To anchor</button>
+      <button id="anchorbtn" title="Select a row, then click here to drop the anchor on it" disabled>⚓<span class="w"> Anchor</span></button>
+      <button id="toanchor" title="No anchor yet — select a row and click ⚓ Anchor" disabled>⤓<span class="w"> To anchor</span></button>
       <input id="jumpto" type="text" inputmode="numeric" autocomplete="off" placeholder="Jump to #"
              title="Type a row's number and press ↵ to scroll to it">
-      <button id="totop" title="Back to the top of the list">↑ Top</button>
-      <button id="tobottom" title="Down to the bottom of the list">↓ Bottom</button>
+      <button id="totop" title="Back to the top of the list">↑<span class="w"> Top</span></button>
+      <button id="tobottom" title="Down to the bottom of the list">↓<span class="w"> Bottom</span></button>
       <!-- Only while rows are selected ( renderCopyTo ) -- pinned, like the
            anchor, because a selection is usually made a long way down the list. -->
-      <button id="copyto" class="needs-login" style="display:none" title="Copy the selected rows to another list, or start a new list with them">⇢ Copy to list…</button>
+      <button id="copyto" class="needs-login" style="display:none" title="Copy the selected rows to another list, or start a new list with them">⇢<span class="w"> Copy to list…</span></button>
     </span>
     <button id="undoact" title="Nothing to undo yet" disabled>↶</button>
     <button id="redoact" title="Nothing to redo" disabled>↷</button>
@@ -959,8 +969,21 @@ async function save(){
       if(kept < staged().length)
         toast(`The server kept ${kept} of ${staged().length} staged rows — the shelf is full`, 9000);
     } else { $("#savestate").textContent = "save failed — retrying"; retrySave(); }
+    if(r && r.ok) notePassedOver(r.mirrored);
   } catch(e){ $("#savestate").textContent = "save failed ( offline? ) — retrying"; retrySave(); }
   saving = false;
+}
+// A paper's tags and cells are the same on every list that holds it : the
+// server makes each edit saved here on all the others too ( src/db/sortsync.py ),
+// and says where in `mirrored`. The one worth a word is a list it passed over --
+// a view-only one keeps its own copy -- and only once a visit, or every save
+// while you type a note would say it again.
+const PASSED = new Set();
+function notePassedOver(mirrored){
+  const fresh = (mirrored || []).filter(m=>m.skipped === "locked" && !PASSED.has(m.list));
+  if(!fresh.length) return;
+  fresh.forEach(m=>PASSED.add(m.list));
+  toast(`Not copied to ${fresh.map(m=>`“${m.name}”`).join(", ")} — view-only, so it keeps its own tags and notes`, 8000);
 }
 // The board as the server has it now replaces this tab's copy -- a merged save
 // coming back. Same repairs as loadDoc, and the same fresh undo history : the
@@ -1325,16 +1348,13 @@ function labelView(){
   else delete document.documentElement.dataset.view;
 }
 
-// h : the height this row had before the redraw, if it was on the board -- what
-// it stands in at while it is off screen ( see #board > .row in the style ).
-function rowHtml(it, n, h){
+function rowHtml(it, n){
   const m = META[it.key] || {};
   const title = it.title || m.title || it.key;
   const year  = it.year || m.year || "";
   const inner = esc(title);          // plain text -- open it from the link strip
   const loose = (m.in_library === false) ? " " + looseBadge(it) : "";
-  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}"`+
-    (h ? ` style="contain-intrinsic-size:auto ${h}px"` : "")+`>`+
+  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
     `<div class="c numc">`+
       `<input class="numin" value="${n}" title="Where this paper sits in YOUR order — type a number and press ↵ to send it there, from any view" `+
         `inputmode="numeric" autocomplete="off"${RO()}>`+
@@ -1365,22 +1385,9 @@ function renderBoard(){
               start: a.selectionStart, end: a.selectionEnd, val: a.value };
   }
   const no = manualNo();
-  // Every row's height as it stands, by paper. A row off screen isn't drawn,
-  // and a NEW element has no drawn height to remember -- so without these the
-  // rows above you would all come back at the --rowh estimate and the page
-  // would land on some other row. With them the board is the same height in
-  // the same places, and a moved row takes its own height along with it.
-  // Kept across redraws ( ROWH ), so a row deleted and brought back with Undo
-  // returns at its own height too.
-  $$("#board > .row:not(.hide)").forEach(r=>{
-    const h = rowContentH(r);
-    if(h > 0) ROWH.set(r.dataset.key, h);
-  });
   $("#board").innerHTML = DOC.items.length
-    ? viewItems().map(it=>rowHtml(it, no.get(it.key), ROWH.get(it.key))).join("")
+    ? viewItems().map(it=>rowHtml(it, no.get(it.key))).join("")
     : `<div class="empty">Nothing here yet — search above and press ↵ ( or double-click a hit ) to add papers.</div>`;
-  measureRowH();
-  if(holdView){ holdView.disconnect(); $$("#board > .row").forEach(r=>holdView.observe(r)); }
   applyFilter();
   if(focus){
     const row = rowEl(focus.key);
@@ -1396,55 +1403,6 @@ function renderBoard(){
     }
   }
 }
-// A row's height less its own bottom border -- the size it is held at while
-// off screen is its content's. Unrounded : 750 rows of rounding is a row's
-// worth of drift. ROWH : the last one each paper had, by key ( see renderBoard ).
-const rowContentH = r => r.getBoundingClientRect().height - (r.offsetHeight - r.clientHeight);
-const ROWH = new Map();
-// --rowh : what a row that has never been drawn stands in at -- the average of
-// the ones on screen, taken the frame after they ARE drawn, and taken again
-// whenever the columns change under them ( a Methods summary makes for a
-// taller row than a note ).
-let rowHFor = null;
-function measureRowH(){
-  const grid = document.documentElement.style.getPropertyValue("--grid");
-  if(rowHFor === grid) return;
-  rowHFor = grid;
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    const hs = $$("#board > .row:not(.hide)").filter(r=>{
-      const b = r.getBoundingClientRect();
-      return b.bottom > 0 && b.top < innerHeight;
-    }).map(rowContentH);
-    if(hs.length >= 3)
-      document.documentElement.style.setProperty("--rowh", (hs.reduce((s,h)=>s+h, 0) / hs.length).toFixed(1) + "px");
-    else rowHFor = null;      // nothing on screen to go by -- try again on the next redraw
-  }));
-}
-// A row drawn for the first time ABOVE what you're looking at -- scrolling back
-// up after a jump, or after dragging the scrollbar -- comes out taller or
-// shorter than the height it stood in at. Most browsers hold the view still
-// through that by themselves ( scroll anchoring ) ; where one doesn't ( Safari )
-// everything on screen would lurch by the difference, so it's done here : the
-// page is scrolled by however much the rows wholly above the column head
-// changed. Not while the page is making a scroll of its own ( settleScroll ) :
-// a jump scroll here would cut that one short, and it aims again at the end
-// anyway. Null where the browser does it.
-const holdView = (window.ResizeObserver && !(window.CSS && CSS.supports("overflow-anchor", "auto")))
-  ? (()=>{
-      const was = new WeakMap();
-      return new ResizeObserver(entries=>{
-        const edge = $("header").offsetHeight + $("#colwrap").offsetHeight;
-        let shift = 0;
-        entries.forEach(e=>{
-          const r = e.target, before = was.get(r);
-          const h = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : r.offsetHeight;
-          was.set(r, h);
-          if(before != null && h !== before && r.getBoundingClientRect().bottom <= edge) shift += h - before;
-        });
-        if(shift && !settling) window.scrollBy(0, shift);
-      });
-    })()
-  : null;
 function renderCounts(){
   const n = DOC.items.length;
   const tagged = DOC.items.filter(it=>(it.tags||[]).length).length;
@@ -1734,7 +1692,7 @@ function addStaged(keys){
   const first = rowEl(moving[0].key);
   if(first){
     first.classList.add("flash");
-    if(!staged().length) centerRow(first);
+    if(!staged().length) first.scrollIntoView({ block:"center", behavior:"smooth" });
   }
   toast(`Added ${moving.length} paper(s) to ${whereLabel()}`, 6000, "Undo", ()=>{
     DOC.items   = DOC.items.filter(it=>moving.indexOf(it) < 0);
@@ -2156,7 +2114,7 @@ async function addPaper(hit, at){
       // the scroll land the row below it.
       const r = el.getBoundingClientRect();
       if(document.activeElement === $("#q") && (r.top < 0 || r.bottom > innerHeight)) floatTools(true);
-      centerRow(el);
+      el.scrollIntoView({ block:"center", behavior:"smooth" });
     }
   }
   const got = await fetchMeta([it.key], true);
@@ -3188,6 +3146,29 @@ initTheme();
 // it ), on Esc, or when you scroll back up to where it lives. A search you're
 // in the middle of follows you the same way : adding a paper scrolls to its
 // row, and the next one is likely a keystroke away.
+//
+// The bar itself stays ONE row ( .titlebar in the style ) : fitBar takes back
+// everything it gave up, then gives it up again a step at a time until the row
+// fits. Again whenever the window changes, or anything in the bar does -- the
+// counts, the list's name, the account chip arriving, ⇢ Copy to list coming
+// and going with the selection, the lock badge. A frame later rather than on
+// the spot, so a burst of changes is one fit, and before anything is painted.
+const BAR = $(".titlebar"), FITS = [ "fit1", "fit2", "fit3", "fit4", "fitwrap" ];
+function fitBar(){
+  BAR.classList.remove(...FITS);
+  for(const c of FITS){
+    if(BAR.scrollWidth <= BAR.clientWidth) return;
+    BAR.classList.add(c);
+  }
+}
+let fitFrame = 0;
+const refit = () => { if(!fitFrame) fitFrame = requestAnimationFrame(()=>{ fitFrame = 0; fitBar(); }); };
+window.addEventListener("resize", refit);
+new MutationObserver(refit).observe(BAR, { subtree:true, childList:true, characterData:true,
+                                           attributes:true, attributeFilter:[ "style" ] });
+if(document.fonts) document.fonts.ready.then(refit);
+refit();
+
 const TOOLS = $("#tools"), SLOT = $("#toolslot");
 const toolsOpen = () => TOOLS.classList.contains("float");
 const toolsAway = () => SLOT.getBoundingClientRect().top < $("header").getBoundingClientRect().bottom - 1;
@@ -3222,51 +3203,17 @@ function stowTools(e){
 window.addEventListener("wheel", stowTools, { passive:true });
 window.addEventListener("touchmove", stowTools, { passive:true });
 
-// Every scroll the page makes by itself -- ↑ Top, ↓ Bottom, Jump to, ⤓ To
-// anchor, a paper landing on the board -- goes through settleScroll. Smooth
-// unless the machine is set to reduce motion.
-//
-// Far down the board it is aiming partly at guesses : the rows on the way are
-// only drawn as they come by ( see #board > .row in the style ), and as they
-// are, the spot it was aiming at moves. So once the page comes to rest it
-// looks again, and goes the rest of the way -- up to three times, each a
-// shorter hop than the last -- and gives up the moment you take the wheel, the
-// keys or the mouse yourself. "At rest" is no scroll for a moment rather than
-// `scrollend`, which not every browser has. A smooth scroll some renderer
-// quietly dropped -- no scroll at all -- is retried as a plain jump.
-const motionOK = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const YOURS = [ "wheel", "touchstart", "keydown", "mousedown" ];
-let settling = null;
-function settleScroll(target){
-  if(settling) settling();
-  let tries = 0, moved = true, quiet = 0;
-  const go = () => {
-    const max = document.documentElement.scrollHeight - innerHeight;
-    const y   = Math.max(0, Math.min(target(), max));
-    if(Math.abs(window.scrollY - y) <= 2) return false;
-    window.scrollTo({ top:y, behavior: motionOK && moved ? "smooth" : "auto" });
-    moved = false;
-    return true;
-  };
-  const rest  = () => { clearTimeout(quiet); quiet = setTimeout(check, 140); };
-  const onScroll = () => { moved = true; rest(); };
-  const check = () => { if(++tries > 3 || !go()) stop(); else rest(); };
-  const stop  = () => {
-    clearTimeout(quiet);
-    window.removeEventListener("scroll", onScroll);
-    YOURS.forEach(t=>window.removeEventListener(t, stop, true));
-    if(settling === stop) settling = null;
-  };
-  settling = stop;
-  window.addEventListener("scroll", onScroll, { passive:true });
-  YOURS.forEach(t=>window.addEventListener(t, stop, { capture:true, passive:true }));
-  if(go()) rest(); else stop();
-}
-
 // ↑ Top and ↓ Bottom, in the pinned bar next to Jump to : the two ends of a
-// long list, one click from anywhere down it.
+// long list, one click from anywhere down it. Smooth unless the machine is set
+// to reduce motion -- and with a jump behind it, because some renderers quietly
+// drop a smooth scroll and leave you exactly where you were.
+const motionOK = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 function scrollEnd(bottom){
-  settleScroll(()=> bottom ? document.documentElement.scrollHeight : 0);
+  const from = window.scrollY;
+  const to   = bottom ? document.documentElement.scrollHeight : 0;
+  if(!motionOK){ window.scrollTo(0, to); return; }
+  window.scrollTo({ top:to, behavior:"smooth" });
+  setTimeout(()=>{ if(window.scrollY === from) window.scrollTo(0, to); }, 250);
 }
 $("#totop").addEventListener("click", ()=>scrollEnd(false));
 $("#tobottom").addEventListener("click", ()=>scrollEnd(true));
@@ -3280,22 +3227,13 @@ $("#tobottom").addEventListener("click", ()=>scrollEnd(true));
 // Centred in what you can SEE -- the window less the pinned bar and column head
 // ( or the tools, if / has them down ) -- not in the whole window, where the
 // bar would sit on top of it. A row taller than that lands with its top showing.
-// Looked up by its paper each time rather than held : a redraw while it is
-// still on its way replaces the element.
-function centerRow(el){
-  const key = el.dataset.key;
-  settleScroll(()=>{
-    const row = rowEl(key);
-    if(!row) return window.scrollY;
-    const top  = toolsOpen() ? TOOLS.getBoundingClientRect().bottom
-                             : $("header").offsetHeight + $("#colwrap").offsetHeight;
-    const r    = row.getBoundingClientRect();
-    const room = innerHeight - top;
-    return window.scrollY + r.top - top - Math.max(0, (room - r.height) / 2);
-  });
-}
 function scrollToRow(el){
-  centerRow(el);
+  const top  = toolsOpen() ? TOOLS.getBoundingClientRect().bottom
+                           : $("header").offsetHeight + $("#colwrap").offsetHeight;
+  const r    = el.getBoundingClientRect();
+  const room = innerHeight - top;
+  const y    = window.scrollY + r.top - top - Math.max(0, (room - r.height) / 2);
+  window.scrollTo({ top: Math.max(0, y), behavior: motionOK ? "smooth" : "auto" });
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");  // flashes again on a second visit
 }
 // The topmost selected row in the order on screen. ( Declarations, not consts :
@@ -4118,7 +4056,7 @@ function renderCopyTo(){
   const b = $("#copyto");
   if(!b) return;
   b.style.display = SEL.size && !MISSING ? "" : "none";
-  b.textContent = `⇢ Copy ${SEL.size} to list…`;
+  b.innerHTML = `⇢<span class="w"> Copy</span> ${SEL.size}<span class="w"> to list…</span>`;  // tight : "⇢ 2"
 }
 $("#copyto").addEventListener("click", async ()=>{
   const keys = DOC.items.filter(it=>SEL.has(it.key)).map(it=>it.key);
@@ -4513,8 +4451,11 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         list but the main one <kbd>✎ Rename…</kbd> ( the old link keeps working ) and
         <kbd>🗑 Delete…</kbd> ( it goes to <code>output/cache/sort-lists/.trash/</code> rather than away ).
         <b>The link is the share</b> — <kbd>🔗 Copy link</kbd> — : anyone who can reach this server can
-        read a list, and an account can edit it, the same as here. Each list keeps its own shelf, its own
-        history and its own view-only setting.</li>
+        read a list, and an account can edit it, the same as here. Each list keeps its own order, its own
+        shelf, its own history and its own view-only setting — but <b>a paper's tags and cells are the
+        paper's</b>: tag it, or write in its Notes, Methods summary, Datasets or Code, on any list and every
+        other list holding that paper gets the same edit. A view-only list keeps its own copy, and
+        restoring an old version of one list leaves the others as they are.</li>
     <li><b>⇢ Copy to list…</b> appears while rows are selected ( click, <kbd>⌘</kbd>-click,
         <kbd>⇧</kbd>-click ): it copies them, tags, colours and notes, to another list, or starts a new
         list with just them. <b>Move</b> also takes them off this one. <b>⇩ Import from lists…</b> goes
