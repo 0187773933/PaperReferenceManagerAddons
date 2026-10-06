@@ -1256,15 +1256,41 @@ def _is_here( here , it ):
 	return lc( it.get( "key" ) ) in here or bool( d and lc( d ) in here )
 
 
-def _land( doc , rows , p ):
+def _row_here( doc , it ):
+	"""The row on this board ( list or shelf ) that is the same paper as `it` --
+	by key , else by DOI , the way _is_here matches. None when there isn't one."""
+	k = lc( it.get( "key" ) )
+	d = lc( utils.normalize_doi( it.get( "doi" ) or "" ) or "" )
+	for x in _items( doc ) + _staged( doc ):
+		if lc( x.get( "key" ) ) == k:
+			return x
+	if d:
+		for x in _items( doc ) + _staged( doc ):
+			if lc( utils.normalize_doi( x.get( "doi" ) or "" ) or "" ) == d:
+				return x
+	return None
+
+
+def _land( doc , rows , p , moving=() ):
 	"""Put imported rows on the board : on the shelf with shelf=true , else into
-	the list at `at` ( the board's "add to…" by default ) , in the order given."""
+	the list at `at` ( the board's "add to…" by default ) , in the order given.
+	`moving` are rows of THIS board among them : each is lifted out of where it
+	is ( list or shelf ) first , so the block lands whole at `at`.
+	-> ( "list" , the block's 1-based position ) or ( "shelf" , None )."""
 	if p.get( "shelf" ):
 		_staged( doc ).extend( rows )
-		return "shelf"
-	at = insert_index( doc , p.get( "at" ) )
+		return "shelf" , None
+	to = pin( doc , p.get( "at" ) , moving=tuple( r[ "key" ] for r in moving ) )
+	if moving:
+		ids = { id( r ) for r in moving }
+		doc[ "items" ]   = [ x for x in _items( doc ) if id( x ) not in ids ]
+		doc[ "staging" ] = [ x for x in _staged( doc ) if id( x ) not in ids ]
+	at = insert_index( doc , to )
 	_items( doc )[ at:at ] = rows
-	return "list"
+	return "list" , at + 1
+
+
+EXISTING = ( "skip" , "move" )
 
 
 def op_import_list( doc , ctx , p ):
@@ -1274,7 +1300,15 @@ def op_import_list( doc , ctx , p ):
 	( see pick_rows ) , all of them when none is given. Each arrives with its
 	tags in that list's colours and , unless fields=false , its notes -- the
 	columns it has that this board hasn't are added. Papers already here , on the
-	list or the shelf , are skipped and counted."""
+	list or the shelf , are skipped and counted -- or , with existing="move" ,
+	lifted out of where they are and landed with the rest , in the source's
+	order , keeping this board's row ( its tags and notes are the paper's anyway ,
+	see src/db/sortsync.py ). Landing on the shelf never moves one : a paper
+	already on the list stays on it."""
+	existing = p.get( "existing" ) or "skip"
+	if existing not in EXISTING:
+		raise OpError( "`existing` is \"skip\" or \"move\"" )
+	move = existing == "move" and not p.get( "shelf" )
 	src = p.get( "from" )
 	sdoc = ctx.list_doc( src )
 	scol = { c[ "id" ]: c for c in sdoc.get( "columns" ) or [] }
@@ -1282,10 +1316,17 @@ def op_import_list( doc , ctx , p ):
 	here = _here( doc )
 	keep = p.get( "fields" , True )
 	cols = doc.setdefault( "columns" , [] )
-	got , skipped , used = [] , [] , set()
+	got , moved , block , skipped , used = [] , [] , [] , [] , set()
 	for _ , it in rows:
 		if _is_here( here , it ):
-			skipped.append( it[ "key" ] )
+			mine = _row_here( doc , it ) if move else None
+			if mine is None or any( x is mine for x in moved ):
+				skipped.append( it[ "key" ] )
+			else:
+				for t in mine.get( "tags" ) or []:
+					remember_tag( doc , t )   # off the shelf , as stage_add does
+				moved.append( mine )
+				block.append( mine )
 			continue
 		fields = {}
 		if keep:
@@ -1305,6 +1346,7 @@ def op_import_list( doc , ctx , p ):
 				_vocab( doc ).append( { "name": t , "color": ( v or {} ).get( "color" ) or "" } )
 		here.add( lc( row[ "key" ] ) )
 		got.append( row )
+		block.append( row )
 	# The columns that carried something , in that list's order -- folded here
 	# when they were folded there ( a sheet's paragraphs stay out of the way ).
 	sfold = set( ( sdoc.get( "options" ) or {} ).get( "fold_cols" ) or [] )
@@ -1318,9 +1360,9 @@ def op_import_list( doc , ctx , p ):
 	for row in got:
 		for c in cols:
 			row[ "fields" ].setdefault( c[ "id" ] , "" )
-	where = _land( doc , got , p )
-	return { "imported": [ r[ "key" ] for r in got ] , "skipped": skipped , "to": where ,
-		"from": src or "main" }
+	where , at = _land( doc , block , p , moving=moved )
+	return { "imported": [ r[ "key" ] for r in got ] , "moved": [ r[ "key" ] for r in moved ] ,
+		"skipped": skipped , "to": where , "at": at , "from": src or "main" }
 
 
 def op_import_remaining( doc , ctx , p ):
@@ -1351,8 +1393,9 @@ def op_import_remaining( doc , ctx , p ):
 			prefill( doc , row , m )
 			for t in row[ "tags" ]:
 				remember_tag( doc , t )
-	where = _land( doc , got , p )
-	return { "imported": [ r[ "key" ] for r in got ] , "to": where , "remaining": len( pool ) - len( got ) }
+	where , at = _land( doc , got , p )
+	return { "imported": [ r[ "key" ] for r in got ] , "to": where , "at": at ,
+		"remaining": len( pool ) - len( got ) }
 
 
 # ---------------------------------------------------------------------------
@@ -1447,6 +1490,8 @@ OPS = {
 	"import_list": ( op_import_list , dict( {
 		"from":   ( "str" , True , "the list's slug -- \"\" or \"main\" for the main board ( GET /api/sort/lists )" ) ,
 		"fields": ( "bool" , False , "bring each row's notes / cells , adding columns this board lacks ( default true )" ) ,
+		"existing": ( "str" , False , "papers this board already has : skip ( default ) , or move -- lift them out "
+		                              "and land them with the rest , in the source's order ( ignored with shelf )" ) ,
 	} , **IMPORT_PICK ) ) ,
 	"import_remaining": ( op_import_remaining , IMPORT_PICK ) ,
 }

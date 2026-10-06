@@ -451,7 +451,7 @@
   .imtop select { max-width:100%; }
   .imstat { color:var(--muted); font-size:12px; }
   .imfilt { display:flex; gap:8px 12px; align-items:center; flex-wrap:wrap; font-size:13px; }
-  .imfilt input[type=number] { width:78px; background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:5px 7px; }
+  .imfilt input[type=number], .imfoot input[type=number] { width:78px; background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:5px 7px; }
   .imfilt input[type=search] { width:200px; padding:5px 9px; font-size:13px; }
   .imtags { display:flex; gap:5px; flex-wrap:wrap; margin:6px 0 8px; max-height:96px; overflow:auto; }
   .imtags .chip { cursor:pointer; opacity:.55; }
@@ -2860,7 +2860,8 @@ function setSkin(next){
   renderBoard(); renderPaintbar();
 }
 $("#tagedit").addEventListener("click", ()=>{
-  if(skinHeld){ skinHeld = false; setSkin(SKIN === "pastel" ? "wsu" : "pastel"); return; }
+  if(skinHeld && ME.role === "admin"){ skinHeld = false; setSkin(SKIN === "pastel" ? "wsu" : "pastel"); return; }
+  skinHeld = false;
   tagEditor();
 });
 $("#sheet").addEventListener("input", e=>{
@@ -4048,9 +4049,12 @@ function listGone(){
 // The rows you have selected ( click, ⌘-click, ⇧-click ), sent to another list
 // -- or to a new one made out of them. The other list may not be open anywhere,
 // so the server does the copying ( the import_list op, src/db/sortops.py ) ;
-// this list is saved first so it copies what you see.
+// this list is saved first so it copies what you see. "at position…" asks for a
+// number : the first paper lands there and the rest follow it in order ( past
+// the end of that list means its bottom -- the op's own clamp ).
 const WHERE_TO = [ [ "", "wherever that list adds" ], [ "bottom", "at the bottom" ], [ "top", "at the top" ],
-                   [ "placed", "after its last sorted row" ], [ "shelf", "on its staging shelf" ] ];
+                   [ "@n", "at position…" ], [ "placed", "after its last sorted row" ],
+                   [ "shelf", "on its staging shelf" ] ];
 const whereArg = v => v === "shelf" ? { shelf:true } : v ? { at:v } : {};
 function renderCopyTo(){
   const b = $("#copyto");
@@ -4066,11 +4070,13 @@ $("#copyto").addEventListener("click", async ()=>{
   sheet(`
     <h3>Copy ${keys.length} paper(s) to another list</h3>
     <p>Each goes with its tags, in their colours, and its notes ; columns the other list hasn't got are added to
-       it. Papers it already has are skipped. <b>Move</b> also takes them off this list — the toast puts them back.</p>
+       it. Papers it already has are moved to where you put these, with them, in this list's order ( on its staging
+       shelf they are left where they are ). <b>Move</b> also takes them off this list — the toast puts them back.</p>
     <div class="imfoot" style="margin-top:0">
       <label>To <select id="ctto">${targets.map(l=>`<option value="${esc(l.slug)}">${esc(l.name)} · ${l.list}</option>`).join("")}
         <option value="@new">＋ a new list…</option></select></label>
-      <label id="ctwhere">Put them <select id="ctat">${WHERE_TO.map(([v,l])=>`<option value="${v}">${l}</option>`).join("")}</select></label>
+      <label id="ctwhere">Put them <select id="ctat">${WHERE_TO.map(([v,l])=>`<option value="${v}">${l}</option>`).join("")}</select>
+        <input type="number" id="ctpos" min="1" step="1" value="1" style="display:none"></label>
     </div>
     <div id="ctnew" style="display:none;margin-top:10px">
       <input type="text" id="lname" placeholder="Name the new list…" autocomplete="off">
@@ -4086,27 +4092,56 @@ $("#copyto").addEventListener("click", async ()=>{
     $("#ctwhere").style.display = isNew ? "none" : "";
     if(isNew) $("#lname").focus();
   };
-  $("#ctto").addEventListener("change", pickNew);
+  // "at position…" shows its number box, ranged to the list it goes to ; ↵ in
+  // the box is Copy.
+  const box = $("#ctpos");
+  const rangeAt = ()=>{
+    const l = targets.find(x=>x.slug===$("#ctto").value);
+    if(!l) return;
+    box.max = l.list + 1;
+    box.title = `Where the first one lands on “${l.name}” — 1 to ${l.list + 1} ; the rest follow it in order`;
+  };
+  $("#ctat").addEventListener("change", ()=>{
+    const byN = $("#ctat").value === "@n";
+    box.style.display = byN ? "" : "none";
+    if(byN){ box.focus(); box.select(); }
+  });
+  box.addEventListener("keydown", e=>{
+    if(e.key !== "Enter") return;
+    e.preventDefault();
+    $('#sheet button[data-act="copy"]').click();
+  });
+  $("#ctto").addEventListener("change", ()=>{ pickNew(); rangeAt(); });
   nameBox();
   $("#ctto").focus();
-  pickNew();
+  pickNew(); rangeAt();
 });
 async function copyTo(keys, move, targets){
   const to = $("#ctto").value, at = $("#ctat").value, name = $("#lname").value.trim();
+  const pos = Number($("#ctpos").value);
   if(to === "@new" && !slug(name)){ toast("Name the new list first"); return; }
+  if(to !== "@new" && at === "@n" && !(Number.isInteger(pos) && pos >= 1)){ toast("Type a position — 1 or more"); return; }
   if(!(await flushSave())){ toast("This list couldn't be saved first — try again in a moment"); return; }
-  let dest, n = keys.length, had = 0;
+  let dest, n = keys.length, shifted = 0, had = 0, from = 0;
   if(to === "@new"){
     dest = await makeList({ name, from: LIST, keys });
     if(!dest) return;
   } else {
     dest = targets.find(l=>l.slug===to);
+    // existing:"move" -- a paper that list already has is re-placed with the
+    // rest rather than skipped ; the op answers where the block landed.
     const r = await listPost(`${dest.api}/ops`,
-      { ops:[ Object.assign({ op:"import_list", from: LIST, keys }, whereArg(at)) ] }, `copy to “${dest.name}”`);
+      { ops:[ Object.assign({ op:"import_list", from: LIST, keys, existing:"move" },
+                            at === "@n" ? { at:pos } : whereArg(at)) ] }, `copy to “${dest.name}”`);
     if(!r) return;
-    n = r.results[0].imported.length; had = r.results[0].skipped.length;
+    const res = r.results[0];
+    n = res.imported.length; shifted = (res.moved || []).length; had = res.skipped.length;
+    if(res.at && n + shifted) from = res.at;
   }
-  const msg = `${move ? "Moved" : "Copied"} ${n} paper(s) to “${dest.name}”`+(had ? ` · ${had} it already had` : "");
+  const msg = `${move ? "Moved" : "Copied"} ${n} paper(s) to “${dest.name}”`+
+    (shifted ? ` · re-placed ${shifted} it already had` : "")+
+    (from ? ` · starting at #${from}` : "")+
+    (had ? ` · ${had} it already had` : "");
   if(!move){ toast(msg, 9000, "Open it", ()=>{ location.href = dest.url; }); return; }
   const before = cloneDoc(DOC), gone = new Set(keys);
   DOC.items = DOC.items.filter(it=>!gone.has(it.key));
@@ -4458,7 +4493,10 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         restoring an old version of one list leaves the others as they are.</li>
     <li><b>⇢ Copy to list…</b> appears while rows are selected ( click, <kbd>⌘</kbd>-click,
         <kbd>⇧</kbd>-click ): it copies them, tags, colours and notes, to another list, or starts a new
-        list with just them. <b>Move</b> also takes them off this one. <b>⇩ Import from lists…</b> goes
+        list with just them. <b>Put them</b> says where they land there — the top, the bottom, or
+        <b>at position…</b> a number you type, the first one landing there and the rest right after it.
+        Papers that list already has are moved there with them instead of being skipped.
+        <b>Move</b> also takes them off this one. <b>⇩ Import from lists…</b> goes
         the other way: pick another list, or <b>Remaining Papers</b> — every paper in your library that
         isn't on this list yet, tagged by its Methods stamp — narrow it by tag and by year, then select
         rows the same way, or type their numbers ( <kbd>1-40, 55</kbd> ), or select nothing and take

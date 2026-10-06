@@ -2053,7 +2053,8 @@ function setSkin(next){
   renderBoard(); renderPaintbar();
 }
 $("#tagedit").addEventListener("click", ()=>{
-  if(skinHeld){ skinHeld = false; setSkin(SKIN === "pastel" ? "wsu" : "pastel"); return; }
+  if(skinHeld && ME.role === "admin"){ skinHeld = false; setSkin(SKIN === "pastel" ? "wsu" : "pastel"); return; }
+  skinHeld = false;
   tagEditor();
 });
 $("#sheet").addEventListener("input", e=>{
