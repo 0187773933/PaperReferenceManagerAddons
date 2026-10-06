@@ -66,15 +66,21 @@ class Ctx:
 	  meta( keys , mods , links , titles ) -> { key: /api/paper-meta entry }
 	  parse_refs( text )              -> [ ref , ... ] as /api/refs/parse gives
 	  tiers_doc()                     -> the tier list document
+	  list_doc( slug )                -> another sort list's document ( "" / "main"
+	                                     is the main board ) , or raise OpError
+	  remaining( doc )                -> the library papers not on `doc` , newest
+	                                     first , each with its modality stamp ( mods )
 	  modalities                      -> the modality vocabulary ( methods.py )
 	"""
 
 	def __init__( self , resolve=None , meta=None , parse_refs=None , tiers_doc=None ,
-			modalities=None ):
+			list_doc=None , remaining=None , modalities=None ):
 		self.resolve    = resolve    or ( lambda spec: _no( "paper lookup" ) )
 		self.meta       = meta       or ( lambda keys , mods=False , links=False , titles=None: {} )
 		self.parse_refs = parse_refs or ( lambda text: _no( "reference parsing" ) )
 		self.tiers_doc  = tiers_doc  or ( lambda: { "tiers": [] , "columns": [] } )
+		self.list_doc   = list_doc   or ( lambda slug: _no( "the other sort lists" ) )
+		self.remaining  = remaining  or ( lambda doc: _no( "the library" ) )
 		self.modalities = list( modalities or [] )
 
 
@@ -117,6 +123,23 @@ def tag_sig( it ):
 
 def has_tag( it , v ):
 	return any( lc( t ) == lc( v ) for t in ( it.get( "tags" ) or [] ) )
+
+
+MATCHES = ( "any" , "all" , "none" )
+
+
+def tags_match( it , want , match="any" ):
+	"""tagMatch : the tag filter , `want` ( lowercased ) against a row's tags.
+	any = it carries one of them , all = every one , none = not one of them.
+	Nothing wanted lets every row through."""
+	if not want:
+		return True
+	have = { lc( t ) for t in it.get( "tags" ) or [] }
+	if match == "all":
+		return all( w in have for w in want )
+	if match == "none":
+		return not any( w in have for w in want )
+	return any( w in have for w in want )
 
 
 def sort_tags( it ):
@@ -1138,6 +1161,201 @@ def op_pull_tiers( doc , ctx , p ):
 
 
 # ---------------------------------------------------------------------------
+# Importing from the other lists ( ⇩ Import from lists… on the page )
+# ---------------------------------------------------------------------------
+#
+# Both ops pick rows the way the page's import dialog does -- every filter given
+# must hold -- and skip any paper this board already has , on the list or on the
+# shelf , by key or by DOI. Positions ( `range` ) are the SOURCE's : #N on the
+# list it comes from , or the Nth of Remaining Papers newest-first.
+
+def parse_range( spec ):
+	"""'1-40, 55, 60-70' -> the 1-based positions it names. OpError on anything
+	that isn't a number or a run of them."""
+	out = set()
+	for part in re.split( r"[,\s]+" , str( spec or "" ).strip() ):
+		if not part:
+			continue
+		m = re.match( r"^#?(\d+)(?:[-–](\d+))?$" , part )
+		if not m:
+			raise OpError( f"`range` : {part!r} isn't N or N-M" )
+		a = int( m.group( 1 ) )
+		b = int( m.group( 2 ) ) if m.group( 2 ) else a
+		if b < a:
+			a , b = b , a
+		if b - a > 100000:
+			raise OpError( f"`range` : {part!r} is too long a run" )
+		out.update( range( a , b + 1 ) )
+	return out
+
+
+def _year( v ):
+	try:
+		return int( v ) if str( v or "" ).strip() else None
+	except ( TypeError , ValueError ):
+		return None
+
+
+def pick_rows( rows , p ):
+	"""The import dialog's filters over `rows` ( [ ( pos , row ) ] , row having
+	key / title / doi / year / tags / fields ) -> the ( pos , row ) that pass.
+
+	  keys       only these papers
+	  range      only these source positions ( "1-40, 55" )
+	  tags       carrying any of them ( match="all" : every one ,
+	             match="none" : not one of them )
+	  year_from / year_to   published in that span ; a row with no year is in
+	             only when neither is given , or with no_year=true
+	  q          anything typed in the row , as the page's filter box reads it"""
+	keys  = set( _str_list( p.get( "keys" ) , "keys" ) ) if p.get( "keys" ) is not None else None
+	span  = parse_range( p.get( "range" ) ) if str( p.get( "range" ) or "" ).strip() else None
+	want  = [ lc( t ) for t in _str_list( p.get( "tags" ) , "tags" ) ]
+	match = p.get( "match" ) or "any"
+	if match not in MATCHES:
+		raise OpError( "`match` is \"any\" , \"all\" or \"none\"" )
+	y0 , y1 = _year( p.get( "year_from" ) ) , _year( p.get( "year_to" ) )
+	no_year = p.get( "no_year" ) if p.get( "no_year" ) is not None else ( y0 is None and y1 is None )
+	q = str( p.get( "q" ) or "" ).strip()
+	out = []
+	for pos , it in rows:
+		if keys is not None and it.get( "key" ) not in keys:
+			continue
+		if span is not None and pos not in span:
+			continue
+		if not tags_match( it , want , match ):
+			continue
+		y = _year( it.get( "year" ) )
+		if y is None:
+			if not no_year:
+				continue
+		elif ( y0 is not None and y < y0 ) or ( y1 is not None and y > y1 ):
+			continue
+		if q:
+			hay = " ".join( [ it.get( "title" ) or "" , it.get( "key" ) or "" , it.get( "doi" ) or "" ,
+				" ".join( it.get( "tags" ) or [] ) ,
+				" ".join( str( v ) for v in ( it.get( "fields" ) or {} ).values() ) ] )
+			if not text_has( hay , q ):
+				continue
+		out.append( ( pos , it ) )
+	return out
+
+
+def _here( doc ):
+	"""Every key and DOI this board holds , list and shelf , lowercased."""
+	out = set()
+	for it in _items( doc ) + _staged( doc ):
+		out.add( lc( it.get( "key" ) ) )
+		d = utils.normalize_doi( it.get( "doi" ) or "" )
+		if d:
+			out.add( lc( d ) )
+	return out
+
+
+def _is_here( here , it ):
+	d = utils.normalize_doi( it.get( "doi" ) or "" )
+	return lc( it.get( "key" ) ) in here or bool( d and lc( d ) in here )
+
+
+def _land( doc , rows , p ):
+	"""Put imported rows on the board : on the shelf with shelf=true , else into
+	the list at `at` ( the board's "add to…" by default ) , in the order given."""
+	if p.get( "shelf" ):
+		_staged( doc ).extend( rows )
+		return "shelf"
+	at = insert_index( doc , p.get( "at" ) )
+	_items( doc )[ at:at ] = rows
+	return "list"
+
+
+def op_import_list( doc , ctx , p ):
+	"""Copy papers from another sort list onto this one ( ⇩ Import from lists… ,
+	or ⇢ Copy to list… on the list they are on ). `from` is that list's slug ,
+	"" or "main" for the main board ; the filters pick which of its rows come
+	( see pick_rows ) , all of them when none is given. Each arrives with its
+	tags in that list's colours and , unless fields=false , its notes -- the
+	columns it has that this board hasn't are added. Papers already here , on the
+	list or the shelf , are skipped and counted."""
+	src = p.get( "from" )
+	sdoc = ctx.list_doc( src )
+	scol = { c[ "id" ]: c for c in sdoc.get( "columns" ) or [] }
+	rows = pick_rows( list( enumerate( sdoc.get( "items" ) or [] , 1 ) ) , p )
+	here = _here( doc )
+	keep = p.get( "fields" , True )
+	cols = doc.setdefault( "columns" , [] )
+	got , skipped , used = [] , [] , set()
+	for _ , it in rows:
+		if _is_here( here , it ):
+			skipped.append( it[ "key" ] )
+			continue
+		fields = {}
+		if keep:
+			for cid , v in ( it.get( "fields" ) or {} ).items():
+				if v and cid in scol:
+					fields[ cid ] = v
+					used.add( cid )
+		row = { "key": it[ "key" ] , "title": it.get( "title" ) or "" , "authors": it.get( "authors" ) or "" ,
+			"doi": it.get( "doi" ) or "" , "wid": it.get( "wid" ) or "" , "pdf": it.get( "pdf" ) or "" ,
+			"year": it.get( "year" ) , "journal": it.get( "journal" ) or "" ,
+			"tags": list( it.get( "tags" ) or [] ) , "fields": fields , "added_at": now_iso() }
+		if it.get( "pending" ):
+			row[ "pending" ] = True
+		for t in row[ "tags" ]:
+			if not vocab_entry( doc , t ):
+				v = next( ( x for x in ( sdoc.get( "vocab" ) or {} ).get( "tags" ) or [] if lc( x.get( "name" ) ) == lc( t ) ) , None )
+				_vocab( doc ).append( { "name": t , "color": ( v or {} ).get( "color" ) or "" } )
+		here.add( lc( row[ "key" ] ) )
+		got.append( row )
+	# The columns that carried something , in that list's order -- folded here
+	# when they were folded there ( a sheet's paragraphs stay out of the way ).
+	sfold = set( ( sdoc.get( "options" ) or {} ).get( "fold_cols" ) or [] )
+	for cid , c in scol.items():
+		if cid in used and not any( x[ "id" ] == cid for x in cols ):
+			cols.append( { "id": cid , "label": c[ "label" ] } )
+			if cid in sfold:
+				fold = _options( doc ).setdefault( "fold_cols" , [] )
+				if cid not in fold:
+					fold.append( cid )
+	for row in got:
+		for c in cols:
+			row[ "fields" ].setdefault( c[ "id" ] , "" )
+	where = _land( doc , got , p )
+	return { "imported": [ r[ "key" ] for r in got ] , "skipped": skipped , "to": where ,
+		"from": src or "main" }
+
+
+def op_import_remaining( doc , ctx , p ):
+	"""Bring library papers that aren't on this board yet onto it -- Remaining
+	Papers in ⇩ Import from lists… . Their tags are their modality stamps , so
+	`tags` filters on those ; `range` counts them newest-added first. Each
+	arrives the way a search hit does ( add ) : tagged from its stamp , with its
+	Code / Datasets cells filled."""
+	pool = ctx.remaining( doc )
+	rows = pick_rows( [ ( i , dict( r , tags=r.get( "mods" ) or [] ) ) for i , r in enumerate( pool , 1 ) ] , p )
+	here = _here( doc )
+	got  = []
+	for _ , hit in rows:
+		if _is_here( here , hit ):
+			continue
+		row = new_item( doc , hit )
+		row[ "tags" ] = list( hit.get( "mods" ) or [] )
+		sort_tags( row )
+		here.add( lc( row[ "key" ] ) )
+		got.append( row )
+	if got:
+		meta = ctx.meta( [ r[ "key" ] for r in got ] , True , True , {} ) or {}
+		for row in got:
+			m = meta.get( row[ "key" ] ) or {}
+			if not row[ "tags" ] and m.get( "mods" ):
+				row[ "tags" ] = list( m[ "mods" ] )
+				sort_tags( row )
+			prefill( doc , row , m )
+			for t in row[ "tags" ]:
+				remember_tag( doc , t )
+	where = _land( doc , got , p )
+	return { "imported": [ r[ "key" ] for r in got ] , "to": where , "remaining": len( pool ) - len( got ) }
+
+
+# ---------------------------------------------------------------------------
 # The registry : what runs , and what GET /api/sort/schema says runs
 # ---------------------------------------------------------------------------
 #
@@ -1149,6 +1367,21 @@ def op_pull_tiers( doc , ctx , p ):
 ROW  = "a row selector : key , DOI or \"#N\""
 ROWS = "one row selector or a list of them"
 POS  = "N , \"top\" , \"bottom\" , \"placed\" , {\"after\": row} or {\"before\": row}"
+
+# What the two import ops pick rows with ( pick_rows ) and where they land them.
+IMPORT_PICK = {
+	"keys":      ( "strs" , False , "only these papers ( keys )" ) ,
+	"range":     ( "str" , False , "only these source positions : \"1-40, 55, 60-70\"" ) ,
+	"tags":      ( "strs" , False , "only papers carrying one of these ( match=all : every one , "
+	                                "match=none : not one of them )" ) ,
+	"match":     ( "str" , False , "any | all | none ( default any )" ) ,
+	"year_from": ( "int" , False , "published in or after" ) ,
+	"year_to":   ( "int" , False , "published in or before" ) ,
+	"no_year":   ( "bool" , False , "let in papers with no year ( default : only when no year bound is given )" ) ,
+	"q":         ( "str" , False , "text anywhere in the row" ) ,
+	"at":        ( "pos" , False , POS + " ; default : the board's add_where" ) ,
+	"shelf":     ( "bool" , False , "land them on the staging shelf instead of the list" ) ,
+}
 
 OPS = {
 	"add": ( op_add , {
@@ -1211,6 +1444,11 @@ OPS = {
 	"auto_tag":   ( op_auto_tag , { "rows": ( "rows" , False , ROWS + " ( default : every untagged list row )" ) } ) ,
 	"refill":     ( op_refill , { "rows": ( "rows" , False , ROWS + " ( default : rows still processing )" ) } ) ,
 	"pull_tiers": ( op_pull_tiers , {} ) ,
+	"import_list": ( op_import_list , dict( {
+		"from":   ( "str" , True , "the list's slug -- \"\" or \"main\" for the main board ( GET /api/sort/lists )" ) ,
+		"fields": ( "bool" , False , "bring each row's notes / cells , adding columns this board lacks ( default true )" ) ,
+	} , **IMPORT_PICK ) ) ,
+	"import_remaining": ( op_import_remaining , IMPORT_PICK ) ,
 }
 
 
@@ -1296,11 +1534,8 @@ def rows_view( doc , meta=None , q="" , tags=None , match="any" , shelf=False ,
 	want   = [ lc( t ) for t in ( tags or [] ) if t ]
 	rows   = []
 	for i , it in enumerate( src ):
-		if want:
-			have = { lc( t ) for t in it.get( "tags" ) or [] }
-			if ( match == "all" and not all( w in have for w in want ) ) or \
-			   ( match != "all" and not any( w in have for w in want ) ):
-				continue
+		if not tags_match( it , want , match ):
+			continue
 		if q:
 			hay = " ".join( [ it.get( "title" ) or "" , it.get( "key" ) or "" , it.get( "doi" ) or "" ,
 				" ".join( it.get( "tags" ) or [] ) ,
@@ -1374,11 +1609,13 @@ def schema():
 	"""GET /api/sort/schema."""
 	return {
 		"about": "Edit the /sort board one named operation at a time. POST /api/sort/ops runs a "
-			"batch atomically : every op succeeds and the board is saved once , or nothing is saved.",
+			"batch atomically : every op succeeds and the board is saved once , or nothing is saved. "
+			"The other lists ( /sort/<slug> ) take every route below under /api/sort/lists/<slug> "
+			"instead of /api/sort -- the same ops , rows , history and restore.",
 		"auth": "Authorization: Bearer <API key> ( mint one on /account ). Reads need none.",
 		"endpoints": {
 			"GET /api/sort/schema":     "this document" ,
-			"GET /api/sort/rows":       "the list as flat rows. ?q= text filter , ?tags=a,b&match=any|all , "
+			"GET /api/sort/rows":       "the list as flat rows. ?q= text filter , ?tags=a,b&match=any|all|none , "
 			                            "?shelf=1 for the staging shelf , ?limit= ( default 500 ) &offset= , "
 			                            "?meta=1 adds in_library and fills blank titles from the library" ,
 			"GET /api/sort":            "the whole board document , plus rev and locked" ,
@@ -1387,6 +1624,13 @@ def schema():
 			"GET /api/sort/export.csv": "the list as CSV , in your order" ,
 			"GET /api/sort/history":    "saved versions , newest first ( login needed )" ,
 			"POST /api/sort/restore":   "{ id } -- put a saved version back ( itself saved first , so it undoes too )" ,
+			"GET /api/sort/lists":      "every list : { slug , name , url , api , list , shelf , ... } , the main board first" ,
+			"POST /api/sort/lists":     "{ name , from?: slug , keys?: [ ... ] } -- a new list : empty , a copy of "
+			                            "list `from` ( \"\" = the main board ) , or only its `keys`" ,
+			"POST /api/sort/lists/<slug>/rename": "{ name } -- the slug follows the name ; the old one redirects" ,
+			"POST /api/sort/lists/<slug>/delete": "{} -- moved to output/cache/sort-lists/.trash/" ,
+			"GET /api/sort/remaining":  "?list=<slug>&mods=1 -- library papers not on that list , newest first "
+			                            "( login needed )" ,
 		},
 		"responses": {
 			"200": "{ ok , rev , results: [ per op ] , summary: { list , shelf } } ( dry_run : also doc )" ,

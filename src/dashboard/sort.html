@@ -20,11 +20,15 @@
   button { padding:6px 11px; }
   button.on { border-color:var(--accent); color:var(--accent); }
   .navlink { padding:6px 11px; }
-  .savestate { font-size:12px; color:var(--muted); min-width:104px; text-align:right; }
+  /* The save stamp, in the action row after 🆕 Recently added rather than in the
+     pinned bar, where it pushed the bar onto a second line. Wide enough for
+     "saved <date> <time>" , so flipping to "unsaved…" and back doesn't slide
+     the filter box along every time you type. */
+  .savestate { font-size:12px; color:var(--muted); min-width:150px; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .savestate.dirty { color:var(--warn); }
   /* Getting around a long list, in the pinned bar so it's in reach from
-     anywhere down it : ⚓ Anchor, ⤓ To anchor, Jump to. Its auto margin is what
-     keeps ↶ ↷ ? 🌙 and the save stamp over on the right. */
+     anywhere down it : ⚓ Anchor, ⤓ To anchor, Jump to, ↑ Top, ↓ Bottom. Its auto margin is what
+     keeps ↶ ↷ ? 🌙 over on the right. */
   .jumpctl { display:flex; gap:8px; align-items:center; margin-right:auto; }
   #jumpto { width:88px; padding:6px 9px; font-size:13px; }
 
@@ -68,6 +72,16 @@
   .hit .ht { font-weight:500; }
   .hit .hm { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
   .hit .in { flex:none; color:var(--green); font-size:12px; white-space:nowrap; padding-top:3px; }
+  /* What a hit can be done with, kept together on the right : the position box
+     and the button that uses it. */
+  .hit .acts { flex:none; display:flex; gap:6px; align-items:flex-start; }
+  .hit .at {
+    width:46px; text-align:center; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:7px; padding:6px 4px;
+    font:13px/1.2 inherit; font-variant-numeric:tabular-nums;
+  }
+  .hit .at::placeholder { color:var(--muted); }
+  .hit .at:focus { outline:none; border-color:var(--accent); background:var(--panel); }
   .rhint { padding:7px 11px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--line); }
   /* "show 25 · 50" in the recently-added hint line -- how many of them to ask
      for, put where it costs the ( already full ) toolbar row nothing. */
@@ -154,6 +168,14 @@
   #board.dropinto { box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   .row { border-bottom:1px solid var(--line); background:var(--row); }
   .row:last-child { border-bottom:none; }
+  /* Only the rows near the screen are drawn. The board runs to hundreds of
+     rows with a textarea per column in each, and laying out, painting and
+     layering all of them on every frame is what made scrolling stutter. A row
+     off screen keeps its place at the height it had when it was last drawn
+     ( `auto` ) -- or, one never drawn yet, at --rowh , the average of the ones
+     that have been ( see measureRowH ). renderBoard hands every row its old
+     height back inline , so a redraw lands each row exactly where it was. */
+  #board > .row { content-visibility:auto; contain-intrinsic-size:auto var(--rowh, 96px); }
   .row:hover { background:var(--panel2); }
   .row.dragging { opacity:.4; }
   .row.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
@@ -236,6 +258,14 @@
   }
   .notecell textarea:hover { border-color:var(--line); }
   .notecell textarea:focus { outline:none; border-color:var(--accent); background:var(--panel2); min-height:110px; }
+  /* A cell scrolls its own text only once you are in it. At rest a long one
+     is clipped, so a wheel or a swipe passing over it always moves the page
+     instead of catching on the cell part way down -- and the browser isn't
+     keeping a scroller for every one of them. `.editing` as well as :focus
+     so switching windows mid-note doesn't take the scrollbar away and rewrap
+     the text ; :focus for a view-only board, which never gets .editing . */
+  .notecell textarea { overflow:hidden; }
+  .notecell textarea:focus, .cellbox.editing > textarea { overflow:auto; }
   .cellbox .lnk {
     /* inset:0 over .cellbox , whose box IS the textarea's : 5px / 7px of padding
        here is the textarea's 1px border plus its 4px / 6px. */
@@ -344,21 +374,6 @@
   #toast.show { display:flex; }
   #toast button { padding:3px 9px; font-size:12px; }
 
-  /* ---- back to the top ----------------------------------------------------
-     Five hundred rows is a long way up with only a scrollbar. The button owns
-     the bottom-right corner while it is up, because it is the one that STAYS ;
-     the toast is the passer-by, so it steps over it and takes the corner back
-     the moment the button goes away. */
-  #totop {
-    position:fixed; right:18px; bottom:18px; z-index:80; display:none;
-    background:var(--panel); color:var(--fg); border:1px solid var(--line);
-    border-radius:999px; padding:8px 14px; font-size:13px; cursor:pointer;
-    box-shadow:0 2px 10px rgba(0,0,0,.18);
-  }
-  #totop.show { display:block; }
-  #totop:hover { border-color:var(--accent); }
-  body.hasfab #toast { bottom:72px; }
-
   /* Looking at the list in someone else's order ( see VIEW ). There is no
      honest place a drop could land -- the row would not stay where you let go
      of it -- so the grips go, and the number box is how you move a paper from
@@ -396,24 +411,86 @@
   :root[data-locked] .hit { cursor:default; }
   :root[data-locked] .tagrow input[type=color],
   :root[data-locked] .tagrow button { pointer-events:none; opacity:.45; }
+
+  /* 🔎 Filter on "none" : the picked tags are the ones a paper must NOT carry. */
+  #tagchips.nonef .chip.on { text-decoration:line-through; }
+
+  /* ---- the lists ------------------------------------------------------------
+     /sort is the main list ; /sort/<slug> are the others ( src/db/sortlists.py ).
+     The switcher sits right after the title, so which list you are looking at
+     is the first thing the bar says. */
+  .listctl { position:relative; }
+  #listbtn { font-weight:600; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #listpop {
+    display:none; position:absolute; left:0; top:calc(100% + 6px); z-index:60; min-width:270px; max-width:360px;
+    max-height:70vh; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 12px 34px rgba(0,0,0,.30); padding:5px;
+  }
+  #listpop.show { display:block; }
+  #listpop .lphead { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); padding:6px 9px 4px; }
+  #listpop a.lpitem { display:flex; gap:10px; justify-content:space-between; align-items:baseline; padding:6px 9px;
+    border-radius:7px; color:var(--fg); text-decoration:none; font-size:13px; }
+  #listpop a.lpitem:hover { background:var(--panel2); color:var(--accent); }
+  #listpop a.lpitem.on { box-shadow:inset 3px 0 0 var(--accent); font-weight:600; }
+  #listpop a.lpitem .n { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #listpop .lpsep { border-top:1px solid var(--line); margin:5px 2px; }
+  #listpop button.lpact { display:block; width:100%; text-align:left; border:none; background:none; padding:6px 9px; font-size:13px; border-radius:7px; }
+  #listpop button.lpact:hover { background:var(--panel2); color:var(--accent); }
+  .sheet .urlnote { font-size:12px; color:var(--muted); margin:6px 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+
+  /* ⇩ Import from lists… : which list, which of its papers, where they go. */
+  .imtop { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+  .imtop select { max-width:100%; }
+  .imstat { color:var(--muted); font-size:12px; }
+  .imfilt { display:flex; gap:8px 12px; align-items:center; flex-wrap:wrap; font-size:13px; }
+  .imfilt input[type=number] { width:78px; background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:5px 7px; }
+  .imfilt input[type=search] { width:200px; padding:5px 9px; font-size:13px; }
+  .imtags { display:flex; gap:5px; flex-wrap:wrap; margin:6px 0 8px; max-height:96px; overflow:auto; }
+  .imtags .chip { cursor:pointer; opacity:.55; }
+  .imtags .chip.on { opacity:1; }
+  .imtags.nonef .chip.on { text-decoration:line-through; }
+  .imsel { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:13px; margin-bottom:6px; }
+  .imsel input[type=text] { width:200px; padding:5px 9px; font-size:13px; }
+  .imsel button, .imfilt button { padding:4px 9px; font-size:12px; }
+  .imrows { border:1px solid var(--line); border-radius:8px; max-height:34vh; overflow:auto; user-select:none; }
+  .imr { display:grid; grid-template-columns:22px 52px minmax(0,1fr) auto 46px; gap:8px; align-items:baseline;
+         padding:5px 9px; border-bottom:1px solid var(--line); font-size:13px; cursor:pointer; }
+  .imr:last-child { border-bottom:none; }
+  .imr:hover { background:var(--panel2); }
+  .imr.on { background:color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+  .imr.have { opacity:.45; cursor:default; }
+  .imr .ip { color:var(--muted); font-variant-numeric:tabular-nums; text-align:right; }
+  .imr .iy { color:var(--muted); font-variant-numeric:tabular-nums; text-align:right; }
+  .imr .it { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .imr .itg { display:flex; gap:4px; max-width:240px; overflow:hidden; }
+  .imr .itg span { font-size:10px; border-radius:8px; padding:0 6px; color:#20242c; white-space:nowrap; flex:none; }
+  .imr .ih { color:var(--green); font-size:11px; margin-right:7px; }
+  .imfoot { display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap; font-size:13px; margin-top:10px; }
+  .imfoot label { display:flex; gap:6px; align-items:center; cursor:pointer; }
 </style>
 </head>
 <body>
 <!-- The header is two parts ( see the "header" section of the script ). The bar
      is pinned : the board, its counts, where else you can go, the anchor and
-     Jump to for getting around the list, save state. Everything under it is
-     #tools, which scrolls away with the list.
+     Jump to for getting around the list. Everything under it is #tools, which
+     scrolls away with the list.
 
      As FEW rows as possible sit between the title and the tags, because the
      tags and the board itself are what the page is for. So the nav links ride
-     in the pinned bar -- it had a whole window's worth of space next to the
-     save stamp doing nothing -- and #tools is two :
+     in the pinned bar -- it had a whole window's worth of space doing
+     nothing -- and #tools is two :
        .actionrow  what happens to the board : papers in, papers out, the shape
-                   of the list, its columns
+                   of the list, its columns, and whether it's saved
        .toolbar    which paper am I looking for -->
 <header>
   <div class="titlebar">
     <h1>prma sort</h1>
+    <!-- Which list this is, and every other one : /sort is the main list,
+         /sort/<name> the others ( see the "lists" section of the script ). -->
+    <span class="listctl">
+      <button id="listbtn" title="Every list — switch to another one, or make a new one">▾ Main</button>
+      <div id="listpop"></div>
+    </span>
     <div class="counts" id="counts"></div>
     <nav class="navlinks">
       <a class="navlink" href="/" title="Back to the search dashboard">← Dashboard</a>
@@ -428,13 +505,17 @@
       <button id="toanchor" title="No anchor yet — select a row and click ⚓ Anchor" disabled>⤓ To anchor</button>
       <input id="jumpto" type="text" inputmode="numeric" autocomplete="off" placeholder="Jump to #"
              title="Type a row's number and press ↵ to scroll to it">
+      <button id="totop" title="Back to the top of the list">↑ Top</button>
+      <button id="tobottom" title="Down to the bottom of the list">↓ Bottom</button>
+      <!-- Only while rows are selected ( renderCopyTo ) -- pinned, like the
+           anchor, because a selection is usually made a long way down the list. -->
+      <button id="copyto" class="needs-login" style="display:none" title="Copy the selected rows to another list, or start a new list with them">⇢ Copy to list…</button>
     </span>
     <button id="undoact" title="Nothing to undo yet" disabled>↶</button>
     <button id="redoact" title="Nothing to redo" disabled>↷</button>
     <button id="helpbtn" title="How this page works">?</button>
     <button id="toggleTheme" title="Toggle light / dark theme">🌙 Dark</button>
     <span id="lockstate" title="This board is in view-only mode for everyone — nothing typed here is saved">🔒 View only</span>
-    <div class="savestate" id="savestate">loading…</div>
   </div>
 </header>
 <div id="toolslot"><div id="tools">
@@ -448,6 +529,7 @@
     <button id="refsbtn" class="needs-login" title="Paste a reference list, or drop a .docx / .txt — the new ones land on the staging shelf">📋 Import refs</button>
     <button id="importbtn" title="Import a CSV file, or a Google Sheet by its link">⇩ Import CSV / Sheet</button>
     <button id="pulltiers" title="Copy every paper from the /tiers board into this one">⇄ Pull from Tiers</button>
+    <button id="importlists" class="needs-login" title="Bring papers in from another list, or from the papers in your library that aren't on this one yet — filtered by tag and year, picked by hand or by range">⇩ Import from lists…</button>
     <button id="exportbtn" title="Download the whole board as CSV">⇧ Export CSV</button>
     <select id="orderby" title="Look at the list stacked another way. The board itself never changes — every row keeps the number you gave it, and ⇅ manual puts the view back.">
       <option value="">⇅ manual — your own order</option>
@@ -464,6 +546,7 @@
     <button id="addcol" title="Add another free-text column ( like Notes )">＋ Column</button>
     <button id="foldbtn" style="display:none"></button>
     <button id="recentbtn" class="needs-login" title="The papers most recently added to your reference manager — read from it directly, so one saved a minute ago is here without a reindex or a restart">🆕 Recently added</button>
+    <div class="savestate" id="savestate">loading…</div>
     <input type="search" id="filter" style="flex:0 1 480px;min-width:240px" placeholder="Filter the list…" autocomplete="off">
   </div>
   <!-- Finding a paper to put on the board. Nothing but the search and the three
@@ -502,7 +585,7 @@
           title="Type a name and press ↵ — the new tag is armed for painting, or goes straight onto the rows you have selected">
         <span class="pblabel" title="The bar to the left is every tag on this board: click a chip to paint it onto rows, drag one to move it along the bar">Tags:</span>
         <button class="pbtn" id="tagfilter" title="Turn the tag bar into a filter: click tags to show only the papers carrying them">🔎 Filter</button>
-        <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen tags · all = it needs every one">any</button>
+        <button class="pbtn" id="tagfilterany" style="display:none" title="any = a paper needs one of the chosen tags · all = it needs every one · none = it has none of them — click to switch">any</button>
         <button class="pbtn" id="tagedit" title="Pick the colour every tag's chips are drawn in">🎨 Colors</button>
       </span>
     </div>
@@ -515,7 +598,6 @@
 </main>
 <div id="acpop"></div>
 <div id="overlay"><div class="sheet" id="sheet"></div></div>
-<button id="totop" title="Back to the top of the list">↑ Top</button>
 <div id="toast"></div>
 <!-- $ , $$ , esc , fmt , PROXY , mdHref() , doiLinks() , codeLinks() ,
      initTheme() , trackHeadHeight() -- the helpers every prma page used to write out for itself.
@@ -534,6 +616,19 @@ const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace
 const nowISO = () => new Date().toISOString();
 const lc = s => String(s||"").toLowerCase();
 
+// ---- which list -----------------------------------------------------------
+// /sort is the main list ; /sort/<slug> is one of the others, each a board of
+// its own ( src/db/sortlists.py ). The same page draws all of them -- it only
+// has to know which document to ask for and where to save it. Everything that
+// is about ONE board ( the draft, the anchor, how staged rows matched ) is kept
+// per list in this browser ; the main list keeps the names it always had, so a
+// draft from before there were lists is still found.
+const LIST = decodeURIComponent((location.pathname.match(/^\/sort\/([^\/]+)\/?$/) || [])[1] || "");
+const API  = LIST ? `/api/sort/lists/${encodeURIComponent(LIST)}` : "/api/sort";
+const listKey = k => LIST ? `${k}:${LIST}` : k;
+let LISTS = [];             // every list ( GET /api/sort/lists ), for the switcher
+let MISSING = false;        // there is no such list ( or it was deleted while open )
+
 let DOC   = { version:1, options:{auto_move:false}, columns:[{id:"notes",label:"Notes"}], items:[], staging:[], vocab:{tags:[]} };
 let REV   = 0;
 let VOCAB = [];             // modality vocabulary ( config/methods.py )
@@ -542,11 +637,11 @@ let armed = null;           // tag armed for click-to-tag painting
 let SEL   = new Set();      // keys of the selected rows ( outlined ) -- see selectRow
 let selAnchor = null;       // where a shift-click range starts from
 let ANCHOR = null;          // key of the ⚓ row ( this browser's ) -- see renderAnchor
-const ANCHOR_KEY = "prma-sort-anchor";
+const ANCHOR_KEY = listKey("prma-sort-anchor");
 try { ANCHOR = localStorage.getItem(ANCHOR_KEY) || null; } catch(e){}
 let TAGF  = new Set();      // tags the board is filtered down to ( see applyFilter )
 let filtering = false;      // the tag bar is a filter right now, not a brush
-let filterAll = false;      // ... and a row needs ALL of TAGF, not just one
+let filterMode = "any";     // ... and how a row has to match TAGF : any / all / none ( tagMatch )
 let SOFF  = new Set();      // staged keys whose checkbox is OFF ( this browser only )
 // How each staged row was matched to the library ( "doi" / "title" / "fuzzy" ).
 // Deliberately NOT part of the document : it's a fact about the import you just
@@ -664,7 +759,7 @@ function setLocked(on){
   // filter, the search, the theme -- reading is the whole point of the mode --
   // and 📋 Import refs, which is the way back out ( see below ) and can't be
   // disabled because a disabled button fires no clicks at all.
-  $$("#orderby,#keeporder,#automove,#autotag,#addcol,#importbtn,#pulltiers,#addwhere")
+  $$("#orderby,#keeporder,#automove,#autotag,#addcol,#importbtn,#pulltiers,#addwhere,#importlists")
     .forEach(el=>{ el.disabled = LOCKED; });
   $("#refsbtn").title = LOCKED
     ? "This board is in view-only mode — nothing can be imported into it right now"
@@ -673,6 +768,7 @@ function setLocked(on){
 // Returns true when the caller should stop -- and says why, once, rather than
 // letting a click land on nothing.
 function guard(){
+  if(MISSING){ toast("There is no list here to change", 4000); return true; }
   if(!LOCKED) return false;
   if(!SERVER_LOCKED){ toast("View only — log in to edit this board", 4000); return true; }
   toast("View only — this board is locked for everyone", 4000);
@@ -680,7 +776,7 @@ function guard(){
 }
 async function setLock(on){
   try {
-    const r = await (await postJSON("/api/sort/lock", { locked: !!on }, { quiet:true })).json();
+    const r = await (await postJSON(API + "/lock", { locked: !!on }, { quiet:true })).json();
     if(!r || !r.ok){ toast("Could not change the lock"); return; }
     REV = r.rev;
     setLocked(r.locked); renderAll();
@@ -800,8 +896,16 @@ async function save(){
     // base_rev : the version this copy started from. When something else wrote
     // in between ( an agent's ops, another tab ) the server merges rather than
     // writing this over it -- see BoardState.replace in src/server/server.py .
-    const res = await postJSON("/api/sort", { doc: DOC, base_rev: REV }, { quiet:true });
+    const res = await postJSON(API, { doc: DOC, base_rev: REV }, { quiet:true });
     const r = await res.json();
+    // 410 : this list was deleted ( from another tab, or by an agent ) while it
+    // was open here. Writing it back would bring it back to life, so don't --
+    // keep what's here as the draft and say what can be done with it.
+    if(res.status === 410 || (r && r.gone)){
+      dirty = false; saving = false;
+      writeDraft(); listGone();
+      return;
+    }
     // 401 : the login expired ( or was revoked ) while this tab had the board
     // open ; 403 + csrf : it was replaced in another tab. Nothing typed here is
     // lost -- the draft is kept and offered back once you're logged in again.
@@ -875,8 +979,12 @@ function adoptDoc(doc, rev){
 // below is already in this browser and we keep trying, so a server that comes
 // back -- or a laptop that wakes up -- picks the work up by itself.
 function retrySave(){ clearTimeout(saveTimer); saveTimer = setTimeout(save, 5000); }
+// False when there is no such list ( a /sort/<name> nobody made, or one since
+// deleted ) -- the page says so instead of drawing an empty board to type into.
 async function loadDoc(){
-  const d = await (await fetch("/api/sort")).json();
+  const res = await fetch(API);
+  if(res.status === 404){ listMissing(); return false; }
+  const d = await res.json();
   DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
   setLocked(d.locked);
   if(!DOC.options) DOC.options = { auto_move:false };
@@ -891,6 +999,7 @@ async function loadDoc(){
   renderAll();
   pruneHow();
   fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
+  return true;
 }
 
 // ---- the draft in this browser --------------------------------------------
@@ -900,8 +1009,8 @@ async function loadDoc(){
 // after an import, a server killed mid-session, a laptop that slept and woke up
 // somewhere else. On the next load an unsaved draft is offered back ( see
 // offerDraft ), so an imported bibliography is always resumable.
-const DRAFT_KEY = "prma-sort-draft";
-const HOW_KEY   = "prma-sort-how";
+const DRAFT_KEY = listKey("prma-sort-draft");
+const HOW_KEY   = listKey("prma-sort-how");
 let draftTimer = null;
 function writeDraft(){
   clearTimeout(draftTimer); draftTimer = null;
@@ -994,7 +1103,7 @@ window.addEventListener("beforeunload", e=>{
     // below is what's left.
     const body = JSON.stringify({ doc: DOC, base_rev: REV });
     if(new Blob([ body ]).size < 64000){
-      postJSON("/api/sort", body, { keepalive:true, quiet:true }).catch(()=>{});
+      postJSON(API, body, { keepalive:true, quiet:true }).catch(()=>{});
       sent = true;
     }
   } catch(err){}
@@ -1008,7 +1117,17 @@ document.addEventListener("visibilitychange", ()=>{ if(document.hidden && dirty)
 let INDEX;
 async function pollRev(){
   try {
-    const d = await (await fetch("/api/sort/version")).json();
+    const res = await fetch(API + "/version");
+    // The list went away while it was open here ( deleted elsewhere ).
+    if(res.status === 404 && LIST){ if(dirty) writeDraft(); listGone(); return; }
+    const d = await res.json();
+    // ... or was renamed : its old address still answers ( an alias ), but the
+    // page belongs at the new one. Not while there's something unsaved here --
+    // the save still lands through the old name, and the next poll moves us.
+    if(d && LIST && d.slug && d.slug !== LIST && !dirty && !saving){
+      location.replace(`/sort/${encodeURIComponent(d.slug)}${location.search}${location.hash}`);
+      return;
+    }
     // The lock first, and regardless of the rev / dirty checks below : a board
     // that just went view-only has to stop taking edits in THIS tab now, not
     // whenever it next happens to be safe to reload.
@@ -1206,13 +1325,16 @@ function labelView(){
   else delete document.documentElement.dataset.view;
 }
 
-function rowHtml(it, n){
+// h : the height this row had before the redraw, if it was on the board -- what
+// it stands in at while it is off screen ( see #board > .row in the style ).
+function rowHtml(it, n, h){
   const m = META[it.key] || {};
   const title = it.title || m.title || it.key;
   const year  = it.year || m.year || "";
   const inner = esc(title);          // plain text -- open it from the link strip
   const loose = (m.in_library === false) ? " " + looseBadge(it) : "";
-  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
+  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}"`+
+    (h ? ` style="contain-intrinsic-size:auto ${h}px"` : "")+`>`+
     `<div class="c numc">`+
       `<input class="numin" value="${n}" title="Where this paper sits in YOUR order — type a number and press ↵ to send it there, from any view" `+
         `inputmode="numeric" autocomplete="off"${RO()}>`+
@@ -1243,9 +1365,22 @@ function renderBoard(){
               start: a.selectionStart, end: a.selectionEnd, val: a.value };
   }
   const no = manualNo();
+  // Every row's height as it stands, by paper. A row off screen isn't drawn,
+  // and a NEW element has no drawn height to remember -- so without these the
+  // rows above you would all come back at the --rowh estimate and the page
+  // would land on some other row. With them the board is the same height in
+  // the same places, and a moved row takes its own height along with it.
+  // Kept across redraws ( ROWH ), so a row deleted and brought back with Undo
+  // returns at its own height too.
+  $$("#board > .row:not(.hide)").forEach(r=>{
+    const h = rowContentH(r);
+    if(h > 0) ROWH.set(r.dataset.key, h);
+  });
   $("#board").innerHTML = DOC.items.length
-    ? viewItems().map(it=>rowHtml(it, no.get(it.key))).join("")
+    ? viewItems().map(it=>rowHtml(it, no.get(it.key), ROWH.get(it.key))).join("")
     : `<div class="empty">Nothing here yet — search above and press ↵ ( or double-click a hit ) to add papers.</div>`;
+  measureRowH();
+  if(holdView){ holdView.disconnect(); $$("#board > .row").forEach(r=>holdView.observe(r)); }
   applyFilter();
   if(focus){
     const row = rowEl(focus.key);
@@ -1261,6 +1396,55 @@ function renderBoard(){
     }
   }
 }
+// A row's height less its own bottom border -- the size it is held at while
+// off screen is its content's. Unrounded : 750 rows of rounding is a row's
+// worth of drift. ROWH : the last one each paper had, by key ( see renderBoard ).
+const rowContentH = r => r.getBoundingClientRect().height - (r.offsetHeight - r.clientHeight);
+const ROWH = new Map();
+// --rowh : what a row that has never been drawn stands in at -- the average of
+// the ones on screen, taken the frame after they ARE drawn, and taken again
+// whenever the columns change under them ( a Methods summary makes for a
+// taller row than a note ).
+let rowHFor = null;
+function measureRowH(){
+  const grid = document.documentElement.style.getPropertyValue("--grid");
+  if(rowHFor === grid) return;
+  rowHFor = grid;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const hs = $$("#board > .row:not(.hide)").filter(r=>{
+      const b = r.getBoundingClientRect();
+      return b.bottom > 0 && b.top < innerHeight;
+    }).map(rowContentH);
+    if(hs.length >= 3)
+      document.documentElement.style.setProperty("--rowh", (hs.reduce((s,h)=>s+h, 0) / hs.length).toFixed(1) + "px");
+    else rowHFor = null;      // nothing on screen to go by -- try again on the next redraw
+  }));
+}
+// A row drawn for the first time ABOVE what you're looking at -- scrolling back
+// up after a jump, or after dragging the scrollbar -- comes out taller or
+// shorter than the height it stood in at. Most browsers hold the view still
+// through that by themselves ( scroll anchoring ) ; where one doesn't ( Safari )
+// everything on screen would lurch by the difference, so it's done here : the
+// page is scrolled by however much the rows wholly above the column head
+// changed. Not while the page is making a scroll of its own ( settleScroll ) :
+// a jump scroll here would cut that one short, and it aims again at the end
+// anyway. Null where the browser does it.
+const holdView = (window.ResizeObserver && !(window.CSS && CSS.supports("overflow-anchor", "auto")))
+  ? (()=>{
+      const was = new WeakMap();
+      return new ResizeObserver(entries=>{
+        const edge = $("header").offsetHeight + $("#colwrap").offsetHeight;
+        let shift = 0;
+        entries.forEach(e=>{
+          const r = e.target, before = was.get(r);
+          const h = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : r.offsetHeight;
+          was.set(r, h);
+          if(before != null && h !== before && r.getBoundingClientRect().bottom <= edge) shift += h - before;
+        });
+        if(shift && !settling) window.scrollBy(0, shift);
+      });
+    })()
+  : null;
 function renderCounts(){
   const n = DOC.items.length;
   const tagged = DOC.items.filter(it=>(it.tags||[]).length).length;
@@ -1289,7 +1473,9 @@ function renderPaintbar(){
     const inF = filtering && TAGF.has(v);
     const on  = sel.length && sel.every(it=>hasTag(it,v));
     const som = !on && sel.some(it=>hasTag(it,v));
-    const how = filtering  ? `${inF?"in":"not in"} the filter — click to ${inF?"drop":"add"} it ( ${n} paper(s) )`
+    const how = filtering  ? (filterMode === "none"
+                ? `${inF?"hiding":"not hiding"} the papers tagged it — click to ${inF?"show them again":"hide them"} ( ${n} paper(s) )`
+                : `${inF?"in":"not in"} the filter — click to ${inF?"drop":"add"} it ( ${n} paper(s) )`)
               : sel.length ? `${on?"on":som?"on some of":"off"} the ${sel.length} selected row(s) — click to flip it`
                            : `${n} paper(s) — click to paint it onto rows`;
     return `<span class="chip ${(inF||armed===v||on)?'on':som?'half':''}" ${chipStyle(v)} draggable="true" `+
@@ -1298,6 +1484,7 @@ function renderPaintbar(){
   }).join("");
   $("#tagchips").appendChild(PBCTL);
   renderAnchor();   // every selection change comes through here
+  renderCopyTo();   // ... and so does ⇢ Copy to list, which only a selection has
   document.body.classList.toggle("painting", !!armed && !filtering);
 }
 const hasTag = (it,v) => (it.tags||[]).some(t=>lc(t)===lc(v));
@@ -1547,7 +1734,7 @@ function addStaged(keys){
   const first = rowEl(moving[0].key);
   if(first){
     first.classList.add("flash");
-    if(!staged().length) first.scrollIntoView({ block:"center", behavior:"smooth" });
+    if(!staged().length) centerRow(first);
   }
   toast(`Added ${moving.length} paper(s) to ${whereLabel()}`, 6000, "Undo", ()=>{
     DOC.items   = DOC.items.filter(it=>moving.indexOf(it) < 0);
@@ -1764,8 +1951,8 @@ function newItem(hit){
 // row you actually put somewhere ( dragged, or typed a number into ) -- so the
 // part of the list you've already ranked stays intact and new arrivals queue up
 // directly under it instead of at the bottom of everything.
-function insertIndex(){
-  const how = DOC.options.add_where || "bottom";
+function insertIndex(how){
+  how = how || DOC.options.add_where || "bottom";
   if(how === "top") return 0;
   if(how === "placed"){
     let last = -1;
@@ -1969,7 +2156,7 @@ async function addPaper(hit, at){
       // the scroll land the row below it.
       const r = el.getBoundingClientRect();
       if(document.activeElement === $("#q") && (r.top < 0 || r.bottom > innerHeight)) floatTools(true);
-      el.scrollIntoView({ block:"center", behavior:"smooth" });
+      centerRow(el);
     }
   }
   const got = await fetchMeta([it.key], true);
@@ -2153,6 +2340,20 @@ async function runSearch(){
   renderResults();
   fetchMeta(hits.map(h=>h.key), true).then(()=>renderResults());
 }
+// Where a recently-added paper should land, typed in the list beside the button
+// that adds it -- the number you would otherwise have had to go and type into
+// the row after it arrived. Kept per paper rather than in the DOM : the list
+// redraws itself whenever the metadata lands or the poll finds a newer paper,
+// and a redraw must not take back what you typed.
+const POSAT = new Map();
+// Empty is the original ＋ Add : the paper goes where "add to …" says. A number
+// is a position in YOUR order, counted the way the row numbers and the ✓ #n
+// here count it -- 1 is the top, anything past the end is the bottom.
+function posBox(h, i){
+  return `<input class="at" data-i="${i}" value="${esc(POSAT.get(h.key) || "")}" placeholder="#"`+
+    ` inputmode="numeric" autocomplete="off" draggable="false"`+
+    ` title="Where to put it — 1 is the top, counted the way the row numbers are. Leave it empty and it goes wherever “add to …” says.">`;
+}
 function renderResults(){
   if(!hits.length){
     $("#results").innerHTML = hitMode === "recent"
@@ -2167,6 +2368,13 @@ function renderResults(){
     : hitMode === "title"
       ? `<div class="rhint">${hits.length} closest title${hits.length===1?"":"s"} · ↵ or double-click adds ( tagged, Code + Datasets filled in ) · or drag a hit into the list</div>`
       : `<div class="rhint">${hits.length} of ${hitTotal} · best match first · ↵ or double-click adds · or drag a hit into the list</div>`;
+  // A number typed against a paper that has since dropped out of the list ( the
+  // window moved, or you asked for a different "show 25" ) is not waiting for it
+  // to come back.
+  if(hitMode === "recent"){
+    const live = new Set(hits.map(h=>h.key));
+    POSAT.forEach((v,k)=>{ if(!live.has(k)) POSAT.delete(k); });
+  }
   $("#results").innerHTML = hint+
     hits.map((h,i)=>{
       const f = findItem(h.key);
@@ -2179,7 +2387,9 @@ function renderResults(){
             `${h.cited_by!=null?` · ${h.cited_by} cites`:""}`+
             `${hitMode==="recent"?recentBadges(h):""} ${mods}</div>`+
         `</div>`+
-        (f ? `<div class="in">✓ #${f.idx+1}</div>` : `<button class="add" data-i="${i}">＋ Add</button>`)+
+        (f ? `<div class="in">✓ #${f.idx+1}</div>`
+           : `<div class="acts">${hitMode==="recent" ? posBox(h,i) : ""}`+
+             `<button class="add" data-i="${i}">＋ Add</button></div>`)+
       `</div>`;
     }).join("");
   $("#results").classList.add("show");
@@ -2236,7 +2446,7 @@ function recentHint(){
   const more = RECENT_NS.filter(n=>n!==recentN)
     .map(n=>`<a href="#" data-recent-n="${n}">${n}</a>`).join(" · ");
   return `<div class="rhint">last ${hits.length} added to your library · ↵ or double-click adds · `+
-    `or drag one into the list &nbsp;&nbsp;show ${more}</div>`;
+    `type a # beside ＋ Add to send it to that spot · or drag one into the list &nbsp;&nbsp;show ${more}</div>`;
 }
 async function showRecent(){
   if(recentBusy) return;
@@ -2426,6 +2636,8 @@ $("#board").addEventListener("dragstart", e=>{
 $("#results").addEventListener("dragstart", e=>{
   const hit = e.target.closest(".hit");
   if(!hit) return;
+  // Dragging across the position box is selecting what you typed.
+  if(e.target.closest(".at")){ e.preventDefault(); return; }
   if(LOCKED){ e.preventDefault(); return; }
   dragHit = hits[+hit.dataset.i];
   e.dataTransfer.effectAllowed = "copy";
@@ -2746,20 +2958,51 @@ $("#smode").addEventListener("change", ()=>{
 $("#q").addEventListener("keydown", e=>{
   if(e.key==="ArrowDown"){ e.preventDefault(); moveHit(1); }
   else if(e.key==="ArrowUp"){ e.preventDefault(); moveHit(-1); }
-  else if(e.key==="Enter" && hits[hitIdx]){ e.preventDefault(); addPaper(hits[hitIdx]); }
+  else if(e.key==="Enter" && hits[hitIdx]){ e.preventDefault(); addHit(hitIdx); }
   else if(e.key==="Escape"){ closeResults(); e.target.blur(); }
 });
+// ＋ Add for a hit in the list, honouring the position box next to it ( recently
+// added only -- a search hit has no box, so this is plain addPaper ). The number
+// is 1-based like everything the eye reads here, and past the end means the end.
+async function addHit(i){
+  const h = hits[i];
+  if(!h) return;
+  const typed = hitMode === "recent" ? parseInt(POSAT.get(h.key) || "", 10) : NaN;
+  await addPaper(h, isNaN(typed) ? null : Math.max(0, Math.min(typed-1, DOC.items.length)));
+  // Only once it's really on the board : a press that bailed ( view only ) keeps
+  // the number for the press that works. The row has already redrawn as ✓ #n by
+  // now, which is where it says what the number did.
+  if(findItem(h.key)) POSAT.delete(h.key);
+}
 $("#results").addEventListener("click", e=>{
   const b = e.target.closest(".add");
-  if(b){ addPaper(hits[+b.dataset.i]); return; }
+  if(b){ addHit(+b.dataset.i); return; }
+  // Clicking into the position box is typing, not picking the hit under it.
+  if(e.target.closest(".at")) return;
   const h = e.target.closest(".hit");
   if(h){ hitIdx = +h.dataset.i; moveHit(0); }
+});
+// Digits only, remembered as they're typed. Escape isn't handled : it falls
+// through and puts the list away, the way it does from the search box.
+$("#results").addEventListener("input", e=>{
+  const at = e.target.closest(".at");
+  if(!at) return;
+  at.value = at.value.replace(/[^0-9]/g, "");
+  const h = hits[+at.dataset.i];
+  if(!h) return;
+  if(at.value) POSAT.set(h.key, at.value); else POSAT.delete(h.key);
+});
+$("#results").addEventListener("keydown", e=>{
+  const at = e.target.closest(".at");
+  if(at && e.key === "Enter"){ e.preventDefault(); addHit(+at.dataset.i); }
 });
 $("#results").addEventListener("dblclick", e=>{
   const h = e.target.closest(".hit");
   if(!h) return;
+  // Double-clicking the position box is selecting the number in it.
+  if(e.target.closest(".at")) return;
   e.preventDefault();
-  addPaper(hits[+h.dataset.i]);
+  addHit(+h.dataset.i);
 });
 // Clicking away puts the hits list down -- but not the button that raises it :
 // its own handler would otherwise be undone by this one a moment later.
@@ -2770,10 +3013,20 @@ $("#filter").addEventListener("search", applyFilter);   // the ✕ ( and Esc ) c
 // ( 🔎 Filter ). A row hidden by either drops out of the selection too, so the
 // chips never tag a paper you can't see.
 function matchesTags(it){
-  if(!TAGF.size) return true;
-  const have = (it.tags||[]).map(lc);
-  const want = Array.from(TAGF).map(lc);
-  return filterAll ? want.every(w=>have.includes(w)) : want.some(w=>have.includes(w));
+  return tagMatch(it.tags, Array.from(TAGF).map(lc), filterMode);
+}
+// The tag filter's rule, the same for the board and ⇩ Import from lists ( and
+// for an agent : sortops.tags_match ) : any = a paper carrying one of the picked
+// tags, all = every one of them, none = not one of them. Nothing picked lets
+// every paper through, whichever it is.
+const TAGMODES = [ "any", "all", "none" ];
+const nextMode = m => TAGMODES[(TAGMODES.indexOf(m) + 1) % TAGMODES.length];
+function tagMatch(tags, want, mode){
+  if(!want.length) return true;
+  const have = new Set((tags||[]).map(lc));
+  if(mode === "all")  return want.every(w=>have.has(w));
+  if(mode === "none") return !want.some(w=>have.has(w));
+  return want.some(w=>have.has(w));
 }
 function applyFilter(){
   const q = $("#filter").value.trim();
@@ -2804,10 +3057,13 @@ $("#tagfilter").addEventListener("click", ()=>{
   $("#tagfilterany").style.display = filtering ? "" : "none";
   applyFilter(); renderPaintbar();
 });
+// any → all → none → any. On none the picked chips are struck through : they
+// are the tags a paper must not have.
 $("#tagfilterany").addEventListener("click", ()=>{
-  filterAll = !filterAll;
-  $("#tagfilterany").textContent = filterAll ? "all" : "any";
-  $("#tagfilterany").classList.toggle("on", filterAll);
+  filterMode = nextMode(filterMode);
+  $("#tagfilterany").textContent = filterMode;
+  $("#tagfilterany").classList.toggle("on", filterMode !== "any");
+  $("#tagchips").classList.toggle("nonef", filterMode === "none");
   applyFilter(); renderPaintbar();
 });
 // Picking an order re-stacks what you are LOOKING at and leaves the board
@@ -2921,8 +3177,8 @@ initTheme();
 // ---- the header : a pinned bar, and the tools that scroll away ------------
 // A long list needs the window, so only the bar ( <header> ) is pinned : the
 // board, its counts, the links to the other pages, the anchor and Jump to ( see
-// below ), save state. Everything else is #tools -- what happens to the
-// board, the search, the tag bar. At the top of the page it sits under the bar
+// below ). Everything else is #tools -- what happens to the board and
+// whether it's saved, the search, the tag bar. At the top of the page it sits under the bar
 // as part of the page, so it scrolls away with the list instead of riding over
 // it.
 //
@@ -2951,11 +3207,6 @@ window.addEventListener("scroll", ()=>{
   if(toolsFrame) return;
   toolsFrame = requestAnimationFrame(()=>{
     toolsFrame = 0;
-    // ↑ Top rides this frame rather than a scroll listener of its own. body
-    // .hasfab is what lifts the toast off the corner while the button is there.
-    const up = window.scrollY > 400;
-    $("#totop").classList.toggle("show", up);
-    document.body.classList.toggle("hasfab", up);
     if(toolsOpen()){ if(!toolsAway()) floatTools(false); }
     else if(toolsAway() && $("#results").classList.contains("show") && document.activeElement === $("#q")) floatTools(true);
   });
@@ -2971,16 +3222,54 @@ function stowTools(e){
 window.addEventListener("wheel", stowTools, { passive:true });
 window.addEventListener("touchmove", stowTools, { passive:true });
 
-// ↑ Top. Smooth unless the machine is set to reduce motion -- and with a jump
-// behind it, because some renderers quietly drop a smooth scroll and leave you
-// exactly where you were.
+// Every scroll the page makes by itself -- ↑ Top, ↓ Bottom, Jump to, ⤓ To
+// anchor, a paper landing on the board -- goes through settleScroll. Smooth
+// unless the machine is set to reduce motion.
+//
+// Far down the board it is aiming partly at guesses : the rows on the way are
+// only drawn as they come by ( see #board > .row in the style ), and as they
+// are, the spot it was aiming at moves. So once the page comes to rest it
+// looks again, and goes the rest of the way -- up to three times, each a
+// shorter hop than the last -- and gives up the moment you take the wheel, the
+// keys or the mouse yourself. "At rest" is no scroll for a moment rather than
+// `scrollend`, which not every browser has. A smooth scroll some renderer
+// quietly dropped -- no scroll at all -- is retried as a plain jump.
 const motionOK = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-$("#totop").addEventListener("click", ()=>{
-  const from = window.scrollY;
-  if(!motionOK){ window.scrollTo(0, 0); return; }
-  window.scrollTo({ top:0, behavior:"smooth" });
-  setTimeout(()=>{ if(from > 0 && window.scrollY === from) window.scrollTo(0, 0); }, 250);
-});
+const YOURS = [ "wheel", "touchstart", "keydown", "mousedown" ];
+let settling = null;
+function settleScroll(target){
+  if(settling) settling();
+  let tries = 0, moved = true, quiet = 0;
+  const go = () => {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    const y   = Math.max(0, Math.min(target(), max));
+    if(Math.abs(window.scrollY - y) <= 2) return false;
+    window.scrollTo({ top:y, behavior: motionOK && moved ? "smooth" : "auto" });
+    moved = false;
+    return true;
+  };
+  const rest  = () => { clearTimeout(quiet); quiet = setTimeout(check, 140); };
+  const onScroll = () => { moved = true; rest(); };
+  const check = () => { if(++tries > 3 || !go()) stop(); else rest(); };
+  const stop  = () => {
+    clearTimeout(quiet);
+    window.removeEventListener("scroll", onScroll);
+    YOURS.forEach(t=>window.removeEventListener(t, stop, true));
+    if(settling === stop) settling = null;
+  };
+  settling = stop;
+  window.addEventListener("scroll", onScroll, { passive:true });
+  YOURS.forEach(t=>window.addEventListener(t, stop, { capture:true, passive:true }));
+  if(go()) rest(); else stop();
+}
+
+// ↑ Top and ↓ Bottom, in the pinned bar next to Jump to : the two ends of a
+// long list, one click from anywhere down it.
+function scrollEnd(bottom){
+  settleScroll(()=> bottom ? document.documentElement.scrollHeight : 0);
+}
+$("#totop").addEventListener("click", ()=>scrollEnd(false));
+$("#tobottom").addEventListener("click", ()=>scrollEnd(true));
 
 // ⚓ Anchor · ⤓ To anchor · Jump to : getting around a long list from the pinned
 // bar. The anchor is a bookmark kept in THIS browser ( ANCHOR_KEY ), not in the
@@ -2991,13 +3280,22 @@ $("#totop").addEventListener("click", ()=>{
 // Centred in what you can SEE -- the window less the pinned bar and column head
 // ( or the tools, if / has them down ) -- not in the whole window, where the
 // bar would sit on top of it. A row taller than that lands with its top showing.
+// Looked up by its paper each time rather than held : a redraw while it is
+// still on its way replaces the element.
+function centerRow(el){
+  const key = el.dataset.key;
+  settleScroll(()=>{
+    const row = rowEl(key);
+    if(!row) return window.scrollY;
+    const top  = toolsOpen() ? TOOLS.getBoundingClientRect().bottom
+                             : $("header").offsetHeight + $("#colwrap").offsetHeight;
+    const r    = row.getBoundingClientRect();
+    const room = innerHeight - top;
+    return window.scrollY + r.top - top - Math.max(0, (room - r.height) / 2);
+  });
+}
 function scrollToRow(el){
-  const top  = toolsOpen() ? TOOLS.getBoundingClientRect().bottom
-                           : $("header").offsetHeight + $("#colwrap").offsetHeight;
-  const r    = el.getBoundingClientRect();
-  const room = innerHeight - top;
-  const y    = window.scrollY + r.top - top - Math.max(0, (room - r.height) / 2);
-  window.scrollTo({ top: Math.max(0, y), behavior: motionOK ? "smooth" : "auto" });
+  centerRow(el);
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");  // flashes again on a second visit
 }
 // The topmost selected row in the order on screen. ( Declarations, not consts :
@@ -3048,6 +3346,7 @@ $("#jumpto").addEventListener("keydown", e=>{
 });
 
 document.addEventListener("keydown", e=>{
+  if(e.key==="Escape" && $("#listpop").classList.contains("show")){ closeListPop(); return; }
   if(e.key==="Escape"){
     // The hits list goes first, then the tools if / brought them down ; the next Esc is
     // the one that stops painting or clears the selection. Typing in the search
@@ -3612,6 +3911,581 @@ function applySheet(rows, how){
   if(r.fresh.length) autoTagImported(r.fresh);
 }
 
+// ---- the lists ------------------------------------------------------------
+// /sort is the main list ; /sort/<slug> are the others ( src/db/sortlists.py ),
+// each a whole board of its own -- tags, columns, shelf, history, lock. The
+// main list is the one /review, /code and /datasets read ; the others are
+// working sets beside it. The link IS the share : whoever can open the page can
+// read the list, and an account can edit it, exactly as on the main one.
+const listName = () => { const l = LISTS.find(x=>x.slug===LIST); return l ? l.name : (LIST || "Main"); };
+async function loadLists(){
+  try { LISTS = (await (await fetch("/api/sort/lists", { cache:"no-store" })).json()).lists || []; }
+  catch(e){}
+  labelList();
+  return LISTS;
+}
+function labelList(){
+  $("#listbtn").textContent = `▾ ${listName()}`;
+  document.title = LIST ? `${listName()} — prma sort` : "prma sort";
+}
+function renderListPop(){
+  const all = LISTS.length ? LISTS : [ { slug:"", name:"Main", url:"/sort", list:DOC.items.length, shelf:0 } ];
+  $("#listpop").innerHTML =
+    `<div class="lphead">Lists</div>`+
+    all.map(l=>`<a class="lpitem${l.slug===LIST?" on":""}" href="${esc(l.url)}" `+
+      `title="${esc(l.slug ? location.origin + l.url : "The main list — the one /review, /code and /datasets read")}">`+
+      `<span>${esc(l.name)}${l.locked?" 🔒":""}</span>`+
+      `<span class="n">${l.list}${l.shelf?` + ${l.shelf} staged`:""}</span></a>`).join("")+
+    `<div class="lpsep"></div>`+
+    `<button class="lpact needs-login" data-la="new">＋ New list…</button>`+
+    `<button class="lpact needs-login" data-la="dup">⧉ Duplicate this list…</button>`+
+    (LIST ? `<button class="lpact needs-login" data-la="rename">✎ Rename…</button>`+
+            `<button class="lpact needs-login" data-la="delete">🗑 Delete…</button>` : "")+
+    `<button class="lpact" data-la="link">🔗 Copy link</button>`;
+}
+function closeListPop(){ $("#listpop").classList.remove("show"); }
+$("#listbtn").addEventListener("click", async e=>{
+  e.stopPropagation();
+  const pop = $("#listpop");
+  if(pop.classList.contains("show")){ closeListPop(); return; }
+  renderListPop(); pop.classList.add("show");
+  await loadLists();                        // the counts as they are now
+  if(pop.classList.contains("show")) renderListPop();
+});
+document.addEventListener("click", e=>{ if(!e.target.closest(".listctl")) closeListPop(); });
+$("#listpop").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-la]");
+  if(!b) return;
+  closeListPop();
+  const act = { new: ()=>newListSheet(false), dup: ()=>newListSheet(true), rename: renameListSheet,
+                delete: deleteListSheet, link: copyListLink }[b.dataset.la];
+  if(act) act();
+});
+// Whatever is typed here reaches the server first : a duplicate, a copy to
+// another list and a rename all work from the board the SERVER has.
+async function flushSave(){
+  for(let i=0; i<80 && (dirty || saving); i++){
+    if(dirty && !saving) await save();
+    else await new Promise(r=>setTimeout(r, 150));
+  }
+  return !dirty;
+}
+// The name box every list dialog has, with the link the name makes under it --
+// the server's own rule ( sortlists.slugify ), so what you see is what you get,
+// less a -2 if the name is taken.
+function nameBox(){
+  const box = $("#lname"), out = $("#lurl");
+  const show = ()=>{ out.textContent = slug(box.value) ? `${location.origin}/sort/${slug(box.value).replace(/-+$/,"")}` : " "; };
+  box.addEventListener("input", show); show();
+  box.addEventListener("keydown", e=>{
+    if(e.key !== "Enter") return;
+    e.preventDefault();
+    const go = $("#sheet button.primary");
+    if(go) go.click();
+  });
+  box.focus(); box.select();
+}
+async function listPost(url, body, what){
+  try {
+    const res = await postJSON(url, body, { quiet:true });
+    const r = await res.json().catch(()=>({}));
+    if(res.status === 401){ toast("Log in to do that — anonymous visitors can only view"); return null; }
+    if(!r.ok){ toast(r.locked ? "That list is in view-only mode right now" : `Couldn't ${what} — ${r.error || res.statusText}`, 6000); return null; }
+    return r;
+  } catch(e){ toast(`Couldn't ${what} — the server isn't answering`); return null; }
+}
+const makeList = body => listPost("/api/sort/lists", body, "make the list").then(r=>r && r.list);
+function newListSheet(dup){
+  sheet(`
+    <h3>${dup ? `Duplicate “${esc(listName())}”` : "New list"}</h3>
+    <p>${dup
+      ? `A copy of this list as it is now — ${DOC.items.length} paper(s)${staged().length?` and ${staged().length} staged`:""}, every tag, note and column — at a link of its own. From then on the two go their own ways.`
+      : `An empty list at a link of its own. Fill it from the search box, or with <kbd>⇩ Import from lists…</kbd> — from any other list, filtered by tag and year, or from the papers in your library that aren't on it yet.`}</p>
+    <input type="text" id="lname" placeholder="Name it…" value="${esc(dup ? `${listName()} copy` : "")}" autocomplete="off">
+    <div class="urlnote" id="lurl"></div>
+    <div class="btns"><button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="make">${dup ? "Duplicate" : "Create"}</button></div>`, async act=>{
+    if(act !== "make") return;
+    const name = $("#lname").value.trim();
+    if(!slug(name)){ toast("A list needs a name with a letter or a digit in it"); return; }
+    if(dup && !(await flushSave())){ toast("This list couldn't be saved first — try again in a moment"); return; }
+    const l = await makeList(dup ? { name, from: LIST } : { name });
+    if(l) location.href = l.url;
+  });
+  nameBox();
+}
+function renameListSheet(){
+  sheet(`
+    <h3>Rename “${esc(listName())}”</h3>
+    <p>The link follows the name. The old link keeps working — it brings whoever uses it here.</p>
+    <input type="text" id="lname" value="${esc(listName())}" autocomplete="off">
+    <div class="urlnote" id="lurl"></div>
+    <div class="btns"><button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="go">Rename</button></div>`, async act=>{
+    if(act !== "go") return;
+    const name = $("#lname").value.trim();
+    if(!slug(name)){ toast("A list needs a name with a letter or a digit in it"); return; }
+    if(!(await flushSave())){ toast("This list couldn't be saved first — try again in a moment"); return; }
+    const r = await listPost(`${API}/rename`, { name }, "rename it");
+    if(r) location.replace(r.list.url);
+  });
+  nameBox();
+}
+function deleteListSheet(){
+  sheet(`
+    <h3>Delete “${esc(listName())}”?</h3>
+    <p>It holds <b>${DOC.items.length}</b> paper(s)${staged().length?` and <b>${staged().length}</b> staged`:""}. Its link
+       stops working, for everyone. Nothing on any other list changes.</p>
+    <p>It isn't erased : the list, its history and all, is moved to
+       <code>output/cache/sort-lists/.trash/</code> on the server, and can be moved back from there by hand.</p>
+    <div class="btns"><button data-act="cancel">Keep it</button>
+      <button class="primary" data-act="del">Delete the list</button></div>`, async act=>{
+    if(act !== "del") return;
+    const r = await listPost(`${API}/delete`, {}, "delete it");
+    if(!r) return;
+    dirty = false; clearTimeout(saveTimer); clearDraft();
+    try { localStorage.removeItem(HOW_KEY); localStorage.removeItem(ANCHOR_KEY); } catch(e){}
+    location.href = "/sort";
+  });
+}
+async function copyListLink(){
+  const url = location.origin + (LIST ? `/sort/${encodeURIComponent(LIST)}` : "/sort");
+  try { await navigator.clipboard.writeText(url); toast(`Link copied — ${url}`, 5000); }
+  catch(e){
+    sheet(`<h3>The link to this list</h3>
+      <p>Anyone who can reach this server can open it and read the list ; an account can edit it.</p>
+      <input type="text" id="lname" value="${esc(url)}" readonly>
+      <div class="btns"><button class="primary" data-act="ok">Done</button></div>`);
+    $("#lname").select();
+  }
+}
+// /sort/<name> with no list behind it -- a typo, an old link, a list deleted
+// since. Nothing typed here could be saved anywhere, so nothing can be typed.
+// Both draw the board the way view-only does , with the badge saying why.
+function noList(badge, why){
+  MISSING = true; LOCKED = true; clearTimeout(saveTimer);
+  document.documentElement.dataset.locked = "1";
+  $("#lockstate").textContent = badge;
+  $("#lockstate").title = why;
+  $("#savestate").textContent = why;
+}
+function listMissing(){
+  noList("No such list", "no such list");
+  renderAll();
+  sheet(`
+    <h3>There is no list called “${esc(LIST)}”</h3>
+    <p>Nobody has made a list at this link, or it has since been deleted.</p>
+    <div class="btns"><button data-act="main">← The main list</button>
+      ${canEdit() ? `<button class="primary" data-act="make">Make it</button>` : ""}</div>`, async act=>{
+    if(act === "main"){ location.href = "/sort"; return; }
+    if(act !== "make") return;
+    const l = await makeList({ name: LIST });
+    if(l) location.href = l.url;
+  });
+}
+// The list was deleted while it was open here. What this tab is holding is the
+// only copy of anything unsaved, so it can still be kept -- as a new list.
+function listGone(){
+  if(MISSING) return;
+  noList("🗑 Deleted", "list deleted");
+  sheet(`
+    <h3>This list was deleted</h3>
+    <p>“${esc(listName())}” was deleted while you had it open, so nothing more can be saved to it.</p>
+    ${canEdit() ? `<p><b>Keep it as a new list</b> saves what is on this page — ${DOC.items.length} paper(s)${staged().length?`,
+      ${staged().length} staged`:""} — under a new name.</p>` : ""}
+    <div class="btns"><button data-act="main">← The main list</button>
+      ${canEdit() ? `<button class="primary" data-act="keep">Keep it as a new list</button>` : ""}</div>`, async act=>{
+    if(act === "main"){ location.href = "/sort"; return; }
+    if(act !== "keep") return;
+    const l = await makeList({ name: `${listName()} kept` });
+    if(!l) return;
+    const r = await listPost(l.api, { doc: DOC }, "save this page into it");
+    if(!r) return;
+    clearDraft();
+    location.href = l.url;
+  });
+}
+
+// ---- ⇢ Copy to list… --------------------------------------------------------
+// The rows you have selected ( click, ⌘-click, ⇧-click ), sent to another list
+// -- or to a new one made out of them. The other list may not be open anywhere,
+// so the server does the copying ( the import_list op, src/db/sortops.py ) ;
+// this list is saved first so it copies what you see.
+const WHERE_TO = [ [ "", "wherever that list adds" ], [ "bottom", "at the bottom" ], [ "top", "at the top" ],
+                   [ "placed", "after its last sorted row" ], [ "shelf", "on its staging shelf" ] ];
+const whereArg = v => v === "shelf" ? { shelf:true } : v ? { at:v } : {};
+function renderCopyTo(){
+  const b = $("#copyto");
+  if(!b) return;
+  b.style.display = SEL.size && !MISSING ? "" : "none";
+  b.textContent = `⇢ Copy ${SEL.size} to list…`;
+}
+$("#copyto").addEventListener("click", async ()=>{
+  const keys = DOC.items.filter(it=>SEL.has(it.key)).map(it=>it.key);
+  if(!keys.length) return;
+  await loadLists();
+  const targets = LISTS.filter(l=>l.slug!==LIST);
+  sheet(`
+    <h3>Copy ${keys.length} paper(s) to another list</h3>
+    <p>Each goes with its tags, in their colours, and its notes ; columns the other list hasn't got are added to
+       it. Papers it already has are skipped. <b>Move</b> also takes them off this list — the toast puts them back.</p>
+    <div class="imfoot" style="margin-top:0">
+      <label>To <select id="ctto">${targets.map(l=>`<option value="${esc(l.slug)}">${esc(l.name)} · ${l.list}</option>`).join("")}
+        <option value="@new">＋ a new list…</option></select></label>
+      <label id="ctwhere">Put them <select id="ctat">${WHERE_TO.map(([v,l])=>`<option value="${v}">${l}</option>`).join("")}</select></label>
+    </div>
+    <div id="ctnew" style="display:none;margin-top:10px">
+      <input type="text" id="lname" placeholder="Name the new list…" autocomplete="off">
+      <div class="urlnote" id="lurl"></div></div>
+    <div class="btns"><button data-act="cancel">Cancel</button>
+      ${LOCKED ? "" : `<button data-act="move">Move</button>`}
+      <button class="primary" data-act="copy">Copy</button></div>`, act=>{
+    if(act === "copy" || act === "move") copyTo(keys, act === "move", targets);
+  });
+  const pickNew = ()=>{
+    const isNew = $("#ctto").value === "@new";
+    $("#ctnew").style.display = isNew ? "" : "none";
+    $("#ctwhere").style.display = isNew ? "none" : "";
+    if(isNew) $("#lname").focus();
+  };
+  $("#ctto").addEventListener("change", pickNew);
+  nameBox();
+  $("#ctto").focus();
+  pickNew();
+});
+async function copyTo(keys, move, targets){
+  const to = $("#ctto").value, at = $("#ctat").value, name = $("#lname").value.trim();
+  if(to === "@new" && !slug(name)){ toast("Name the new list first"); return; }
+  if(!(await flushSave())){ toast("This list couldn't be saved first — try again in a moment"); return; }
+  let dest, n = keys.length, had = 0;
+  if(to === "@new"){
+    dest = await makeList({ name, from: LIST, keys });
+    if(!dest) return;
+  } else {
+    dest = targets.find(l=>l.slug===to);
+    const r = await listPost(`${dest.api}/ops`,
+      { ops:[ Object.assign({ op:"import_list", from: LIST, keys }, whereArg(at)) ] }, `copy to “${dest.name}”`);
+    if(!r) return;
+    n = r.results[0].imported.length; had = r.results[0].skipped.length;
+  }
+  const msg = `${move ? "Moved" : "Copied"} ${n} paper(s) to “${dest.name}”`+(had ? ` · ${had} it already had` : "");
+  if(!move){ toast(msg, 9000, "Open it", ()=>{ location.href = dest.url; }); return; }
+  const before = cloneDoc(DOC), gone = new Set(keys);
+  DOC.items = DOC.items.filter(it=>!gone.has(it.key));
+  SEL.clear(); selAnchor = null;
+  markDirty(); renderAll();
+  toast(msg, 12000, "Undo", ()=>{
+    DOC = before; markDirty(); renderAll();
+    toast(`Put back here — they are still on “${dest.name}” too`, 6000);
+  });
+}
+
+// ---- ⇩ Import from lists… ---------------------------------------------------
+// Pull papers onto THIS list from any other -- or from Remaining Papers, every
+// library paper that isn't on it yet. Filter by tag ( a list's own tags ; for
+// Remaining Papers their Methods stamps, which is what they'd be tagged with
+// anyway ) and by year, then pick : click, ⌘-click, ⇧-click, or type the
+// positions they have on the list they come from ( 1-40, 55 ). Nothing picked
+// means everything the filter shows. It is an ordinary edit to this board, so
+// ↶ and the toast both undo it. The server runs the same rules for an agent
+// ( import_list / import_remaining , src/db/sortops.py ).
+let IM = null;
+$("#importlists").addEventListener("click", ()=>{ if(!guard()) openImport(); });
+async function openImport(){
+  await loadLists();
+  const srcs = LISTS.filter(l=>l.slug!==LIST);
+  const how  = DOC.options.add_where || "bottom";
+  IM = { src:null, rows:[], vocab:[], colors:{}, sdoc:null, sel:new Set(), anchor:null,
+         tags:new Set(), mode:"any", shown:[], have:haveIndex(), ticket:0 };
+  sheet(`
+    <h3>Import into “${esc(listName())}”</h3>
+    <div class="imtop">
+      <label>From <select id="imsrc">
+        ${srcs.map(l=>`<option value="${esc(l.slug)}">${esc(l.name)} · ${l.list}</option>`).join("")}
+        <option value="@rest">Remaining Papers — in your library, not on this list</option>
+      </select></label>
+      <span class="imstat" id="imstat"></span>
+    </div>
+    <div class="imfilt">
+      <span>Years</span>
+      <input type="number" id="imy0" placeholder="from"> –
+      <input type="number" id="imy1" placeholder="to">
+      <label><input type="checkbox" id="imny"> and papers with no year</label>
+      <input type="search" id="imq" placeholder="Text anywhere in the row…" autocomplete="off">
+      <button id="imany" title="any = a paper needs one of the chosen tags · all = it needs every one · none = it has none of them — click to switch">any</button>
+    </div>
+    <div class="imtags" id="imtags"></div>
+    <div class="imsel">
+      <span>Pick</span>
+      <input type="text" id="imrange" placeholder="1-40, 55, 60-70  ↵" autocomplete="off"
+        title="Positions — the #s down the left, which are the papers' places on the list they come from. ↵ selects them.">
+      <button id="imall">Select all shown</button><button id="imnone">Clear</button>
+      <span class="imstat" id="imcount"></span>
+    </div>
+    <div class="imrows" id="imrows"></div>
+    <div class="imfoot">
+      <label>Put them <select id="imat">${[ ["bottom","at the bottom"], ["top","at the top"],
+        ["placed","after the last sorted row"], ["shelf","on the staging shelf"] ]
+        .map(([v,l])=>`<option value="${v}"${v===how?" selected":""}>${l}</option>`).join("")}</select></label>
+      <label id="imfl"><input type="checkbox" id="imfields" checked> with their notes &amp; columns</label>
+    </div>
+    <div class="btns"><button data-act="cancel">Cancel</button>
+      <button class="primary" data-act="import" id="imgo">Import</button></div>`, act=>{
+    const st = IM; IM = null;
+    if(act === "import" && st) runImport(st);
+  }, true);
+  const redraw = ()=>drawImport();
+  ["#imy0","#imy1","#imq"].forEach(id=>$(id).addEventListener("input", redraw));
+  $("#imny").addEventListener("change", redraw);
+  $("#imsrc").addEventListener("change", e=>loadSource(e.target.value));
+  $("#imany").addEventListener("click", ()=>{
+    IM.mode = nextMode(IM.mode);
+    $("#imany").textContent = IM.mode;
+    $("#imtags").classList.toggle("nonef", IM.mode === "none");
+    drawImport();
+  });
+  $("#imtags").addEventListener("click", e=>{
+    const c = e.target.closest(".chip[data-t]");
+    if(!c) return;
+    const t = c.dataset.t;
+    IM.tags.has(t) ? IM.tags.delete(t) : IM.tags.add(t);
+    c.classList.toggle("on", IM.tags.has(t));
+    drawImport();
+  });
+  $("#imrange").addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); imRange(); } });
+  $("#imrange").addEventListener("change", imRange);
+  $("#imall").addEventListener("click", ()=>{ IM.sel = new Set(imLive().map(({it})=>it.key)); paintImSel(); });
+  $("#imnone").addEventListener("click", ()=>{ IM.sel.clear(); IM.anchor = null; $("#imrange").value = ""; paintImSel(); });
+  $("#imrows").addEventListener("click", imClick);
+  loadSource($("#imsrc").value);
+}
+async function loadSource(v){
+  const st = IM;
+  if(!st) return;
+  const ticket = ++st.ticket;
+  Object.assign(st, { src:v, rows:[], vocab:[], colors:{}, sdoc:null, sel:new Set(), anchor:null, tags:new Set() });
+  $("#imfl").style.display = v === "@rest" ? "none" : "";
+  $("#imtags").innerHTML = "";
+  drawImport("Loading…");
+  if(v === "@rest"){
+    $("#imstat").textContent = "reading your library — the first time takes a few seconds…";
+    let d;
+    try { d = await (await fetch(`/api/sort/remaining?list=${encodeURIComponent(LIST)}&mods=1`)).json(); }
+    catch(e){ d = { ok:false, error:"the server isn't answering" }; }
+    if(IM !== st || st.ticket !== ticket) return;
+    if(!d.ok){
+      // The index the library is read from builds lazily -- wait for it.
+      if(d.status && d.status !== "error"){
+        $("#imstat").textContent = `the library index is ${d.status}${d.message?` — ${d.message}`:""} … still waiting`;
+        setTimeout(()=>{ if(IM === st && st.ticket === ticket) loadSource(v); }, 3000);
+      } else $("#imstat").textContent = d.error || "the library couldn't be read";
+      drawImport(" ");
+      return;
+    }
+    st.rows = d.rows.map((r,i)=>({ pos:i+1, it:Object.assign({}, r, { tags:(r.mods||[]).slice() }) }));
+    const used = new Set(st.rows.flatMap(({it})=>it.tags.map(lc)));
+    st.vocab = VOCAB.filter(t=>used.has(lc(t)));
+    st.rows.forEach(({it})=>it.tags.forEach(t=>{ if(!st.vocab.some(x=>lc(x)===lc(t))) st.vocab.push(t); }));
+    $("#imstat").textContent = `${d.rows.length} of the ${d.library} papers in your library aren't on this list — `+
+      `newest added first, tagged by their Methods stamp`;
+  } else {
+    const l = LISTS.find(x=>x.slug===v);
+    let d;
+    try { d = await (await fetch(l.api)).json(); } catch(e){ d = null; }
+    if(IM !== st || st.ticket !== ticket) return;
+    if(!d || !d.doc){ $("#imstat").textContent = "that list couldn't be read"; drawImport(" "); return; }
+    st.sdoc = d.doc;
+    st.rows = (d.doc.items||[]).map((it,i)=>({ pos:i+1, it }));
+    (d.doc.vocab.tags||[]).forEach(t=>{ st.vocab.push(t.name); st.colors[lc(t.name)] = t.color || ""; });
+    st.rows.forEach(({it})=>(it.tags||[]).forEach(t=>{ if(!st.vocab.some(x=>lc(x)===lc(t))) st.vocab.push(t); }));
+    $("#imstat").textContent = `${st.rows.length} paper(s), numbered as they are on “${l.name}”`;
+  }
+  drawImTags(); drawImport();
+}
+// A chip in the source's own colour where it has one, else in this board's.
+const imColor = t => { const c = IM && IM.colors[lc(t)]; return isHex(c) ? reskin(c) : colorOf(t); };
+function drawImTags(){
+  const st = IM, n = {};
+  st.rows.forEach(({it})=>(it.tags||[]).forEach(t=>{ n[lc(t)] = (n[lc(t)]||0) + 1; }));
+  $("#imtags").innerHTML = st.vocab.filter(t=>n[lc(t)]).map(t=>
+    `<span class="chip${st.tags.has(t)?" on":""}" data-t="${esc(t)}" `+
+    `style="background:${imColor(t)};color:${TAGFG};border-color:transparent" title="Papers tagged ${esc(t)} — in or out, as any / all / none says">`+
+    `${esc(t)}<span class="n">${n[lc(t)]}</span></span>`).join("") ||
+    `<span class="imstat">no tags on these papers</span>`;
+}
+const imYear = v => { const n = parseInt(String(v==null?"":v).trim(), 10); return isNaN(n) ? null : n; };
+// Already on this list ( or its shelf ) -- by key, DOI or title, the way a
+// pasted bibliography is checked ( haveIndex ).
+const imHere = (it, st = IM) => !!(st.have.get(lc(it.key)) || (it.doi && st.have.get("doi:"+lc(it.doi)))
+  || (ntitle(it.title) && st.have.get("t:"+ntitle(it.title))));
+// The filters, as src/db/sortops.py :: pick_rows reads them.
+function imFilter(){
+  const st = IM, y0 = imYear($("#imy0").value), y1 = imYear($("#imy1").value), q = $("#imq").value.trim();
+  const noYear = (y0 == null && y1 == null) || $("#imny").checked;
+  const want = Array.from(st.tags).map(lc);
+  return st.rows.filter(({it})=>{
+    if(!tagMatch(it.tags, want, st.mode)) return false;
+    const y = imYear(it.year);
+    if(y == null){ if(!noYear) return false; }
+    else if((y0 != null && y < y0) || (y1 != null && y > y1)) return false;
+    if(q && !textHas([ it.title, it.key, it.doi, (it.tags||[]).join(" "),
+      Object.values(it.fields||{}).join(" ") ].join(" "), q)) return false;
+    return true;
+  });
+}
+const imLive = (st = IM) => st.shown.filter(({it})=>!imHere(it, st));
+// What Import takes : the selected rows the filter still shows -- or, with
+// nothing selected, everything it shows.
+const imPick = (st = IM) => st.sel.size ? imLive(st).filter(({it})=>st.sel.has(it.key)) : imLive(st);
+const IMCAP = 3000;
+function drawImport(msg){
+  const st = IM;
+  if(!st) return;
+  if(msg){ $("#imrows").innerHTML = `<div class="empty">${esc(msg)}</div>`; st.shown = []; imCount(); return; }
+  st.shown = imFilter();
+  $("#imrows").innerHTML = st.shown.length
+    ? st.shown.slice(0, IMCAP).map(({pos,it})=>{
+        const here = imHere(it), on = !here && st.sel.has(it.key);
+        return `<div class="imr${here?" have":on?" on":""}" data-k="${esc(it.key)}">`+
+          `<input type="checkbox" tabindex="-1"${here?" disabled":""}${on?" checked":""}>`+
+          `<span class="ip">#${pos}</span>`+
+          `<span class="it" title="${esc(it.title||it.key)}">`+
+            `${here?`<span class="ih">✓ already here</span>`:""}${esc(it.title||it.key)}</span>`+
+          `<span class="itg" title="${esc((it.tags||[]).join(", "))}">`+
+            `${(it.tags||[]).map(t=>`<span style="background:${imColor(t)}">${esc(t)}</span>`).join("")}</span>`+
+          `<span class="iy">${esc(it.year||"")}</span></div>`;
+      }).join("") + (st.shown.length > IMCAP
+        ? `<div class="empty">… and ${st.shown.length - IMCAP} more not drawn — narrow the filter to see them ; with nothing selected they are still imported</div>` : "")
+    : `<div class="empty">Nothing on it matches.</div>`;
+  imCount();
+}
+function paintImSel(){
+  $$("#imrows .imr").forEach(r=>{
+    if(r.classList.contains("have")) return;
+    const on = IM.sel.has(r.dataset.k);
+    r.classList.toggle("on", on);
+    r.firstElementChild.checked = on;
+  });
+  imCount();
+}
+function imCount(){
+  const st = IM;
+  if(!st) return;
+  const pick = imPick(), here = st.shown.length - imLive().length;
+  $("#imcount").textContent = `${st.shown.length} shown`+(st.sel.size ? ` · ${pick.length} selected` : "")+
+    (here ? ` · ${here} already here` : "");
+  $("#imgo").textContent = !pick.length ? "Import"
+    : st.sel.size ? `Import ${pick.length} selected` : `Import all ${pick.length} shown`;
+  $("#imgo").disabled = !pick.length;
+}
+// The board's own selection rules ( selectRow ) : a click picks one, ⌘ / ctrl
+// adds or drops one, ⇧ takes the run from the last one clicked. The checkbox is
+// the ⌘-click for whoever doesn't know about ⌘.
+function imClick(e){
+  const r = e.target.closest(".imr");
+  if(!r || r.classList.contains("have")) return;
+  const st = IM, k = r.dataset.k;
+  const keys = imLive().map(({it})=>it.key);
+  if(e.shiftKey && st.anchor && keys.includes(st.anchor) && keys.includes(k)){
+    const a = keys.indexOf(st.anchor), b = keys.indexOf(k);
+    for(let i=Math.min(a,b); i<=Math.max(a,b); i++) st.sel.add(keys[i]);
+  } else if(e.metaKey || e.ctrlKey || e.target.type === "checkbox"){
+    st.sel.has(k) ? st.sel.delete(k) : st.sel.add(k);
+    st.anchor = k;
+  } else {
+    const only = st.sel.size === 1 && st.sel.has(k);
+    st.sel = new Set(only ? [] : [k]);
+    st.anchor = k;
+  }
+  paintImSel();
+}
+// "1-40, 55, 60-70" -> those positions, or null for something that isn't one
+// ( src/db/sortops.py :: parse_range ).
+function parseRange(spec){
+  const out = new Set();
+  for(const part of String(spec||"").trim().split(/[,\s]+/)){
+    if(!part) continue;
+    const m = part.match(/^#?(\d+)(?:[-–](\d+))?$/);
+    if(!m) return null;
+    let a = +m[1], b = m[2] ? +m[2] : a;
+    if(b < a) [a, b] = [b, a];
+    if(b - a > 100000) return null;
+    for(let i=a; i<=b; i++) out.add(i);
+  }
+  return out;
+}
+function imRange(){
+  const v = $("#imrange").value.trim();
+  if(!v) return;
+  const want = parseRange(v);
+  if(!want){ toast("Positions look like 1-40, 55, 60-70"); return; }
+  IM.sel = new Set(imLive().filter(({pos})=>want.has(pos)).map(({it})=>it.key));
+  paintImSel();
+}
+// Onto the board, as one edit. A row from another list comes as it is there --
+// tags in that list's colours, notes and the columns they sit in ( folded if
+// they were folded there ) -- less its hand-placed mark, which was about THAT
+// order. A remaining paper comes the way a search hit does ( addPaper ) : tagged
+// from its Methods stamp, Code and Datasets filled once the lookup lands.
+function runImport(st){
+  if(guard()) return;
+  const pick = imPick(st);
+  if(!pick.length) return;
+  const how = $("#imat").value, withFields = $("#imfields").checked;
+  const before = cloneDoc(DOC);
+  const from = st.src === "@rest" ? "Remaining Papers" : `“${(LISTS.find(l=>l.slug===st.src)||{}).name || "the other list"}”`;
+  let rows;
+  if(st.src === "@rest"){
+    rows = pick.map(({it})=>{
+      const row = newItem(Object.assign({}, it, { pdf_local:true }));
+      row.tags = (it.mods||[]).slice(); sortTags(row);
+      row.tags.forEach(rememberTag);
+      return row;
+    });
+  } else {
+    const scol = st.sdoc.columns || [], used = new Set();
+    rows = pick.map(({it})=>{
+      const fields = {};
+      if(withFields) Object.entries(it.fields||{}).forEach(([c,v])=>{
+        if(v && scol.some(x=>x.id===c)){ fields[c] = v; used.add(c); }
+      });
+      const row = { key:it.key, title:it.title||"", authors:it.authors||"", doi:it.doi||"", wid:it.wid||"",
+        pdf:it.pdf||"", year:it.year||null, journal:it.journal||"", tags:(it.tags||[]).slice(), fields,
+        added_at: nowISO() };
+      if(it.pending) row.pending = true;
+      row.tags.forEach(t=>{
+        if(vocabEntry(t)) return;
+        const c = st.colors[lc(t)];
+        DOC.vocab.tags.push({ name:t, color: isHex(c) ? c : nextColor() });
+      });
+      return row;
+    });
+    const fold = new Set((st.sdoc.options||{}).fold_cols||[]);
+    scol.forEach(c=>{
+      if(!used.has(c.id) || DOC.columns.some(x=>x.id===c.id)) return;
+      DOC.columns.push({ id:c.id, label:c.label });
+      if(fold.has(c.id)) DOC.options.fold_cols = (DOC.options.fold_cols||[]).concat(c.id);
+    });
+    rows.forEach(row=>DOC.columns.forEach(c=>{ if(row.fields[c.id] == null) row.fields[c.id] = ""; }));
+  }
+  if(how === "shelf") DOC.staging = staged().concat(rows);
+  else DOC.items.splice(insertIndex(how), 0, ...rows);
+  markDirty(); renderAll();
+  toast(`Imported ${rows.length} paper(s) from ${from}`+(how === "shelf" ? " onto the staging shelf" : ""), 12000,
+    "Undo", ()=>{ DOC = before; markDirty(); renderAll(); toast("Import undone"); });
+  const keys = rows.map(r=>r.key);
+  if(st.src !== "@rest"){ fetchMeta(keys); return; }
+  fetchMeta(keys, true).then(()=>{
+    let n = 0;
+    rows.forEach(row=>{
+      const m = META[row.key];
+      if(!row.tags.length && m && m.mods && m.mods.length){ row.tags = m.mods.slice(); sortTags(row); m.mods.forEach(rememberTag); n++; }
+      if(prefill(row, m).length) n++;
+    });
+    if(n){ markDirty(); renderAll(); }
+  });
+}
+
 // ---- overlay + help -------------------------------------------------------
 function sheet(html, onAct, wide){
   $("#sheet").innerHTML = html;
@@ -3631,13 +4505,31 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
     <li><b>One list, in your order</b>, numbered as you see it. Grab a row's <kbd>⠿</kbd> to drag it,
         or <b>type a number</b> into its box and press <kbd>↵</kbd> to send it straight to that
         position. Everything renumbers itself.</li>
+    <li><b>More than one list.</b> <kbd>▾ Main</kbd>, next to the title, is every list there is. The one
+        at <code>/sort</code> is the main list — the one <a href="/review">/review</a>,
+        <a href="/code">/code</a> and <a href="/datasets">/datasets</a> read — and every other one lives
+        at <code>/sort/its-name</code>. The same menu makes them: <kbd>＋ New list…</kbd>,
+        <kbd>⧉ Duplicate this list…</kbd> ( every paper, tag, note and column, as it is now ), and on any
+        list but the main one <kbd>✎ Rename…</kbd> ( the old link keeps working ) and
+        <kbd>🗑 Delete…</kbd> ( it goes to <code>output/cache/sort-lists/.trash/</code> rather than away ).
+        <b>The link is the share</b> — <kbd>🔗 Copy link</kbd> — : anyone who can reach this server can
+        read a list, and an account can edit it, the same as here. Each list keeps its own shelf, its own
+        history and its own view-only setting.</li>
+    <li><b>⇢ Copy to list…</b> appears while rows are selected ( click, <kbd>⌘</kbd>-click,
+        <kbd>⇧</kbd>-click ): it copies them, tags, colours and notes, to another list, or starts a new
+        list with just them. <b>Move</b> also takes them off this one. <b>⇩ Import from lists…</b> goes
+        the other way: pick another list, or <b>Remaining Papers</b> — every paper in your library that
+        isn't on this list yet, tagged by its Methods stamp — narrow it by tag and by year, then select
+        rows the same way, or type their numbers ( <kbd>1-40, 55</kbd> ), or select nothing and take
+        everything the filter shows. Papers already here are greyed out and skipped. Like any import,
+        <kbd>↶</kbd> and the toast undo it.</li>
     <li><b>Two rows of tools, then the tags.</b> One row for what happens to the board — papers
         in, papers out, the order, what tagging does, the columns, and what you're looking at
-        ( <kbd>🆕 Recently added</kbd>, <kbd>Filter the list…</kbd> ) — and one for finding a
-        paper. The links to the other pages, <kbd>?</kbd> and <kbd>🌙</kbd> ride up in the pinned
-        bar, which had a window's worth of space next to the save stamp doing nothing.</li>
+        ( <kbd>🆕 Recently added</kbd>, <kbd>Filter the list…</kbd> ), with when it was last
+        saved between the two — and one for finding a paper. The links to the other pages,
+        <kbd>?</kbd> and <kbd>🌙</kbd> ride up in the pinned bar.</li>
     <li><b>Only the top bar stays put</b> — the board, its counts, the other pages, the anchor and
-        <kbd>Jump to</kbd>, save state. The tools and the tag bar scroll away with the
+        <kbd>Jump to</kbd>. The tools, the save stamp and the tag bar scroll away with the
         list, so a long list gets the whole window. <kbd>/</kbd> brings the search back down over
         the list from anywhere without losing your place, and a search you're in the middle of
         follows you as you add from it; it goes away again when you scroll by hand ( unless
@@ -3646,7 +4538,8 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         ( click it again on that row to lift it ), and <kbd>⤓ To anchor</kbd> scrolls back to it from
         anywhere. The anchor follows the paper when you move it, and it is this browser's own
         bookmark, not part of the board. Type a row's number into <kbd>Jump to #</kbd> and press
-        <kbd>↵</kbd> to scroll to it — the number on its box, so it works in any view.</li>
+        <kbd>↵</kbd> to scroll to it — the number on its box, so it works in any view.
+        <kbd>↑ Top</kbd> and <kbd>↓ Bottom</kbd>, right after it, go to either end of the list.</li>
     <li><b>Search</b> ( <kbd>/</kbd> ) <b>matches titles</b>: type any piece of a title and the
         closest titles come back, best first — nothing has to match exactly, so a typo, a missing
         word or two words the wrong way round still land the paper ( pasting a DOI works too ).
@@ -3722,8 +4615,10 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         paper held in place; <kbd>◂ Hide Extra Columns</kbd> folds them again. Which way round is
         a setting of this browser, not of the board.</li>
     <li><b>Only show some of them</b>: <kbd>🔎 Filter</kbd> turns the tag bar into a filter — click
-        tags and the board narrows to the papers carrying them ( <kbd>any</kbd> / <kbd>all</kbd>
-        switches whether one is enough ). <kbd>Filter the list…</kbd>, at the end of the action
+        tags and the board narrows to the papers carrying them. The button next to it switches how:
+        <kbd>any</kbd> ( one of the tags is enough ), <kbd>all</kbd> ( every one ) or <kbd>none</kbd>
+        ( only the papers carrying <i>none</i> of them — pick <kbd>fMRI</kbd> on <kbd>none</kbd> to see
+        everything that isn't fMRI ; the picked chips are struck through ). <kbd>Filter the list…</kbd>, at the end of the action
         row, narrows further on anything typed anywhere in a row. Press <kbd>🔎</kbd> again to
         see everything.</li>
     <li><b>Links in a cell are live.</b> Any URL you type — or that <kbd>＋ Add</kbd> and the sheet
@@ -3766,7 +4661,8 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         per-browser preference, so it looks the same from every machine.</li>
     <li>Lives in <code>output/cache/sort.json</code>, with every replaced version kept in
         <code>output/cache/sort-history/</code> — which is also where a file damaged by a crash
-        is recovered from, automatically, on the next start.</li>
+        is recovered from, automatically, on the next start. The other lists live the same way,
+        each in its own <code>output/cache/sort-lists/&lt;name&gt;/</code>.</li>
   </ul>
   <div class="btns"><button data-act="ok">Got it</button></div>`));
 
@@ -3779,7 +4675,9 @@ labelMode();
 // offered as soon as it does.
 function boot(){
   // Who is looking first : setLocked needs to know whether this is an account.
-  initAuth().then(loadDoc).then(()=>{
+  initAuth().then(loadDoc).then(found=>{
+    loadLists();
+    if(found === false) return;      // no such list : listMissing has said so
     labelAutoMove();
     $("#addwhere").value = DOC.options.add_where || "bottom";
     pollRev();

@@ -83,9 +83,16 @@ DEFAULTS = {
 ANON_POSTS = { "/exists" , "/api/paper-meta" , "/api/tiers/meta" , "/api/login" }
 
 # GETs that only ever feed an edit flow : the /sort board's "recent" list ( it
-# reads the reference manager's own sqlite ) , your own key list , and the
-# /sort board's saved versions ( read back to restore one ).
-USER_GETS = { "/api/recent" , "/api/keys" , "/api/sort/history" }
+# reads the reference manager's own sqlite ) , your own key list , the /sort
+# board's saved versions ( read back to restore one ) , and the library papers
+# not on a sort list yet ( its first call reads every paper record ).
+USER_GETS = { "/api/recent" , "/api/keys" , "/api/sort/history" , "/api/sort/remaining" }
+
+
+def _user_get( path ):
+	"""USER_GETS , plus the other sort lists' saved versions
+	( /api/sort/lists/<slug>/history ) -- the same thing as /api/sort/history ."""
+	return path in USER_GETS or ( path.startswith( "/api/sort/lists/" ) and path.endswith( "/history" ) )
 
 # Paper CONTENT , as opposed to what is known ABOUT a paper : the PDF , its
 # full text , and the figures cut from it. Anonymous visitors see these only
@@ -127,7 +134,7 @@ def required_role( method , path , anon_content=True ):
 		return "admin"
 	if method == "POST":
 		return "anon" if path in ANON_POSTS else "user"
-	if path in USER_GETS:
+	if _user_get( path ):
 		return "user"
 	if not anon_content and is_content( path ):
 		return "user"

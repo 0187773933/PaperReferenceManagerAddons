@@ -539,6 +539,11 @@ class BoardLocked( Exception ):
 	"""Raised by BoardState.replace when the board is in view-only mode."""
 
 
+class BoardGone( Exception ):
+	"""Raised by BoardState when its list was deleted ( src/db/sortlists.py ) --
+	a tab still open on it must not write the file back into existence."""
+
+
 class BoardConflict( Exception ):
 	"""A write that can't be reconciled with what's stored : an agent's if_rev
 	the board has moved past , or a page save whose base version is gone."""
@@ -589,6 +594,8 @@ class BoardState:
 		self.locked   = False
 		self.last_by  = ""            # who made the last write , for the other tabs' toast
 		self._revs    = OrderedDict() # rev -> the document as it stood at that rev
+		self.slug     = ""            # one of the other sort lists : its slug ( SortLists )
+		self.gone     = False         # ... and that list has since been deleted
 
 	def _current( self ):
 		return self.doc if self.doc is not None else self.store.default_doc()
@@ -613,9 +620,15 @@ class BoardState:
 		except Exception as e:
 			print( f"{self.name} :: could not load the board ( {e} )" )
 			self.doc = None
-		self.locked = boardlock.load( self.args , self.name )
+		self.locked = boardlock.load( self.args , self.name , self._lock_path() )
 		with self._lock:
 			self._remember()
+
+	def _lock_path( self ):
+		"""Where this board's latch lives when its store says ( one of the other
+		sort lists keeps it in its own directory ) ; None for boardlock's default."""
+		fn = getattr( self.store , "lock_path" , None )
+		return fn( self.args ) if fn else None
 
 	def snapshot( self ):
 		with self._lock:
@@ -636,6 +649,8 @@ class BoardState:
 		server started -- that's a tab left open across a restart , and the file
 		is still exactly what it last saved."""
 		with self._lock:
+			if self.gone:
+				raise BoardGone( self.name )
 			if self.locked:
 				raise BoardLocked( self.name )
 			merge  = getattr( self.store , "merge" , None )
@@ -663,6 +678,8 @@ class BoardState:
 		the board is still at that rev. `dry_run` : hand back what WOULD be saved
 		and save nothing ( allowed on a locked board -- it changes nothing )."""
 		with self._lock:
+			if self.gone:
+				raise BoardGone( self.name )
 			if if_rev is not None and if_rev != self.rev:
 				raise BoardConflict( self.rev )
 			if self.locked and not dry_run:
@@ -682,9 +699,154 @@ class BoardState:
 		signal they have ) and flip with it."""
 		from ..db import boardlock
 		with self._lock:
-			self.locked = boardlock.save( self.args , self.name , on )
+			if self.gone:
+				raise BoardGone( self.name )
+			self.locked = boardlock.save( self.args , self.name , on , self._lock_path() )
 			self._bump( self.last_by )
 			return { "rev": self.rev , "locked": self.locked }
+
+
+class SortLists:
+	"""The OTHER sort lists ( /sort/<slug> , src/db/sortlists.py ) , next to the
+	main board at /sort . Each is a BoardState of its own over a ListStore --
+	the same merged saves , history , latch and agent ops as the main board --
+	loaded the first time anybody asks for it and kept from then on.
+
+	`get( "" )` is the main board , so everything that takes "a list" ( the
+	import ops , new-from-selection ) can name it the same way as the others.
+
+	Create / rename / delete run under one lock , and rename / delete also hold
+	the board's own : no save may land half way through its directory moving.
+	A deleted list's BoardState is marked `gone` , so a tab still open on it gets
+	a refusal instead of writing the file back into existence."""
+
+	MAIN_NAME = "Main"
+
+	def __init__( self , args , main ):
+		self.args    = args
+		self.main    = main
+		self._lock   = threading.Lock()
+		self._boards = {}
+
+	def _load( self , slug ):
+		"""( call under the lock ) The board for an existing slug , or None."""
+		from ..db import sortlists
+		b = self._boards.get( slug )
+		if b is not None:
+			return b
+		if not sortlists.exists( self.args , slug ):
+			return None
+		b = BoardState( self.args , sortlists.ListStore( slug ) , f"sort/{slug}" )
+		b.slug = slug
+		b.load()
+		self._boards[ slug ] = b
+		return b
+
+	def get( self , slug ):
+		"""The BoardState for a list -- "" / "main" for the main board , a slug it
+		was renamed away from for where it went -- or None."""
+		from ..db import sortlists
+		if not slug or slug == "main":
+			return self.main
+		if not sortlists.valid_slug( slug ):
+			return None
+		with self._lock:
+			b = self._load( slug )
+			if b is None:
+				to = sortlists.alias_target( self.args , slug )
+				b  = self._load( to ) if to else None
+			return b
+
+	def name( self , slug ):
+		from ..db import sortlists
+		return sortlists.read_meta( self.args , slug )[ "name" ] if slug else self.MAIN_NAME
+
+	def entry( self , board ):
+		"""One list as the switcher on the page draws it."""
+		from ..db import sortlists
+		slug = board.slug
+		meta = sortlists.read_meta( self.args , slug ) if slug else { "name": self.MAIN_NAME }
+		snap = board.snapshot()
+		doc  = snap[ "doc" ]
+		return {
+			"slug":       slug ,
+			"name":       meta[ "name" ] ,
+			"url":        f"/sort/{slug}" if slug else "/sort" ,
+			"api":        f"/api/sort/lists/{slug}" if slug else "/api/sort" ,
+			"list":       len( doc.get( "items" ) or [] ) ,
+			"shelf":      len( doc.get( "staging" ) or [] ) ,
+			"updated_at": doc.get( "updated_at" ) or "" ,
+			"created_at": meta.get( "created_at" ) or "" ,
+			"created_by": meta.get( "created_by" ) or "" ,
+			"locked":     snap[ "locked" ] ,
+			"rev":        snap[ "rev" ] ,
+		}
+
+	def listing( self ):
+		"""Every list : the main board first , then the others oldest first."""
+		from ..db import sortlists
+		out = [ self.entry( self.main ) ]
+		for slug in sortlists.all_slugs( self.args ):
+			b = self.get( slug )
+			if b is not None and b.slug == slug:
+				out.append( self.entry( b ) )
+		return out
+
+	def create( self , name , src=None , keys=None , by="" ):
+		"""A new list : empty , a copy of list `src` , or -- with `keys` -- only
+		those papers of it , in its order , carrying their tags and cells.
+		-> its BoardState. LookupError for a `src` that isn't a list ,
+		ValueError for a name that makes no slug."""
+		from ..db import sortlists , sortboard
+		doc , label = sortboard.default_doc() , ""
+		if src is not None:
+			b = self.get( src )
+			if b is None:
+				raise LookupError( f"there is no list {src!r}" )
+			doc   = copy.deepcopy( b.snapshot()[ "doc" ] )
+			label = b.slug or "main"
+			if keys is not None:
+				want = { k for k in keys if isinstance( k , str ) }
+				doc[ "items" ]   = [ it for it in doc.get( "items" ) or [] if it.get( "key" ) in want ]
+				doc[ "staging" ] = [ it for it in doc.get( "staging" ) or [] if it.get( "key" ) in want ]
+				# A handful of rows doesn't need the chip bar of the whole board
+				# it came from -- only the tags they carry , in that board's order
+				# and colours.
+				used = { str( t ).lower() for it in doc[ "items" ] + doc[ "staging" ] for t in it.get( "tags" ) or [] }
+				doc[ "vocab" ] = { "tags": [ t for t in ( doc.get( "vocab" ) or {} ).get( "tags" ) or []
+					if str( t.get( "name" ) ).lower() in used ] }
+		with self._lock:
+			slug = sortlists.create( self.args , name , doc , by=by , copied_from=label )
+			return self._load( slug )
+
+	def rename( self , slug , name ):
+		"""-> the board , at the slug its new name makes."""
+		from ..db import sortlists
+		with self._lock:
+			b = self._load( slug )
+			if b is None:
+				raise LookupError( f"there is no list {slug!r}" )
+			with b._lock:
+				new = sortlists.rename( self.args , slug , name )
+				if new != slug:
+					b.store = sortlists.ListStore( new )
+					b.slug  = new
+					b.name  = f"sort/{new}"
+					self._boards.pop( slug , None )
+					self._boards[ new ] = b
+			return b
+
+	def delete( self , slug ):
+		from ..db import sortlists
+		with self._lock:
+			b = self._load( slug )
+			if b is None:
+				raise LookupError( f"there is no list {slug!r}" )
+			with b._lock:
+				dest = sortlists.delete( self.args , slug )
+				b.gone = True
+				self._boards.pop( slug , None )
+			return dest
 
 
 class ReviewState:
@@ -2701,6 +2863,12 @@ def _disposition( kind , filename ):
 	return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote( name , safe='' )}"
 
 
+# One of the other sort lists' routes : /api/sort/lists/<slug> , plus the same
+# suffixes the main board's have ( /version , /ops , ... ) and the list's own
+# /rename and /delete .
+_SORT_LIST_PATH = re.compile( r"^/api/sort/lists/([^/]+)(/[a-z.]+)?$" )
+
+
 class ThreadingHTTPServer( ThreadingMixIn , HTTPServer ):
 	daemon_threads = True
 
@@ -2732,6 +2900,9 @@ class Handler( BaseHTTPRequestHandler ):
 	# their per-row links / modality stamps from the one shared papermeta.
 	tiers: "BoardState" = None
 	sort:  "BoardState" = None
+	# The other sort lists ( /sort/<slug> ) , each a BoardState like `sort` ,
+	# handed out by name. None in minimal mode.
+	sort_lists: "SortLists" = None
 	# What those two boards add up to , screened and field-extracted ( /review ) ,
 	# and the same screen run over the papers you do NOT have ( /review-missing ).
 	# Both injected at startup ; None in minimal mode.
@@ -2931,11 +3102,21 @@ class Handler( BaseHTTPRequestHandler ):
 
 	def _board( self , path , suffix ):
 		"""'/api/sort' -> the sort BoardState , '/api/tiers/version' -> the tier
-		one , for the routes the two hand-curated boards share. None when `path`
-		isn't one of them."""
-		for name , board in ( ( "tiers" , self.tiers ) , ( "sort" , self.sort ) ):
-			if path == f"/api/{name}{suffix}":
-				return board
+		one , '/api/sort/lists/<slug>/lock' -> that sort list's , for the routes
+		the hand-curated boards share. None when `path` isn't one of them -- or
+		names a list there is no such list as."""
+		if path == f"/api/tiers{suffix}":
+			return self.tiers
+		return self._sort_board( path , suffix )
+
+	def _sort_board( self , path , suffix ):
+		"""The same , for the routes only the sort boards have : the main one at
+		'/api/sort<suffix>' , the others at '/api/sort/lists/<slug><suffix>'."""
+		if path == f"/api/sort{suffix}":
+			return self.sort
+		m = _SORT_LIST_PATH.match( path )
+		if m and ( m.group( 2 ) or "" ) == suffix and self.sort_lists is not None:
+			return self.sort_lists.get( unquote( m.group( 1 ) ) )
 		return None
 
 	# -- the /sort board , for agents ( src/db/sortops.py ) --------------------
@@ -2944,6 +3125,15 @@ class Handler( BaseHTTPRequestHandler ):
 		length = int( self.headers.get( "Content-Length" , "0" ) )
 		body   = self.rfile.read( length ) if length > 0 else b"{}"
 		return json.loads( body.decode( "utf-8" , errors="replace" ) )
+
+	def _drain_body( self ):
+		"""Read ( and drop ) the request body , whatever it is."""
+		try:
+			length = int( self.headers.get( "Content-Length" , "0" ) )
+			if length > 0:
+				self.rfile.read( length )
+		except Exception:
+			pass
 
 	def _actor_label( self ):
 		"""Who a board write came from , in the words the other tabs' toast uses."""
@@ -2971,6 +3161,12 @@ class Handler( BaseHTTPRequestHandler ):
 			vocab = []
 		cache = {}
 
+		def list_doc( name ):
+			b = self.sort_lists.get( name ) if self.sort_lists is not None else None
+			if b is None:
+				raise sortops.OpError( f"there is no list {name!r} -- see GET /api/sort/lists" )
+			return b.snapshot()[ "doc" ]
+
 		def resolve( spec ):
 			if not getattr( self.dash , "library" , None ) and self.dash.status != "ready":
 				raise sortops.OpError( f"the library index isn't built yet ( {self.dash.status} ) "
@@ -2982,17 +3178,59 @@ class Handler( BaseHTTPRequestHandler ):
 				self._board_meta( keys , mods , links , titles ) ,
 			parse_refs=lambda text: _refs_payload( self.dash , text ).get( "refs" ) or [] ,
 			tiers_doc=lambda: ( self.tiers.snapshot() if self.tiers else {} ).get( "doc" ) or {} ,
+			list_doc=list_doc ,
+			remaining=lambda doc: self._remaining_rows( doc , mods=True ) ,
 			modalities=vocab )
 
+	def _remaining_rows( self , doc , mods=False ):
+		"""Every library paper NOT on board document `doc` ( its list or its
+		staging shelf ) -- "Remaining Papers" , what is left to sort. A row counts
+		as on it when its key NAMES the library paper ( a lowercased DOI , a
+		zotero:ABCD1234 -- PaperMeta._resolve ) , not only when the keys match.
+
+		`mods` adds each paper's modality stamp , which is what the page filters
+		these by and what an imported one is tagged with. Memoized per paper
+		( PaperMeta._modalities ) , so it costs a read of every record once and
+		nothing after. Newest added to the library first -- the order a `range`
+		on import_remaining counts in , and the one the page shows."""
+		pm   = self.papermeta
+		lib  = pm._lib_index()
+		have = set()
+		for it in ( doc.get( "items" ) or [] ) + ( doc.get( "staging" ) or [] ):
+			k = it.get( "key" ) or ""
+			have.add( k )
+			hit = pm._resolve( k , it.get( "title" ) )
+			if hit:
+				have.add( hit )
+		out = []
+		for key , r in lib.items():
+			if key in have:
+				continue
+			row = { "key": key , "title": r.get( "title" ) or "" , "doi": r.get( "doi" ) or "" ,
+				"wid": r.get( "wid" ) or "" , "year": r.get( "year" ) , "cited_by": r.get( "cited_by" ) ,
+				"created_at": r.get( "created_at" ) or "" , "in_library": True }
+			if mods:
+				row[ "mods" ] = pm._modalities( key )[ 0 ]
+			out.append( row )
+		out.sort( key=lambda r: ( r[ "created_at" ] , r[ "key" ] ) , reverse=True )
+		return out
+
 	def _sort_api_get( self , path ):
-		"""GET /api/sort/{schema,rows,export.csv,history}. True when handled."""
-		from ..db import sortops , sortboard
-		if path == "/api/sort/schema":
+		"""GET /api/sort/{schema,rows,export.csv,history} -- and the same under
+		/api/sort/lists/<slug>/ for the other lists. True when handled."""
+		from ..db import sortops
+		for suffix in ( "/schema" , "/rows" , "/export.csv" , "/history" ):
+			board = self._sort_board( path , suffix )
+			if board is not None:
+				break
+		else:
+			return False
+		if suffix == "/schema":
 			self._send_json( 200 , { "ok": True , **sortops.schema() } )
 			return True
-		if path == "/api/sort/rows":
+		if suffix == "/rows":
 			qs    = self._qs()
-			snap  = self.sort.snapshot()
+			snap  = board.snapshot()
 			doc   = snap[ "doc" ]
 			shelf = self._arg( qs , "shelf" , "0" ) in ( "1" , "true" , "yes" )
 			meta  = None
@@ -3006,21 +3244,24 @@ class Handler( BaseHTTPRequestHandler ):
 				limit=self._arg_int( qs , "limit" , 500 ) , offset=self._arg_int( qs , "offset" , 0 ) )
 			self._send_json( 200 , { "ok": True , "rev": snap[ "rev" ] , "locked": snap[ "locked" ] , **view } )
 			return True
-		if path == "/api/sort/export.csv":
-			doc  = self.sort.snapshot()[ "doc" ]
+		if suffix == "/export.csv":
+			doc  = board.snapshot()[ "doc" ]
 			meta = self._board_meta( [ r[ "key" ] for r in doc.get( "items" ) or [] ] )
+			name = f"prma-sort-{board.slug}" if board.slug else "prma-sort"
 			self._send_download( sortops.to_csv( doc , meta ).encode( "utf-8" ) ,
-				f"prma-sort-{time.strftime( '%Y-%m-%d' )}.csv" , "text/csv; charset=utf-8" )
+				f"{name}-{time.strftime( '%Y-%m-%d' )}.csv" , "text/csv; charset=utf-8" )
 			return True
-		if path == "/api/sort/history":
-			self._send_json( 200 , { "ok": True , "versions": sortboard.snapshots( self.sort.args ) } )
-			return True
-		return False
+		self._send_json( 200 , { "ok": True , "versions": board.store.snapshots( board.args ) } )
+		return True
 
 	def _sort_api_post( self , path ):
-		"""POST /api/sort/{ops,restore}. True when handled."""
-		from ..db import sortops , sortboard
-		if path not in ( "/api/sort/ops" , "/api/sort/restore" ):
+		"""POST /api/sort/{ops,restore} -- and the same under
+		/api/sort/lists/<slug>/ for the other lists. True when handled."""
+		from ..db import sortops
+		board , suffix = self._sort_board( path , "/ops" ) , "/ops"
+		if board is None:
+			board , suffix = self._sort_board( path , "/restore" ) , "/restore"
+		if board is None:
 			return False
 		try:
 			data = self._body_json()
@@ -3034,8 +3275,8 @@ class Handler( BaseHTTPRequestHandler ):
 		def summary( doc ):
 			return { "list": len( doc.get( "items" ) or [] ) , "shelf": len( doc.get( "staging" ) or [] ) }
 		try:
-			if path == "/api/sort/restore":
-				snap = sortboard.read_snapshot( self.sort.args , data.get( "id" ) )
+			if suffix == "/restore":
+				snap = board.store.read_snapshot( board.args , data.get( "id" ) )
 				if snap is None:
 					self._send_json( 404 , { "ok": False , "error": "no saved version with that id -- "
 						"see GET /api/sort/history" } )
@@ -3044,7 +3285,7 @@ class Handler( BaseHTTPRequestHandler ):
 				def put_back( doc ):
 					doc.clear()
 					doc.update( copy.deepcopy( snap ) )
-				r = self.sort.apply( put_back , by=by )
+				r = board.apply( put_back , by=by )
 				self._send_json( 200 , { "ok": True , "rev": r[ "rev" ] , "restored": data.get( "id" ) ,
 					"summary": summary( r[ "doc" ] ) } )
 				return True
@@ -3059,7 +3300,7 @@ class Handler( BaseHTTPRequestHandler ):
 				self.dash.ensure_build( refresh=False )
 			ctx = self._sort_ctx()
 			ops = data.get( "ops" )
-			r   = self.sort.apply( lambda doc: sortops.apply_ops( doc , ctx , ops ) , by=by ,
+			r   = board.apply( lambda doc: sortops.apply_ops( doc , ctx , ops ) , by=by ,
 				dry_run=bool( data.get( "dry_run" ) ) , if_rev=if_rev )
 			out = { "ok": True , "rev": r[ "rev" ] , "results": r[ "result" ] , "summary": summary( r[ "doc" ] ) }
 			if r.get( "dry_run" ):
@@ -3071,9 +3312,68 @@ class Handler( BaseHTTPRequestHandler ):
 		except BoardLocked:
 			self._send_json( 403 , { "ok": False , "locked": True ,
 				"error": "this board is in view-only mode" } )
+		except BoardGone:
+			self._send_json( 410 , { "ok": False , "gone": True , "error": "this list was deleted" } )
 		except BoardConflict as e:
 			self._send_json( 409 , { "ok": False , "conflict": True , "rev": e.rev ,
 				"error": f"the board has moved on ( it is at rev {e.rev} ) -- re-read it and retry" } )
+		except Exception as e:
+			self._send_json( 500 , { "ok": False , "error": str( e ) } )
+		return True
+
+	def _sort_lists_post( self , path ):
+		"""POST /api/sort/lists ( make one ) , /api/sort/lists/<slug>/rename and
+		/api/sort/lists/<slug>/delete . True when handled.
+
+		  /api/sort/lists          { name , from?: slug , keys?: [ ... ] }
+		                           -> empty ; a copy of list `from` ( "" / "main"
+		                              is the main board ) ; or only its `keys`
+		  .../rename               { name } -> the list at its new slug
+		  .../delete               {}       -> into sort-lists/.trash/
+
+		The main board can be neither renamed nor deleted : it is the one /review ,
+		/code and /datasets read."""
+		m = _SORT_LIST_PATH.match( path )
+		if path != "/api/sort/lists" and not ( m and m.group( 2 ) in ( "/rename" , "/delete" ) ):
+			return False
+		if self.sort_lists is None:
+			self._send_json( 503 , { "ok": False , "error": "the sort lists are not loaded" } )
+			return True
+		try:
+			data = self._body_json()
+			if not isinstance( data , dict ):
+				raise ValueError( "the body must be a JSON object" )
+		except ValueError as e:
+			self._send_json( 400 , { "ok": False , "error": f"bad JSON body ( {e} )" } )
+			return True
+		lists = self.sort_lists
+		try:
+			if path == "/api/sort/lists":
+				src  = data.get( "from" )
+				keys = data.get( "keys" )
+				if src is not None and not isinstance( src , str ):
+					raise ValueError( "`from` must be a list's slug ( \"\" for the main board )" )
+				if keys is not None and not ( isinstance( keys , list ) and all( isinstance( k , str ) for k in keys ) ):
+					raise ValueError( "`keys` must be a list of paper keys" )
+				if keys is not None and src is None:
+					raise ValueError( "`keys` needs `from` -- the list they are on" )
+				b = lists.create( data.get( "name" ) , src=src , keys=keys , by=self._actor_label() )
+				self._send_json( 200 , { "ok": True , "list": lists.entry( b ) } )
+				return True
+			slug = unquote( m.group( 1 ) )
+			if not slug or slug == "main":
+				self._send_json( 400 , { "ok": False , "error": "the main list can't be renamed or deleted" } )
+				return True
+			if m.group( 2 ) == "/rename":
+				b = lists.rename( slug , data.get( "name" ) )
+				self._send_json( 200 , { "ok": True , "list": lists.entry( b ) } )
+			else:
+				lists.delete( slug )
+				self._send_json( 200 , { "ok": True , "deleted": slug } )
+		except LookupError as e:
+			self._send_json( 404 , { "ok": False , "error": str( e ) } )
+		except ValueError as e:
+			self._send_json( 400 , { "ok": False , "error": str( e ) } )
 		except Exception as e:
 			self._send_json( 500 , { "ok": False , "error": str( e ) } )
 		return True
@@ -3140,6 +3440,25 @@ class Handler( BaseHTTPRequestHandler ):
 			return
 
 		if path in ( "/sort" , "/sort.html" ):
+			self._send_html( 200 , _load_sort_html() )
+			return
+
+		if path.startswith( "/sort/" ):
+			# One of the other lists. The SAME page -- it reads which list it is
+			# from its own URL -- so a list that doesn't exist still gets it , and
+			# says so itself. A slug a list was renamed away from is sent on to
+			# where the list lives now , so a link shared before the rename lands.
+			from ..db import sortlists
+			slug = unquote( path[ len( "/sort/" ): ] ).strip( "/" )
+			if self.sort_lists is not None and not sortlists.exists( self.sort_lists.args , slug ):
+				to = sortlists.alias_target( self.sort_lists.args , slug )
+				if to:
+					q = urlparse( self.path ).query
+					self.send_response( 302 )
+					self.send_header( "Location" , f"/sort/{quote( to )}" + ( f"?{q}" if q else "" ) )
+					self.send_header( "Content-Length" , "0" )
+					self.end_headers()
+					return
 			self._send_html( 200 , _load_sort_html() )
 			return
 
@@ -3217,6 +3536,36 @@ class Handler( BaseHTTPRequestHandler ):
 			self._send_json( 200 , self.review_missing.status() )
 			return
 
+		if path == "/api/sort/lists":
+			# Every sort list -- the main board first -- for the page's switcher
+			# and an agent looking for one.
+			self._send_json( 200 , { "ok": True , "lists": self.sort_lists.listing() } )
+			return
+
+		if path == "/api/sort/remaining":
+			# "Remaining Papers" for one list ( ?list=<slug> , empty for the main
+			# board ) : every library paper not on it yet , for that list's
+			# ⇩ Import from lists . ?mods=1 adds each one's modality stamp , which
+			# the import filters on. Login only ( auth.USER_GETS ) : the first time
+			# through it reads every paper record for those stamps.
+			qs    = self._qs()
+			board = self.sort_lists.get( self._arg( qs , "list" , "" ) )
+			if board is None:
+				self._send_json( 404 , { "ok": False , "error": "there is no such list" } )
+				return
+			self.dash.maybe_reload()
+			if not self.dash.library:
+				if self.dash.status == "idle":
+					self.dash.ensure_build( refresh=False )
+				self._send_json( 200 , { "ok": False , "status": self.dash.status ,
+					"message": self.dash.message or self.dash.error or "" ,
+					"error": "the library index isn't built yet" } )
+				return
+			rows = self._remaining_rows( board.snapshot()[ "doc" ] ,
+				mods=self._arg( qs , "mods" , "0" ) in ( "1" , "true" , "yes" ) )
+			self._send_json( 200 , { "ok": True , "rows": rows , "library": len( self.dash.library ) } )
+			return
+
 		if path.startswith( "/api/sort/" ) and self._sort_api_get( path ):
 			return
 
@@ -3230,7 +3579,7 @@ class Handler( BaseHTTPRequestHandler ):
 				vocab = list( methods_vocab.labels( self.dash.args ) )
 			except Exception:
 				vocab = []
-			self._send_json( 200 , { "ok": True , "modalities": vocab ,
+			self._send_json( 200 , { "ok": True , "modalities": vocab , "slug": board.slug ,
 				**board.snapshot() } )
 			return
 
@@ -3249,7 +3598,7 @@ class Handler( BaseHTTPRequestHandler ):
 			snap = board.snapshot()
 			self.dash.maybe_reload()
 			self._send_json( 200 , { "rev": snap[ "rev" ] , "locked": snap[ "locked" ] ,
-				"by": snap.get( "by" ) or "" ,
+				"by": snap.get( "by" ) or "" , "slug": board.slug ,
 				"index": getattr( self.dash , "built_at" , None ) } )
 			return
 
@@ -3533,7 +3882,19 @@ class Handler( BaseHTTPRequestHandler ):
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
 
+		if self._sort_lists_post( urlparse( self.path ).path ):
+			return
+
 		if self._sort_api_post( urlparse( self.path ).path ):
+			return
+
+		m = _SORT_LIST_PATH.match( urlparse( self.path ).path )
+		if m and m.group( 2 ) in ( None , "/lock" , "/ops" , "/restore" ) and self._sort_board( m.group( 0 ) , m.group( 2 ) or "" ) is None:
+			# A save ( a lock , an op ) for a sort list that isn't there -- deleted while
+			# a tab had it open. Read what it sent before answering , so the tab
+			# hears "gone" rather than a connection reset it would just retry.
+			self._drain_body()
+			self._send_json( 404 , { "ok": False , "gone": True , "error": "there is no such list" } )
 			return
 
 		board = self._board( urlparse( self.path ).path , "" )
@@ -3570,6 +3931,9 @@ class Handler( BaseHTTPRequestHandler ):
 				# answer carries the latch and the page flips instead of retrying.
 				self._send_json( 403 , { "ok": False , "locked": True ,
 					"error": "this board is in view-only mode" } )
+			except BoardGone:
+				# A sort list deleted while this tab had it open ( SortLists.delete ).
+				self._send_json( 410 , { "ok": False , "gone": True , "error": "this list was deleted" } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
@@ -3585,6 +3949,8 @@ class Handler( BaseHTTPRequestHandler ):
 				body   = self.rfile.read( length ) if length > 0 else b"{}"
 				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
 				self._send_json( 200 , { "ok": True , **board.set_lock( data.get( "locked" ) ) } )
+			except BoardGone:
+				self._send_json( 410 , { "ok": False , "gone": True , "error": "this list was deleted" } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return
@@ -3803,6 +4169,7 @@ def run( args ):
 		Handler.figstate  = {}
 		Handler.tiers     = None
 		Handler.sort      = None
+		Handler.sort_lists = None
 		Handler.review    = None
 		Handler.review_missing = None
 		Handler.papermeta = None
@@ -3842,6 +4209,8 @@ def run( args ):
 		_board = BoardState( args , _store , _name )
 		_board.load()
 		setattr( Handler , _attr , _board )
+	# ... and the other sort lists , each loaded the first time it is opened.
+	Handler.sort_lists = SortLists( args , Handler.sort )
 
 	# What those two boards ADD UP TO ( /review ) : serve whatever was last built
 	# so the page opens instantly. Rebuilding is minutes of regex over every

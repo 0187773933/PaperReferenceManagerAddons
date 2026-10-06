@@ -45,6 +45,10 @@ chips read the same way every time you look at it.
 
 Keys , columns , history and the write-whole contract are all exactly as
 src/db/tiers.py describes them -- read that docstring first.
+
+This is also the document of every OTHER sort list ( /sort/<slug> ) : the same
+shape , the same functions , given a `slug` that points the paths at that list's
+own directory ( src/db/sortlists.py ). Without one it is the main board.
 """
 
 import re
@@ -62,13 +66,25 @@ HISTORY_KEEP = 40
 # Paths
 # ---------------------------------------------------------------------------
 
-def sort_path( args ):
-	"""Path to the persisted sort board."""
+def lists_root( args ):
+	"""Where the OTHER lists live ( /sort/<slug> , src/db/sortlists.py ) : one
+	directory each , named by its slug."""
+	return args.output.joinpath( "cache" , "sort-lists" )
+
+
+def sort_path( args , slug=None ):
+	"""Path to the persisted sort board. `slug` names one of the other lists ,
+	each in a directory of its own ; without one it is the main board , where it
+	always was. The slug is checked by sortlists before it ever gets here."""
+	if slug:
+		return lists_root( args ).joinpath( slug , "sort.json" )
 	return args.output.joinpath( "cache" , "sort.json" )
 
 
-def history_dir( args ):
+def history_dir( args , slug=None ):
 	"""Directory holding the timestamped snapshots of past versions."""
+	if slug:
+		return lists_root( args ).joinpath( slug , "history" )
 	return args.output.joinpath( "cache" , "sort-history" )
 
 
@@ -159,26 +175,26 @@ def item_count( doc ):
 # Load / save
 # ---------------------------------------------------------------------------
 
-def load( args ):
+def load( args , slug=None ):
 	"""The stored board , normalized -- or an empty one when there is no file.
 
 	Same recovery as the tier list ( tiers.load ) : a file that won't parse falls
 	back to the newest readable snapshot in sort-history/ rather than reading
 	back as an empty board that the next keystroke would then save over."""
-	p = sort_path( args )
+	p = sort_path( args , slug )
 	if not p.exists():
 		return default_doc()
 	try:
 		return normalize( utils.read_json( p ) )
 	except Exception as e:
 		print( f"sort :: {p.name} could not be read ( {e} ) -- looking for the newest snapshot" )
-		return _recover( args ) or default_doc()
+		return _recover( args , slug ) or default_doc()
 
 
-def _recover( args ):
+def _recover( args , slug=None ):
 	"""The newest history snapshot that still parses , normalized."""
 	try:
-		snaps = sorted( history_dir( args ).glob( "sort-*.json" ) , reverse=True )
+		snaps = sorted( history_dir( args , slug ).glob( "sort-*.json" ) , reverse=True )
 	except Exception:
 		return None
 	for snap in snaps:
@@ -191,24 +207,24 @@ def _recover( args ):
 	return None
 
 
-def save( args , doc ):
+def save( args , doc , slug=None ):
 	"""Normalize , snapshot the version being replaced , then write."""
 	doc = normalize( doc )
 	doc[ "updated_at" ] = time.strftime( "%Y-%m-%dT%H:%M:%S" , time.localtime() )
-	p = sort_path( args )
+	p = sort_path( args , slug )
 	p.parent.mkdir( parents=True , exist_ok=True )
-	_snapshot( args , p )
+	_snapshot( args , p , slug )
 	utils.write_json( p , doc )
 	return doc
 
 
-def _snapshot( args , current ):
+def _snapshot( args , current , slug=None ):
 	"""Keep the version we are about to overwrite ( best-effort ; never blocks
 	the save ). Same policy as the tier list's history."""
 	if not current.exists():
 		return
 	try:
-		d = history_dir( args )
+		d = history_dir( args , slug )
 		d.mkdir( parents=True , exist_ok=True )
 		# To the millisecond : an agent's batches can land several to a second ,
 		# and each one's predecessor is a version it may want to restore. The
@@ -235,12 +251,12 @@ def _snapshot( args , current ):
 _SNAP_RE = re.compile( r"^sort-\d{8}-\d{6}(\d{3})?$" )
 
 
-def snapshots( args ):
+def snapshots( args , slug=None ):
 	"""The saved versions in sort-history/ , newest first : { id , at , list ,
 	shelf }. An unreadable one is listed with its counts as None."""
 	out = []
 	try:
-		files = sorted( history_dir( args ).glob( "sort-*.json" ) , reverse=True )
+		files = sorted( history_dir( args , slug ).glob( "sort-*.json" ) , reverse=True )
 	except Exception:
 		return out
 	for f in files:
@@ -260,12 +276,12 @@ def snapshots( args ):
 	return out
 
 
-def read_snapshot( args , sid ):
+def read_snapshot( args , sid , slug=None ):
 	"""One saved version by its id ( as snapshots() lists it ) , normalized.
 	None for an id that isn't one -- never a path outside sort-history/ ."""
 	if not isinstance( sid , str ) or not _SNAP_RE.match( sid ):
 		return None
-	p = history_dir( args ).joinpath( sid + ".json" )
+	p = history_dir( args , slug ).joinpath( sid + ".json" )
 	if not p.exists():
 		return None
 	return normalize( utils.read_json( p ) )

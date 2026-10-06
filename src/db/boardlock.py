@@ -23,7 +23,8 @@ of the very thing the latch forbids writing -- and would hand a page holding a
 stale copy the chance to restore the whole board just by flipping the lock. One
 tiny file , written on its own , has neither problem.
 
-Shape ( output/cache/<board>-lock.json ) :
+Shape ( output/cache/<board>-lock.json -- or , for one of the other sort lists ,
+lock.json in that list's own directory , see src/db/sortlists.py ) :
 
   { "locked": true , "updated_at": "2026-08-20T12:00:00" }
 
@@ -44,11 +45,12 @@ def lock_path( args , name ):
 	return args.output.joinpath( "cache" , f"{name}-lock.json" )
 
 
-def load( args , name ):
+def load( args , name , path=None ):
 	"""Whether the board is locked. Never raises , and never fails CLOSED : a
 	missing or damaged file reads as unlocked , because a board nobody can edit
-	because of a corrupt byte is worse than one briefly left open."""
-	p = lock_path( args , name )
+	because of a corrupt byte is worse than one briefly left open. `path`
+	overrides where the latch lives ( a store's own lock_path )."""
+	p = path or lock_path( args , name )
 	if not p.exists():
 		return False
 	try:
@@ -58,10 +60,10 @@ def load( args , name ):
 		return False
 
 
-def save( args , name , on ):
+def save( args , name , on , path=None ):
 	"""Set the latch and persist it. Returns what was stored."""
 	on = bool( on )
-	p  = lock_path( args , name )
+	p  = path or lock_path( args , name )
 	p.parent.mkdir( parents=True , exist_ok=True )
 	utils.write_json( p , {
 		"locked":     on ,
