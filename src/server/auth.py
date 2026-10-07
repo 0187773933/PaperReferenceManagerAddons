@@ -76,11 +76,14 @@ DEFAULTS = {
 }
 
 # The POSTs an anonymous caller may make. /exists is the userscripts' lookup ;
-# the two meta routes are READS that only use POST for the size of their key
-# list ; /api/login is how anyone stops being anonymous. Every other POST needs
-# an account -- including any added later , which is the point of listing the
-# exceptions rather than the rules.
-ANON_POSTS = { "/exists" , "/api/paper-meta" , "/api/tiers/meta" , "/api/login" }
+# the three row-lookup routes are READS that only use POST for the size of their
+# key list ( /api/cite among them : anonymous visitors can read a board , so
+# they get its citation line too -- an author list and a journal name are
+# bibliographic facts about a published paper , not the paper CONTENT that
+# settings.anon_content gates ) ; /api/login is how anyone stops being
+# anonymous. Every other POST needs an account -- including any added later ,
+# which is the point of listing the exceptions rather than the rules.
+ANON_POSTS = { "/exists" , "/api/paper-meta" , "/api/tiers/meta" , "/api/cite" , "/api/login" }
 
 # GETs that only ever feed an edit flow : the /sort board's "recent" list ( it
 # reads the reference manager's own sqlite ) , your own key list , the /sort

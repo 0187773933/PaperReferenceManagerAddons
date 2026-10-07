@@ -352,6 +352,29 @@ function toast( msg ){
   _toastTimer = setTimeout( () => el.remove() , 2600 );
 }
 
+/* ---- the clipboard ------------------------------------------------------
+   writeText needs a secure context and the user's permission , and gets
+   neither over plain http to a LAN address -- which is how this server is
+   mostly reached. So every caller needs the fallback , and three of them were
+   writing it out : /account's key box , /sort's "Copy link" , and /sort's two
+   citation buttons.
+
+   Resolves to true when the text really is on the clipboard , false when the
+   caller has to show it instead ( the boards put it in a sheet with the text
+   selected , so ⌘C still works ). `ok` is toasted on success , if the page has
+   a toast. */
+async function copyText( text , ok ){
+  const s = String( text == null ? "" : text );
+  if( !s ) return false;
+  try {
+    await navigator.clipboard.writeText( s );
+    if( ok && typeof toast === "function" ) toast( ok );
+    return true;
+  } catch( e ){
+    return false;
+  }
+}
+
 /* ---- handing the browser a file ------------------------------------------
    NOT called save() : both boards already have a save() that means "POST this
    document to the server" , and that is the more important verb to leave alone. */

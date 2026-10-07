@@ -1108,6 +1108,7 @@ class PaperMeta:
 		self.args    = args
 		self.dash    = dash
 		self._mods   = {}      # paper key -> ( mtime , used[] , inferred , stale )
+		self._cites  = {}      # ( style , key , index built_at ) -> { intext , full }
 		self._lib    = None    # paper key -> library row , rebuilt when the index
 		self._lib_at = None    #              is ( keyed on dash.built_at )
 		self._alias  = {}      # lowercased key / DOI -> library key
@@ -1258,6 +1259,47 @@ class PaperMeta:
 				entry[ "names" ] = [ { "name": n , "url": ds_vocab.home( n ) }
 					for n in ( row.get( "dataset_names" ) or [] ) ]
 			out[ asked ] = entry
+		return out
+
+	def cites( self , keys , style=None , titles=None , rows=None ):
+		"""The in-text citation and the full reference for each key , rendered
+		through a CSL style ( src/db/cite.py ) : what /sort draws on the line
+		between a row's year and its links , and what its two copy buttons put
+		on the clipboard. Both strings come out of ONE render , so the full
+		reference costs nothing once the in-text one has been asked for.
+
+		Keys resolve exactly as meta() resolves them -- a board row spells a key
+		its own way -- and the bibliographic fields come off the library row's
+		`cite` block ( indexer._cite_block ). `rows` is key -> the board row , so
+		a paper the index has never seen can still be cited from what the row
+		itself carries , thinly.
+
+		Memoized , because a render is ~6 ms and a board is hundreds of rows :
+		keying on the index's built_at throws the whole memo away on a reindex ,
+		the same trick _lib_index uses."""
+		from ..db import cite as cite_db
+		style  = cite_db.resolve_style( self.args , style )
+		lib    = self._lib_index()
+		titles = titles if isinstance( titles , dict ) else {}
+		rows   = rows   if isinstance( rows   , dict ) else {}
+		built  = getattr( self.dash , "built_at" , None )
+		out    = {}
+		for asked in ( keys or [] )[ :500 ]:
+			if not isinstance( asked , str ) or not asked:
+				continue
+			key  = self._resolve( asked , titles.get( asked ) ) or asked
+			row  = rows.get( asked )
+			# A row only joins the memo key when it is the ONLY source there is :
+			# with a library paper behind it the render depends on the index
+			# alone , and every board would otherwise get its own entry.
+			memo = ( style , key , built ) if key in lib else None
+			if memo is not None and memo in self._cites:
+				out[ asked ] = self._cites[ memo ]
+				continue
+			got = cite_db.render( self.args , style , key , lib.get( key ) or {} , row )
+			if memo is not None:
+				self._cites[ memo ] = got
+			out[ asked ] = got
 		return out
 
 
@@ -3232,11 +3274,16 @@ class Handler( BaseHTTPRequestHandler ):
 	def _sort_ctx( self ):
 		"""What the agent ops need from this server : the library lookups."""
 		from ..db    import sortops
+		from ..db    import cite as cite_db
 		from ..utils import methods as methods_vocab
 		try:
 			vocab = list( methods_vocab.labels( self.dash.args ) )
 		except Exception:
 			vocab = []
+		try:
+			styles = [ st[ "id" ] for st in cite_db.list_styles( self.dash.args ) if st[ "ok" ] ]
+		except Exception:
+			styles = []
 		cache = {}
 
 		def list_doc( name ):
@@ -3258,7 +3305,8 @@ class Handler( BaseHTTPRequestHandler ):
 			tiers_doc=lambda: ( self.tiers.snapshot() if self.tiers else {} ).get( "doc" ) or {} ,
 			list_doc=list_doc ,
 			remaining=lambda doc: self._remaining_rows( doc , mods=True ) ,
-			modalities=vocab )
+			modalities=vocab ,
+			cite_styles=styles )
 
 	def _remaining_rows( self , doc , mods=False ):
 		"""Every library paper NOT on board document `doc` ( its list or its
@@ -3657,11 +3705,23 @@ class Handler( BaseHTTPRequestHandler ):
 			# autocomplete offers ( < --config >/methods.py -- the same list the
 			# figure reports' pills come from , so the two never drift ).
 			from ..utils import methods as methods_vocab
+			from ..db    import cite as cite_db
 			try:
 				vocab = list( methods_vocab.labels( self.dash.args ) )
 			except Exception:
 				vocab = []
+			# The citation styles on disk ( < --config >/citation-styles/*.csl ) and
+			# the one config.yaml names , so /sort's style picker is drawn on the
+			# first paint instead of after a second round trip. Same shape as the
+			# modality vocabulary above , and read the same way : fresh , cheap
+			# ( cached on the directory's mtime ) and never fatal.
+			try:
+				styles , style_default = ( cite_db.list_styles( self.dash.args ) ,
+					cite_db.default_style( self.dash.args ) )
+			except Exception:
+				styles , style_default = [] , ""
 			self._send_json( 200 , { "ok": True , "modalities": vocab , "slug": board.slug ,
+				"styles": styles , "style_default": style_default ,
 				**board.snapshot() } )
 			return
 
@@ -4054,6 +4114,30 @@ class Handler( BaseHTTPRequestHandler ):
 					keys , want_mods=bool( data.get( "mods" ) ) ,
 					want_links=bool( data.get( "links" ) ) ,
 					titles=data.get( "titles" ) ) } )
+			except Exception as e:
+				self._send_json( 500 , { "ok": False , "error": str( e ) } )
+			return
+
+		if self.path == "/api/cite":
+			# The citations for a board's rows :
+			# { "keys": [ ... ] , "style": "<style id>" , "titles": { key: title } ,
+			#   "rows": { key: { title , authors , year , journal , doi } } }.
+			# Separate from /api/paper-meta on purpose : that lookup is on the
+			# page's critical path and answers off the index in microseconds ,
+			# while a render is ~6 ms a paper , so the citations arrive in their
+			# own pass and repaint when they land. An unknown style id falls back
+			# to the configured default rather than failing ( see cite.resolve_style ).
+			try:
+				length = int( self.headers.get( "Content-Length" , "0" ) )
+				body   = self.rfile.read( length ) if length > 0 else b"{}"
+				data   = json.loads( body.decode( "utf-8" , errors="replace" ) )
+				keys   = data.get( "keys" )
+				if not isinstance( keys , list ):
+					self._send_json( 400 , { "ok": False , "error": "body needs a 'keys' list" } )
+					return
+				self._send_json( 200 , { "ok": True , "cites": self.papermeta.cites(
+					keys , style=data.get( "style" ) ,
+					titles=data.get( "titles" ) , rows=data.get( "rows" ) ) } )
 			except Exception as e:
 				self._send_json( 500 , { "ok": False , "error": str( e ) } )
 			return

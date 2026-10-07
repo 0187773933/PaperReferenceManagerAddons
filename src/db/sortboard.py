@@ -17,7 +17,9 @@ Shape ( output/cache/sort.json ) :
     "options":  { "auto_move": false ,         # re-group a row when its tags change
                   "add_where": "bottom" ,      # where a paper added from search lands
                   "fold_cols": [ "code" ] ,    # columns the page can fold away
-                  "sheet_url": "" } ,          # the Google Sheet last imported from
+                  "sheet_url": "" ,            # the Google Sheet last imported from
+                  "cite_style": "" } ,         # CSL style for the rows' citations
+                                               #   ( "" = config.yaml's default )
     "columns":  [ { "id": "notes" , "label": "Notes" } , ... ] ,
     "items":    [ { "key": "10.1038/..." , "title": "..." , "doi": "..." ,
                     "wid": "W..." , "pdf": "" , "year": 2023 , "journal": "" ,
@@ -143,6 +145,7 @@ def normalize( doc ):
 	where = opts.get( "add_where" )
 	fold  = opts.get( "fold_cols" ) if isinstance( opts.get( "fold_cols" ) , list ) else []
 	sheet = tiers_db._clean_str( opts.get( "sheet_url" ) , 500 ).strip()
+	style = tiers_db._clean_str( opts.get( "cite_style" ) , 120 ).strip()
 	return {
 		"version":    VERSION ,
 		"updated_at": tiers_db._clean_str( doc.get( "updated_at" ) , 40 ) ,
@@ -158,6 +161,14 @@ def normalize( doc ):
 			# The sheet the last one came from , so the next import is one click.
 			# Only ever a docs.google.com link -- see src/db/gsheet.py .
 			"sheet_url": sheet if sheet.startswith( "https://docs.google.com/spreadsheets/" ) else "" ,
+			# The CSL style this board's rows are cited in , by file name without
+			# the extension ( src/db/cite.py ). Empty means config.yaml's
+			# citation.style -- so a board only carries one once somebody picked
+			# a different one for it. Not checked against the directory here :
+			# the styles on disk are a server fact , not a document one , and
+			# cite.resolve_style falls back to the default for a name that has
+			# since been deleted.
+			"cite_style": style ,
 		} ,
 		"columns":    columns ,
 		"items":      items ,

@@ -226,6 +226,25 @@
      The link strip underneath is how you open it. */
   .titlec .tt { font-weight:500; }
   .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  /* The citation line. Drawn whether or not there is a citation to put on it,
+     so a row is the same height before and after /api/cite answers -- the
+     strings arrive a moment after the first paint, and a board that grows a
+     line per row at that moment moves every paper out from under you. */
+  .cite { display:flex; align-items:baseline; gap:6px; margin-top:2px;
+    color:var(--muted); font-size:12px; line-height:1.45; }
+  /* The height is pinned on .ct rather than on the line, and in em so it is
+     exactly the height of the text that will replace it : .ct is a flex item,
+     so it keeps its box while it is still empty, and a row is the same height
+     before and after /api/cite answers for it. The buttons are shorter than
+     this, so they never drive it. */
+  .cite .ct { min-height:1.45em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cite .ct.none { opacity:.45; }
+  .citebtn {
+    flex:0 0 auto; background:transparent; border:0; padding:0 2px; cursor:pointer;
+    color:var(--muted); font-size:11px; font-family:inherit; line-height:1.4;
+    border-bottom:1px dotted var(--line);
+  }
+  .citebtn:hover { color:var(--accent); border-bottom-color:var(--accent); }
   .links { margin-top:3px; }
   .links a { color:var(--accent); text-decoration:none; margin-right:8px; font-size:12px; white-space:nowrap; }
   .links a:hover { text-decoration:underline; }
@@ -582,6 +601,10 @@
       <option value="top">add to top</option>
       <option value="placed">add after last sorted</option>
     </select>
+    <!-- The citation style every row on THIS board is cited in. Its options are
+         the .csl files in <--config>/citation-styles, carried on the board
+         payload ( see renderStyles ) ; more at https://www.zotero.org/styles/ . -->
+    <select id="citestyle" title="The citation style the rows are cited in — drop more .csl files into the citation-styles folder beside config.yaml ( https://www.zotero.org/styles/ )"></select>
   </div>
   <!-- The tags. The bar's own controls are at the END of the flow, after the
        chips and the + new tag box : in front they were a header that took a
@@ -771,7 +794,7 @@ function setLocked(on){
   // filter, the search, the theme -- reading is the whole point of the mode --
   // and 📋 Import refs, which is the way back out ( see below ) and can't be
   // disabled because a disabled button fires no clicks at all.
-  $$("#orderby,#keeporder,#automove,#autotag,#addcol,#importbtn,#pulltiers,#addwhere,#importlists")
+  $$("#orderby,#keeporder,#automove,#autotag,#addcol,#importbtn,#pulltiers,#addwhere,#citestyle,#importlists")
     .forEach(el=>{ el.disabled = LOCKED; });
   $("#refsbtn").title = LOCKED
     ? "This board is in view-only mode — nothing can be imported into it right now"
@@ -1011,6 +1034,7 @@ async function loadDoc(){
   if(res.status === 404){ listMissing(); return false; }
   const d = await res.json();
   DOC = d.doc; REV = d.rev; VOCAB = d.modalities || [];
+  STYLES = d.styles || []; STYLE_DEFAULT = d.style_default || "";
   setLocked(d.locked);
   if(!DOC.options) DOC.options = { auto_move:false };
   if(!Array.isArray(DOC.staging)) DOC.staging = [];
@@ -1022,6 +1046,7 @@ async function loadDoc(){
   STAGEHOW = Object.assign(readHow(), STAGEHOW);
   resetHistory();      // whatever just landed is the new zero to step back to
   renderAll();
+  renderStyles();
   pruneHow();
   fetchMeta(DOC.items.concat(DOC.staging).map(it=>it.key));
   return true;
@@ -1211,7 +1236,75 @@ async function fetchMeta(keys, fresh){
   }
   if(keys.length) repaintLinks();
   adoptLibraryKeys();
+  // Citations ride along here rather than at each of fetchMeta's seventeen call
+  // sites : fetchCites asks only for BOARD rows it hasn't got yet, so a search
+  // -hit fetch ( most of those call sites ) turns into no request at all, and a
+  // board that is already cited likewise. It needs the resolved keys, which is
+  // why it goes after adoptLibraryKeys rather than beside it.
+  fetchCites();
   return got;
+}
+
+// The citations for the rows on the board, in its style. Takes no arguments on
+// purpose -- it works out what is missing itself, so calling it twice is free
+// and nothing has to remember to pass the right keys.
+//
+// One pass at a time ( a board is a few hundred rows and the server renders
+// each one ) , but it DRAINS rather than returning early : a paper added while
+// a batch was in flight is picked up by the next turn of the outer loop instead
+// of waiting for something else to ask. `tried` is what stops that looping for
+// ever when the server is unreachable -- a key asked about once this run is not
+// asked again, so a failed batch is retried on the NEXT call, not immediately.
+let citing = false, citeGen = 0;
+async function fetchCites(){
+  if(citing) return;
+  citing = true;
+  const tried = new Set();
+  let gen = citeGen;
+  try {
+    for(;;){
+      // The style changed under us ( citeGen ) : everything asked for so far
+      // was rendered in the old one, so forget having asked.
+      if(gen !== citeGen){ gen = citeGen; tried.clear(); }
+      const rows = new Map(DOC.items.map(it=>[ it.key, it ]));
+      const keys = Array.from(rows.keys()).filter(k=>k && !CITE[k] && !tried.has(k));
+      if(!keys.length) return;
+      for(let i=0; i<keys.length; i+=60){
+        const part = keys.slice(i,i+60), titles = {}, send = {};
+        part.forEach(k=>{
+          tried.add(k);
+          const it = rows.get(k);
+          if(!it) return;
+          if(it.title && !/^10\./.test(k)) titles[k] = it.title;
+          // What the ROW knows, for a paper the index has never seen -- an
+          // imported reference is the only thing that ever carries authors.
+          // Only for those : behind a library paper the server cites off the
+          // index and ignores this, so sending it for the whole board would be
+          // a few hundred KB uploaded per load to be thrown away.
+          if((META[k]||{}).in_library === false)
+            send[k] = { title: it.title||"", authors: it.authors||"", year: it.year||null,
+                        journal: it.journal||"", doi: it.doi||"" };
+        });
+        try {
+          const r = await (await fetch("/api/cite", { method:"POST",
+            headers:{ "Content-Type":"application/json" },
+            body: JSON.stringify({ keys: part, style: citeStyle(), titles, rows: send }) })).json();
+          Object.assign(CITE, r.cites || {});
+        } catch(e){}
+        repaintCites();
+      }
+    }
+  } finally { citing = false; }
+}
+// Only the citation strips, the same way repaintLinks only touches the link
+// ones : a batch of sixty lands while you are typing in a note three rows down.
+function repaintCites(){
+  $$(".row").forEach(row=>{
+    const f = findItem(row.dataset.key);
+    if(!f) return;
+    const el = row.querySelector("[data-cite]");
+    if(el) el.innerHTML = citeHtml(f.it);
+  });
 }
 
 // ---- folded columns -------------------------------------------------------
@@ -1298,6 +1391,33 @@ function rowLinks(it){
   if(m.methods) out.push(`<a href="${esc(m.methods)}" target="_blank" title="The extracted Methods section">Methods</a>`);
   return out.join(" ");
 }
+// ---- the citation line ----------------------------------------------------
+// key -> { intext , full } as the server rendered them ( POST /api/cite ,
+// src/db/cite.py ) in the board's style. Filled by fetchCites after the rows
+// are already on screen, because a render costs the server a few milliseconds
+// a paper and a board is hundreds of them.
+const CITE = {};
+// The style this board is cited in : its own, or the one config.yaml names.
+// STYLES is what the server found in <--config>/citation-styles ( carried on
+// the GET /api/sort payload, so the picker is drawn on the first paint ).
+let STYLES = [], STYLE_DEFAULT = "";
+const citeStyle = () => (DOC.options && DOC.options.cite_style) || STYLE_DEFAULT || "";
+function citeHtml(it){
+  const c = CITE[it.key];
+  // Three states, and the first two are NOT the same thing : a row the server
+  // hasn't answered for yet is blank ( the line still holds its height, so
+  // nothing moves when the answer lands ) , while one it answered with nothing
+  // says so. Saying "no citation" before anybody asked would read as a fact
+  // about the paper for the second the fetch takes.
+  if(!c) return `<span class="ct none"></span>`;
+  if(!c.intext) return `<span class="ct none" title="No citation for this one — a reference needs author names, and the library index has none for this paper ( a row that isn't in your library has none to have )">— no citation</span>`;
+  // Copying is READING : both buttons stay live on a view-only board, where
+  // every other control is disabled.
+  return `<span class="ct">${esc(c.intext)}</span>`+
+    `<button class="citebtn" data-act="cite-intext" title="Copy the in-text citation — ${esc(c.intext)}">⧉ cite</button>`+
+    (c.full ? `<button class="citebtn" data-act="cite-full" title="Copy the full reference — ${esc(c.full)}">⧉ ref</button>` : "");
+}
+
 // While the board is view-only every text box stays on screen -- you still want
 // to read a note and copy a title -- but stops taking input.
 const RO = () => LOCKED ? " readonly" : "";
@@ -1365,6 +1485,7 @@ function rowHtml(it, n){
     `<div class="c titlec">`+
       `<div class="tt">${inner}${loose}</div>`+
       `<div class="meta">${year?esc(year):""}${it.journal?" · "+esc(it.journal):""}<span class="mkey"> · ${esc(it.key)}</span></div>`+
+      `<div class="cite" data-cite="1">${citeHtml(it)}</div>`+
       `<div class="links" data-links="1">${rowLinks(it)}</div>`+
     `</div>`+
     `<div class="c" data-cell="tags">${tagsCell(it)}</div>`+
@@ -2618,6 +2739,12 @@ $("#board").addEventListener("click", e=>{
     return;
   }
   if(e.target.closest('[data-act="remove"]') && row){ removeItem(row.dataset.key); return; }
+  const cb = e.target.closest('[data-act="cite-intext"],[data-act="cite-full"]');
+  if(cb && row){
+    const c = CITE[row.dataset.key] || {}, full = cb.dataset.act === "cite-full";
+    copyCite(full ? c.full : c.intext, full);
+    return;
+  }
   // A click on the body of a row : paints the armed tag if you're painting,
   // otherwise selects the row ( so the tag bar can tag it ). The grip is exempt
   // -- grabbing a row to drag it shouldn't select or tag it.
@@ -3087,6 +3214,46 @@ function labelAutoMove(){
   $("#automove").textContent = `⇥ Auto-move: ${on?"on":"off"}`;
   $("#automove").classList.toggle("on", on);
 }
+// ---- the citation style ---------------------------------------------------
+// A property of the BOARD, like the add position : the list is cited the same
+// way wherever you open it. The first option is "whatever config.yaml says", so
+// a board that nobody chose a style for follows the server and keeps following
+// it when that changes.
+function renderStyles(){
+  const sel = $("#citestyle");
+  if(!sel) return;
+  if(!STYLES.length){
+    // No .csl files at all -- hide the control rather than offer an empty one.
+    sel.style.display = "none";
+    return;
+  }
+  sel.style.display = "";
+  const def = STYLES.find(st=>st.id === STYLE_DEFAULT);
+  sel.innerHTML = `<option value="">📑 ${esc(def ? def.title : "the configured style")} ( default )</option>`+
+    STYLES.map(st=>`<option value="${esc(st.id)}"${st.ok?"":" disabled"} title="${esc(st.why || st.title)}">`+
+      `📑 ${esc(st.title)}${st.ok?"":" — unusable"}</option>`).join("");
+  sel.value = citeStyleOwn();
+}
+// What the BOARD carries, as against what it is cited in : "" is "follow the
+// server", which is a different thing from naming the style the server happens
+// to name today.
+const citeStyleOwn = () => (DOC.options && DOC.options.cite_style) || "";
+$("#citestyle").addEventListener("change", ()=>{
+  DOC.options.cite_style = $("#citestyle").value;
+  markDirty();
+  // Every row's citation was rendered in the old style, so none of them stands.
+  // citeGen tells a fetch that is ALREADY running the same thing -- without it
+  // the rows it had got to would keep the style you just changed away from.
+  Object.keys(CITE).forEach(k=>delete CITE[k]);
+  citeGen++;
+  repaintCites();
+  fetchCites();
+  const st = STYLES.find(x=>x.id === citeStyle());
+  toast(DOC.options.cite_style
+    ? `Cited as ${st ? st.title : DOC.options.cite_style}`
+    : `Back to the configured style${st ? " — " + st.title : ""}`);
+});
+
 // The add position is a property of the BOARD, not of this browser, so it's the
 // same wherever you open it.
 $("#addwhere").addEventListener("change", ()=>{
@@ -4020,16 +4187,28 @@ function deleteListSheet(){
     location.href = "/sort";
   });
 }
+// One of a row's two citation buttons. Same shape as copyListLink below : the
+// clipboard first, and a sheet with the text selected when the browser won't
+// give it to us ( plain http to a LAN address, which is how this is mostly
+// reached ) -- a reference you can ⌘C beats a button that silently did nothing.
+async function copyCite(text, full){
+  if(!text) return;
+  if(await copyText(text, full ? "Reference copied" : "Citation copied")) return;
+  sheet(`<h3>${full ? "The full reference" : "The in-text citation"}</h3>
+    <p>Your browser won't let the page write to the clipboard here — press ⌘C / Ctrl+C.</p>
+    <textarea id="citebox" rows="${full ? 4 : 2}" readonly>${esc(text)}</textarea>
+    <div class="btns"><button class="primary" data-act="ok">Done</button></div>`);
+  const box = $("#citebox");
+  if(box) box.select();
+}
 async function copyListLink(){
   const url = location.origin + (LIST ? `/sort/${encodeURIComponent(LIST)}` : "/sort");
-  try { await navigator.clipboard.writeText(url); toast(`Link copied — ${url}`, 5000); }
-  catch(e){
-    sheet(`<h3>The link to this list</h3>
-      <p>Anyone who can reach this server can open it and read the list ; an account can edit it.</p>
-      <input type="text" id="lname" value="${esc(url)}" readonly>
-      <div class="btns"><button class="primary" data-act="ok">Done</button></div>`);
-    $("#lname").select();
-  }
+  if(await copyText(url, `Link copied — ${url}`)) return;
+  sheet(`<h3>The link to this list</h3>
+    <p>Anyone who can reach this server can open it and read the list ; an account can edit it.</p>
+    <input type="text" id="lname" value="${esc(url)}" readonly>
+    <div class="btns"><button class="primary" data-act="ok">Done</button></div>`);
+  $("#lname").select();
 }
 // /sort/<name> with no list behind it -- a typo, an old link, a list deleted
 // since. Nothing typed here could be saved anywhere, so nothing can be typed.

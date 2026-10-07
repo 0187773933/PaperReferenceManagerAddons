@@ -179,9 +179,8 @@ main.addEventListener( "click" , async e => {
   }
   if( b.dataset.copy ){
     const inp = b.closest( ".shown" ).querySelector( "input" );
-    inp.select();
-    try { await navigator.clipboard.writeText( inp.value ); toast( "Copied" ); }
-    catch( err ){ toast( "Selected — press ⌘C / Ctrl+C to copy" ); }
+    inp.select();   // selected either way , so ⌘C works when the clipboard won't
+    if( !await copyText( inp.value , "Copied" ) ) toast( "Selected — press ⌘C / Ctrl+C to copy" );
     return;
   }
   if( b.dataset.dismiss ){ delete SHOWN[ b.dataset.dismiss ]; render(); return; }

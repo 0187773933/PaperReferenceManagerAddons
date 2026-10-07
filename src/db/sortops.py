@@ -71,10 +71,13 @@ class Ctx:
 	  remaining( doc )                -> the library papers not on `doc` , newest
 	                                     first , each with its modality stamp ( mods )
 	  modalities                      -> the modality vocabulary ( methods.py )
+	  cite_styles                     -> the usable CSL style ids on this server
+	                                     ( src/db/cite.py ) ; empty = unknown ,
+	                                     and cite_style is then taken on trust
 	"""
 
 	def __init__( self , resolve=None , meta=None , parse_refs=None , tiers_doc=None ,
-			list_doc=None , remaining=None , modalities=None ):
+			list_doc=None , remaining=None , modalities=None , cite_styles=None ):
 		self.resolve    = resolve    or ( lambda spec: _no( "paper lookup" ) )
 		self.meta       = meta       or ( lambda keys , mods=False , links=False , titles=None: {} )
 		self.parse_refs = parse_refs or ( lambda text: _no( "reference parsing" ) )
@@ -82,6 +85,7 @@ class Ctx:
 		self.list_doc   = list_doc   or ( lambda slug: _no( "the other sort lists" ) )
 		self.remaining  = remaining  or ( lambda doc: _no( "the library" ) )
 		self.modalities = list( modalities or [] )
+		self.cite_styles = list( cite_styles or [] )
 
 
 def _no( what ):
@@ -930,13 +934,19 @@ def op_column_fold( doc , ctx , p ):
 ADD_WHERE = ( "bottom" , "top" , "placed" )
 
 
+_OPTION_KEYS = ( "auto_move" , "add_where" , "cite_style" )
+
+
 def op_options( doc , ctx , p ):
 	"""The board's settings : auto_move ( tagging slides a row next to the
-	others with the same tags ) and add_where ( where a new paper lands :
-	bottom , top , or placed = after the last row you placed by hand )."""
+	others with the same tags ) , add_where ( where a new paper lands : bottom ,
+	top , or placed = after the last row you placed by hand ) and cite_style
+	( the CSL style the rows' citations are rendered in -- a file name without
+	the extension , from < --config >/citation-styles ; "" puts the board back
+	on config.yaml's citation.style )."""
 	opts = _options( doc )
-	if "auto_move" not in p and "add_where" not in p:
-		raise OpError( "give `auto_move` and / or `add_where`" )
+	if not any( k in p for k in _OPTION_KEYS ):
+		raise OpError( "give " + " and / or ".join( f"`{k}`" for k in _OPTION_KEYS ) )
 	if "auto_move" in p:
 		if not isinstance( p[ "auto_move" ] , bool ):
 			raise OpError( "`auto_move` must be true or false" )
@@ -945,7 +955,17 @@ def op_options( doc , ctx , p ):
 		if p[ "add_where" ] not in ADD_WHERE:
 			raise OpError( f"`add_where` must be one of {', '.join( ADD_WHERE )}" )
 		opts[ "add_where" ] = p[ "add_where" ]
-	return { "auto_move": bool( opts.get( "auto_move" ) ) , "add_where": opts.get( "add_where" ) }
+	if "cite_style" in p:
+		want = str( p[ "cite_style" ] or "" ).strip()
+		# Checked against the styles this server actually has , when it told us
+		# what they are. A name it doesn't know is far more likely a typo than a
+		# style about to appear , and the error can name the real ones.
+		if want and ctx.cite_styles and want not in ctx.cite_styles:
+			raise OpError( f"no citation style {want!r} on this server -- there is "
+				+ " , ".join( ctx.cite_styles ) )
+		opts[ "cite_style" ] = want
+	return { "auto_move": bool( opts.get( "auto_move" ) ) , "add_where": opts.get( "add_where" ) ,
+		"cite_style": opts.get( "cite_style" ) or "" }
 
 
 def _have_index( doc ):
@@ -1478,7 +1498,9 @@ OPS = {
 	"column_fold":   ( op_column_fold , { "col": ( "str" , True , "column id or label" ) ,
 		"folded": ( "bool" , False , "true folds it away ( default ) , false brings it back" ) } ) ,
 	"options": ( op_options , { "auto_move": ( "bool" , False , "tagging slides a row to its tag group" ) ,
-		"add_where": ( "str" , False , " | ".join( ADD_WHERE ) ) } ) ,
+		"add_where": ( "str" , False , " | ".join( ADD_WHERE ) ) ,
+		"cite_style": ( "str" , False , "CSL style for the rows' citations , by file name "
+			"without .csl ( \"\" = the configured default )" ) } ) ,
 	"stage":      ( op_stage , { "text": ( "str" , True , "a pasted reference list" ) } ) ,
 	"stage_add":  ( op_stage_add , { "rows": ( "rows" , False , ROWS ) ,
 		"all": ( "bool" , False , "the whole shelf" ) , "at": ( "pos" , False , POS ) } ) ,

@@ -55,3 +55,21 @@ auth:
   api_key_days: 90        # default expiry for a new API key ( 0 = never )
   secure_cookies: auto    # auto = Secure cookie when X-Forwarded-Proto is https ; true / false to force
   public_url: ""          # e.g. https://prma.example.org -- where terminal-printed login links point
+
+# The citation style the /sort board's rows are cited in ( src/db/cite.py ) :
+# the in-text citation drawn on each row , and the full reference its second
+# copy button puts on the clipboard. Optional -- without it the bundled
+# the-journal-of-neuroscience is used.
+#
+# The value is the FILE NAME , without .csl , of a style in the
+# citation-styles/ directory beside this file. Download more from
+#   https://www.zotero.org/styles/
+# and drop them in ; the picker in the /sort toolbar lists whatever is there ,
+# and each board can override this default for itself.
+#
+# They must be INDEPENDENT styles. A good half of zotero.org/styles is
+# DEPENDENT stubs -- a file whose only content is a pointer to the style it
+# defers to -- and those carry no rules to render with. One is listed in the
+# picker greyed out , naming the parent to go and fetch instead.
+citation:
+  style: the-journal-of-neuroscience

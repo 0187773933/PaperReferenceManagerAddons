@@ -508,6 +508,10 @@ def title_search( rows , query , limit=25 , offset=0 ):
 
 
 def to_public( row ):
-	"""Strip the heavy / internal haystack fields before serialization."""
+	"""Strip the heavy / internal fields before serialization : the haystacks ,
+	and the library row's `cite` block ( the raw bibliographic fields a CSL
+	style is rendered from -- /sort asks for the rendered strings by key , so
+	a search hit has no use for them and a page of hits would carry a few
+	hundred KB of author lists for nothing )."""
 	return { k: v for k , v in row.items()
-		if k not in ( "hay" , "hay_n" , "hay_t" , "hay_k" ) }
+		if k not in ( "hay" , "hay_n" , "hay_t" , "hay_k" , "cite" ) }

@@ -59,7 +59,10 @@ from .       import index as dash_index
 #   8 -> 9 : library entries gained created_at ( In-Library "Added" column )
 #   9 -> 10: library entries gained code_links ( In-Library "Code" column )
 #  10 -> 11: library entries gained dataset_links + dataset_names ( /datasets )
-STATE_VERSION = 11
+#  11 -> 12: library entries gained a cite block ( journal / volume / issue /
+#            pages / split author names ) -- what a CSL style needs , which
+#            nothing on the index carried before ( src/db/cite.py )
+STATE_VERSION = 12
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +120,60 @@ def _work_entry( meta ):
 	e = utils.openalex_entry_scalars( meta )
 	e[ "hay" ] = _make_haystack( meta )
 	return e
+
+
+_CREATOR_CAP = 60
+
+
+def _cite_block( paper , oa ):
+	"""The handful of bibliographic fields a CSL style needs that nothing else
+	on this index carries : the journal , the volume / issue / pages , the work
+	type , and -- the one that matters -- author names SPLIT into family and
+	given.
+
+	Only Zotero has that split ( sources.zotero.creators , a first / last pair
+	per creator ) ; OpenAlex gives one display string per author , and guessing
+	where the surname starts in 'Jan van der Berg' is guesswork cite._split_name
+	does only because it has to. So Zotero first , OpenAlex second , as a pair
+	with an empty given for cite.py to split.
+
+	Built here because build() already holds both the paper record and its
+	OpenAlex meta open : the index is the only place in the project where those
+	two are in scope together , and the OpenAlex files run to tens of MB , so
+	re-reading one per citation was never an option ( see src/db/cite.py )."""
+	oa   = oa if isinstance( oa , dict ) else {}
+	src  = ( ( oa.get( "primary_location" ) or {} ).get( "source" ) or {} )
+	bib  = oa.get( "biblio" ) or {}
+	first , last = str( bib.get( "first_page" ) or "" ).strip() , str( bib.get( "last_page" ) or "" ).strip()
+	page = f"{first}-{last}" if ( first and last and first != last ) else first
+
+	creators = []
+	zot = ( ( paper.get( "sources" ) or {} ).get( "zotero" ) or {} ).get( "creators" ) or []
+	for c in zot:
+		if not isinstance( c , dict ) or ( c.get( "type" ) or "author" ) != "author":
+			continue
+		fam , giv = str( c.get( "last" ) or "" ).strip() , str( c.get( "first" ) or "" ).strip()
+		if fam or giv:
+			creators.append( [ fam , giv ] )
+	if not creators:
+		for a in oa.get( "authorships" ) or []:
+			name = ( ( a.get( "author" ) or {} ).get( "display_name" )
+				or a.get( "raw_author_name" ) or "" ).strip()
+			if name:
+				# No split to be had -- cite._split_name does what it can with it.
+				creators.append( [ name , "" ] )
+
+	return {
+		"type":     oa.get( "type" ) or "" ,
+		"journal":  src.get( "display_name" ) or "" ,
+		"volume":   str( bib.get( "volume" ) or "" ).strip() ,
+		"issue":    str( bib.get( "issue" ) or "" ).strip() ,
+		"page":     page ,
+		# Capped : one genomics paper carries 95 authors and no style prints
+		# past the first few , so the whole list would be index weight for
+		# nothing.
+		"creators": creators[ :_CREATOR_CAP ] ,
+	}
 
 
 def _wid( url ):
@@ -319,6 +376,7 @@ def build( args , full=False , log=print , progress=None ):
 			"code_links": _code_links( paper ) ,          # prma code -> "Code" column
 			"dataset_links": _ds_links( paper ) ,        # prma datasets -> /datasets
 			"dataset_names": _ds_names( paper ) ,        #   "     "     -> /datasets
+			"cite":       _cite_block( paper , oa ) ,    # -> /sort's citation line
 			"hay":        ( lib_title + " " + abstract + " " + ocr_body ).lower() ,
 		}
 
@@ -504,6 +562,11 @@ def _lib_rows( lib_meta ):
 			"dataset_links": e.get( "dataset_links" ) or [] ,  # -> /datasets
 			"dataset_names": e.get( "dataset_names" ) or [] ,  # -> /datasets
 			"authors":    e.get( "authors" ) or [] ,
+			# What a CSL style needs ( src/db/cite.py ). Carried on the row so
+			# the server has it in memory , stripped before serialization
+			# ( index.to_public ) : /sort asks for rendered citations by key ,
+			# so a search hit never needs to haul the raw fields along.
+			"cite":       e.get( "cite" ) or {} ,
 			"hay":        e.get( "hay" ) or "" ,
 		} )
 	return rows
