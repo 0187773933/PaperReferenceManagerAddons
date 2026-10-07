@@ -1653,19 +1653,27 @@ def _csv_cell( v ):
 	return "; ".join( t.strip() for t in s.replace( "\r\n" , "\n" ).replace( "\r" , "\n" ).split( "\n" ) if t.strip() )
 
 
-def to_csv( doc , meta=None ):
-	"""toCSV : # , DOI_or_Key , Title , Year , Tags , <columns> , MD_File -- in
-	YOUR order. With the BOM saveCSV puts on , so Excel reads it as UTF-8."""
-	meta = meta or {}
-	buf  = io.StringIO()
-	w    = csv.writer( buf , lineterminator="\n" )
-	cols = doc.get( "columns" ) or []
-	w.writerow( [ "#" , "DOI_or_Key" , "Title" , "Year" , "Tags" ] + [ c[ "label" ] for c in cols ] + [ "MD_File" ] )
+def to_csv( doc , meta=None , cites=None ):
+	"""toCSV : # , DOI_or_Key , Cite , Title , Year , Tags , <columns> , MD_File
+	-- in YOUR order. With the BOM saveCSV puts on , so Excel reads it as UTF-8.
+
+	`cites` is key -> { intext , full } ( PaperMeta.cites ) ; the column takes
+	the IN-TEXT one, which is what the board draws on the row. Without it the
+	column is still written , empty -- the header is part of the format , and a
+	caller that can't render citations shouldn't change the shape of the file."""
+	meta  = meta or {}
+	cites = cites or {}
+	buf   = io.StringIO()
+	w     = csv.writer( buf , lineterminator="\n" )
+	cols  = doc.get( "columns" ) or []
+	w.writerow( [ "#" , "DOI_or_Key" , "Cite" , "Title" , "Year" , "Tags" ]
+		+ [ c[ "label" ] for c in cols ] + [ "MD_File" ] )
 	for i , it in enumerate( _items( doc ) ):
 		m  = meta.get( it[ "key" ] ) or {}
 		lk = ( m.get( "in_library" ) and m.get( "key" ) ) or it[ "key" ]
 		w.writerow( [ _csv_cell( x ) for x in
-			[ i + 1 , it[ "key" ] , it.get( "title" ) or m.get( "title" ) or "" ,
+			[ i + 1 , it[ "key" ] , ( cites.get( it[ "key" ] ) or {} ).get( "intext" ) or "" ,
+			  it.get( "title" ) or m.get( "title" ) or "" ,
 			  it.get( "year" ) or m.get( "year" ) or "" , it.get( "tags" ) or [] ]
 			+ [ ( it.get( "fields" ) or {} ).get( c[ "id" ] ) or "" for c in cols ]
 			+ [ re.sub( r"[\/\\]" , "_" , lk ) + ".md" if m.get( "has_md" ) else "" ] ] )

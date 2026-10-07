@@ -3271,6 +3271,14 @@ class Handler( BaseHTTPRequestHandler ):
 				want_links=links , titles=titles ) )
 		return out
 
+	def _board_cites( self , keys , style=None , titles=None ):
+		"""The same , for PaperMeta.cites -- which takes 500 per call too."""
+		out , keys = {} , list( keys or [] )
+		for i in range( 0 , len( keys ) , 500 ):
+			out.update( self.papermeta.cites( keys[ i : i + 500 ] , style=style ,
+				titles=titles ) )
+		return out
+
 	def _sort_ctx( self ):
 		"""What the agent ops need from this server : the library lookups."""
 		from ..db    import sortops
@@ -3372,9 +3380,16 @@ class Handler( BaseHTTPRequestHandler ):
 			return True
 		if suffix == "/export.csv":
 			doc  = board.snapshot()[ "doc" ]
-			meta = self._board_meta( [ r[ "key" ] for r in doc.get( "items" ) or [] ] )
+			keys = [ r[ "key" ] for r in doc.get( "items" ) or [] ]
+			meta = self._board_meta( keys )
+			# The Cite column , in the style THIS board is set to -- the same
+			# string the page draws on the row , so the two exports agree.
+			titles = { r[ "key" ] : r.get( "title" ) for r in doc.get( "items" ) or []
+				if r.get( "title" ) and not r[ "key" ].startswith( "10." ) }
+			cites  = self._board_cites( keys ,
+				style=( doc.get( "options" ) or {} ).get( "cite_style" ) , titles=titles )
 			name = f"prma-sort-{board.slug}" if board.slug else "prma-sort"
-			self._send_download( sortops.to_csv( doc , meta ).encode( "utf-8" ) ,
+			self._send_download( sortops.to_csv( doc , meta , cites ).encode( "utf-8" ) ,
 				f"{name}-{time.strftime( '%Y-%m-%d' )}.csv" , "text/csv; charset=utf-8" )
 			return True
 		self._send_json( 200 , { "ok": True , "versions": board.store.snapshots( board.args ) } )

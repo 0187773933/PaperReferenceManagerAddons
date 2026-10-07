@@ -3515,13 +3515,13 @@ document.addEventListener("keydown", e=>{
 window.addEventListener("beforeunload", e=>{ if(dirty){ e.preventDefault(); e.returnValue = ""; } });
 
 // ---- CSV ------------------------------------------------------------------
-// #, DOI_or_Key, Title, Year, Tags, <columns…>, MD_File. Anything else in an
-// imported file becomes its own free-text column, so the hand-made sheets ( and
-// the tier page's exports, Tier column and all ) come in without losing
+// #, DOI_or_Key, Cite, Title, Year, Tags, <columns…>, MD_File. Anything else in
+// an imported file becomes its own free-text column, so the hand-made sheets
+// ( and the tier page's exports, Tier column and all ) come in without losing
 // anything ; Modalities / Section_Tags columns merge into the tag list.
 /* csvCell is in /static/common.js -- one copy for both boards , /code and /datasets. */
 function toCSV(){
-  const head = [ "#","DOI_or_Key","Title","Year","Tags" ]
+  const head = [ "#","DOI_or_Key","Cite","Title","Year","Tags" ]
     .concat(DOC.columns.map(c=>c.label)).concat([ "MD_File" ]);
   const lines = [ head.map(csvCell).join(",") ];
   // The rows in the order you are LOOKING at, each numbered with its place in
@@ -3529,7 +3529,12 @@ function toCSV(){
   const no = manualNo();
   viewItems().forEach(it=>{
     const m = META[it.key] || {};
-    lines.push([ no.get(it.key), it.key, it.title||m.title||"", it.year||m.year||"", (it.tags||[]).join("; ") ]
+    // The in-text citation, as drawn on the row ( CITE , POST /api/cite ). Blank
+    // for a paper with no author names to cite, and blank for the whole column
+    // if the export is taken in the second before /api/cite has answered --
+    // which is why it is DERIVED on the way back in rather than stored.
+    lines.push([ no.get(it.key), it.key, (CITE[it.key]||{}).intext||"",
+                 it.title||m.title||"", it.year||m.year||"", (it.tags||[]).join("; ") ]
       .concat(DOC.columns.map(c=>(it.fields||{})[c.id]||""))
       .concat([ m.has_md ? fileStem(libKey(it))+".md" : "" ])
       .map(csvCell).join(","));
@@ -3566,6 +3571,14 @@ const H_NUM   = /^#$|^no\.?$|^rank$/i;
 const H_KEY   = /^(doi[_ ]?or[_ ]?key|key)$/i, H_DOI = /^doi$/i;
 const H_TITLE = /^title$/i, H_YEAR = /^year$/i;
 const H_TAGS  = /^(tags?|modalit\w*|section[_ ]?tags?)$/i, H_MD = /^md[_ ]?file$/i;
+// Cite is DERIVED, like # and MD_File : the board renders it from the library
+// index in whatever style the board is set to, so re-importing an export must
+// not turn the column back into a free-text column full of stale citations.
+// Deliberately NOT matching "Reference" : in somebody's hand-made sheet that is
+// as likely to be a column they typed themselves, and swallowing a column loses
+// what is in it -- where getting it wrong the other way only costs a column
+// they can delete.
+const H_CITE  = /^(cite|citation|in[-_ ]?text([-_ ]?citation)?)$/i;
 const splitList = s => String(s||"").split(/[;,|]/).map(x=>x.trim()).filter(Boolean);
 function docFromCSV(rows, merge){
   const head = rows[0].map(h=>String(h||"").trim());
@@ -3577,7 +3590,7 @@ function docFromCSV(rows, merge){
     else if(H_TITLE.test(h)) idx.title = i;
     else if(H_YEAR.test(h)) idx.year = i;
     else if(H_TAGS.test(h)) tagCols.push(i);
-    else if(H_MD.test(h) || H_NUM.test(h)) { /* derived — not stored */ }
+    else if(H_MD.test(h) || H_NUM.test(h) || H_CITE.test(h)) { /* derived — not stored */ }
     else if(h) extra.push({ i, id: slug(h,"col"), label: h });
   });
   const doc = merge
@@ -3737,8 +3750,10 @@ function csvImport(rows, name){
     <h3>Import ${rows.length-1} row(s) from ${esc(name)}</h3>
     <p>Columns found: ${rows[0].filter(Boolean).map(h=>`<kbd>${esc(h)}</kbd>`).join(" ")}</p>
     <p><b>Tags</b> / <b>Modalities</b> columns merge into each paper's tag list; everything else
-       becomes its own free-text column. Rows already on the board are updated in place, and the
-       file's row order becomes the list order. <b>Column by column…</b> instead lets you say,
+       becomes its own free-text column, bar the ones this board works out for itself
+       — <kbd>#</kbd>, <kbd>Cite</kbd> and <kbd>MD_File</kbd> — which are read past, so re-importing
+       an export doesn't turn them into columns. Rows already on the board are updated in place, and
+       the file's row order becomes the list order. <b>Column by column…</b> instead lets you say,
        for each column, whether it only fills empty cells here or overwrites them — and never
        removes anything.</p>
     <div class="btns">
@@ -3776,7 +3791,7 @@ function sheetColumns(head){
     else if(H_TITLE.test(h)) ix.title = i;
     else if(H_YEAR.test(h)) ix.year = i;
     else if(H_TAGS.test(h)) ix.tags.push(i);
-    else if(H_MD.test(h) || H_NUM.test(h)) { /* derived — not stored */ }
+    else if(H_MD.test(h) || H_NUM.test(h) || H_CITE.test(h)) { /* derived — not stored */ }
     else if(h) ix.extra.push({ i, label:h });
   });
   return ix;
