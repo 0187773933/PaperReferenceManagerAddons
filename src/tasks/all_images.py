@@ -255,6 +255,7 @@ def run( args ):
 	matched = []
 	figures_seen , captions_empty , missing_png = 0 , 0 , 0
 	n_with_mods , n_inferred , _mod_warned = 0 , 0 , False
+	picked = mi.picked_figure_ids( args )
 	for key , prefix in tqdm( jobs , desc="Papers" , unit="paper" ):
 		paper = papers.load( args , key )
 		if paper is None:
@@ -267,11 +268,14 @@ def run( args ):
 
 		figs = []
 		for page_idx , page_dets in enumerate( pages ):
+			hidden = PP.duplicate_image_idxs( page_dets )
 			# Same figure <-> caption pairing ` prma images ` cropped with , so the
 			# text under a card is the text inside its PNG. Unlike method-images an
 			# EMPTY caption is fine here -- the crop is the point , and the page
 			# renders "( no caption text )" for it.
 			for det_idx , caption in mi._page_figures_with_captions( page_dets , scale , images_mod , PP , md_mod ):
+				if det_idx in hidden and f"{key}#figure-{figure_idx.get( ( page_idx , det_idx ) )}" not in picked:
+					continue   # a second YOLO box on a figure already shown
 				figures_seen += 1
 				if not caption:
 					captions_empty += 1

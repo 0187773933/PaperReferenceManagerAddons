@@ -2191,6 +2191,7 @@ class SnapshotCache:
 		self._recent: Optional[ List[ Dict ] ] = None
 		self._recent_sig: Optional[ Tuple[ float , ... ] ] = None
 		self._recent_n  = 0      # how many rows the cached read asked for
+		self._recent_since: Optional[ str ] = None   # and from when ( None : any time )
 		self._recent_at = 0.0    # when it ran , for the no-watch-files TTL path
 		self._recent_note = ""
 
@@ -2262,24 +2263,38 @@ class SnapshotCache:
 
 
 
-	def recent( self , limit=10 ):
+	def recent( self , limit=10 , days=None ):
 		"""The newest additions to the library , straight off the manager --
 		what /sort's " Recently added " offers. Returns ( rows , note ) ; see
-		tasks.snapshot.recent for the row shape.
+		tasks.snapshot.recent for the row shape. `days` makes it a window :
+		everything added in the last that-many days , up to `limit` of it.
 
 		Cached on the SAME source signature the title / DOI sets above use , so
 		clicking the button repeatedly is free while Zotero sits still and picks
-		up a paper the moment one is saved. A bigger `limit` than the cached
-		read covers re-reads ; a smaller one is served by slicing it."""
+		up a paper the moment one is saved. A bigger `limit` ( or a longer
+		window ) than the cached read covers re-reads ; a smaller one is served
+		by slicing it."""
 		# Clamped here rather than only in the reader , so a silly ?limit= can't
 		# poison the cache's idea of how much it holds.
 		try:    limit = max( 1 , min( int( limit ) , 200 ) )
 		except ( TypeError , ValueError ): limit = 10
+		since = None
+		if days is not None:
+			try:
+				days  = max( 0.0 , min( float( days ) , 3660.0 ) )
+				since = time.strftime( "%Y-%m-%d %H:%M:%S" , time.gmtime( time.time() - days * 86400 ) )
+			except ( TypeError , ValueError , OverflowError ):
+				since = None
 		now = time.time()
 		sig = self._source_sig()
+		# The cached read answers for any window inside its own : the rows since
+		# a later moment are a prefix of the rows since an earlier one. A window
+		# only ever moves forward , so the same request asked again stays covered.
 		fresh = (
 			self._recent is not None
 			and self._recent_n >= limit
+			and ( self._recent_since is None
+				or ( since is not None and since >= self._recent_since ) )
 			and ( sig == self._recent_sig if sig is not None
 				else ( now - self._recent_at ) < self.ttl )
 		)
@@ -2287,18 +2302,22 @@ class SnapshotCache:
 			# Over-read a little so nudging the count up ( 10 -> 25 ) usually
 			# answers out of the cache instead of re-copying the SQLite.
 			want = max( limit , 25 )
-			rows , note = snap_module.recent( self.args , want )
+			rows , note = snap_module.recent( self.args , want , since )
 			if not rows and note:
 				# A read that failed ( or a manager with nothing to offer ) is
 				# answered but not cached , so the next click tries again rather
 				# than serving the failure until Zotero next writes.
 				return rows , note
-			self._recent      = rows
-			self._recent_note = note
-			self._recent_n    = want
-			self._recent_sig  = sig
-			self._recent_at   = now
-		return self._recent[ :limit ] , self._recent_note
+			self._recent       = rows
+			self._recent_note  = note
+			self._recent_n     = want
+			self._recent_since = since
+			self._recent_sig   = sig
+			self._recent_at    = now
+		rows = self._recent
+		if since is not None:
+			rows = [ r for r in rows if ( r.get( "added" ) or "" ) >= since ]
+		return rows[ :limit ] , self._recent_note
 
 
 # ---------------------------------------------------------------------------
@@ -3883,7 +3902,12 @@ class Handler( BaseHTTPRequestHandler ):
 			# Zotero a minute ago is not searchable yet -- but /sort can still
 			# offer it here , with the key it WILL have once the pipeline catches
 			# up. `note` explains an empty list when there is something to say.
-			rows , note = self.cache.recent( self._arg_int( self._qs() , "limit" , 10 ) )
+			# ?days=7 is a window rather than a count : everything added in the
+			# past week , up to the 200 a read is capped at.
+			qs   = self._qs()
+			days = self._arg( qs , "days" , "" ) or None
+			rows , note = self.cache.recent(
+				self._arg_int( qs , "limit" , 200 if days else 10 ) , days )
 			self._send_json( 200 , { "results": rows , "total": len( rows ) ,
 				"note": note , "manager": getattr( self.dash.args , "manager" , "" ) } )
 			return

@@ -386,6 +386,17 @@ def match_keywords( caption , strong , weak , threshold , min_weak=2 ):
 # Figure <-> caption pairing ( same geometry prma images crops with )
 # ---------------------------------------------------------------------------
 
+def picked_figure_ids( args ):
+	"""Every figure id picked on either report. A figure box hidden as a YOLO
+	duplicate ( preprocess.duplicate_image_idxs ) stays on the report when
+	it's one of these , so an earlier pick never vanishes from its page."""
+	from ..db import figure_state
+	out = set()
+	for coll in figure_state.COLLECTIONS:
+		out.update( figure_state.load( args , coll )[ 0 ] )
+	return out
+
+
 def _page_figures_with_captions( page_dets , scale , images_mod , PP , md_mod ):
 	"""For one yolo page , return [ ( det_idx , caption-text ) ] for every
 	` figure ` det. Captions attach with the exact rule images.extract()
@@ -970,6 +981,7 @@ def run( args ):
 	matched = []
 	figures_scanned , captions_empty , missing_png = 0 , 0 , 0
 	n_with_mods , n_inferred , _mod_warned = 0 , 0 , False
+	picked = picked_figure_ids( args )
 	for key , prefix in tqdm( jobs , desc="Papers" , unit="paper" ):
 		paper = papers.load( args , key )
 		if paper is None:
@@ -982,7 +994,10 @@ def run( args ):
 
 		figs = []
 		for page_idx , page_dets in enumerate( pages ):
+			hidden = PP.duplicate_image_idxs( page_dets )
 			for det_idx , caption in _page_figures_with_captions( page_dets , scale , images_mod , PP , md_mod ):
+				if det_idx in hidden and f"{key}#figure-{figure_idx.get( ( page_idx , det_idx ) )}" not in picked:
+					continue   # a second YOLO box on a figure already shown
 				figures_scanned += 1
 				if not caption:
 					captions_empty += 1

@@ -182,7 +182,7 @@ def titles_and_dois( args ):
 	return titles , dois
 
 
-def recent( args , limit=10 ):
+def recent( args , limit=10 , since=None ):
 	"""The N papers most recently ADDED to the reference manager , read
 	straight off the live source -- the same fast path ` titles_and_dois `
 	above takes , and for the same reason : output/cache/papers/ and the
@@ -194,7 +194,8 @@ def recent( args , limit=10 ):
 	where `key` is the primary key that paper WILL have in the unified DB
 	( normalized DOI , else the synthetic nodoi- key ) , so a row can be
 	matched against a board , the library index or anything else keyed the
-	usual way.
+	usual way. `since` ( UTC , 'YYYY-MM-DD HH:MM:SS' ) keeps only those added
+	since then -- still at most `limit` of them.
 
 	`note` is a short human sentence when the list is empty for a reason
 	worth saying -- Mendeley keeps no added-date in its snapshot , so there
@@ -214,7 +215,7 @@ def recent( args , limit=10 ):
 		except FileNotFoundError as e:
 			return [] , f"Zotero not configured ( {e} )"
 		try:
-			return z.take_recent( limit ) , ""
+			return z.take_recent( limit , since ) , ""
 		except Exception as e:
 			# A library that moved or a SQLite that won't open is a sentence on
 			# a button , not a 500 : everything else on the page still works.

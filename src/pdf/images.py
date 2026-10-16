@@ -31,6 +31,7 @@ from PIL import Image
 
 from ..utils import utils
 from . import pdf as PDF
+from . import preprocess as PP
 
 # DPI used for re-rendering pages just for cropping. Higher = nicer crops ,
 # more memory / time. yolo was run at PDF.DPI ; we scale up by CROP_DPI/PDF.DPI.
@@ -190,15 +191,21 @@ def extract(
 		page_image = images[ page_idx ]
 		W , H = page_image.size
 
+		# A second YOLO box on a graphic already cropped : still saved ( the
+		# crop number is what the /images picks are keyed on ) but kept out
+		# of the montage so the graphic shows once.
+		hidden = PP.duplicate_image_idxs( page_dets )
+
 		# Scale all relevant detections up to high-res , with padding.
 		scaled = []
-		for d in page_dets:
+		for det_idx , d in enumerate( page_dets ):
 			cls = d.get( "type" )
 			if cls not in anchors and cls not in ATTACHMENTS:
 				continue
 			scaled.append( {
 				"cls": cls ,
 				"bbox": _scale_bbox( d[ "bbox" ] , scale , PADDING , W , H ) ,
+				"dup": det_idx in hidden ,
 			} )
 
 		# For each anchor , compute union with its adjacent attachments.
@@ -225,11 +232,13 @@ def extract(
 			if kind == "figure":
 				n_figure += 1
 				idx = n_figure
-				figure_crops.append( crop )
+				if not d[ "dup" ]:
+					figure_crops.append( crop )
 			else:
 				n_table += 1
 				idx = n_table
-				table_crops.append( crop )
+				if not d[ "dup" ]:
+					table_crops.append( crop )
 			crop.save( all_dir / f"{name_prefix}-{kind}-{idx}.png" )
 			total += 1
 

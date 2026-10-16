@@ -48,6 +48,7 @@ Output shape per detection :
   }
 """
 
+import ctypes
 import os
 import re
 import shutil
@@ -58,6 +59,7 @@ from pathlib import Path
 
 import numpy as np
 import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
 from PIL import Image
 
 from . import pdf as PDF
@@ -67,6 +69,13 @@ from ..utils import utils
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# Stamped on yolo_data[ 'meta' ][ 'ocr_version' ] by ocr_paper(). Bump when
+# the extraction itself changes so tools/reocr.py can find stale papers.
+# v2 : bbox -> PDF mapping honors the CropBox origin + /Rotate ; wordninja
+#      only runs on text that actually lost its spaces ; short embedded
+#      labels ( equation numbers ) no longer force a page OCR.
+OCR_VERSION = 2
 
 # DPI to render pages at when falling back to OCR. 300 is the tesseract
 # sweet spot ; higher just burns CPU for negligible accuracy.
@@ -89,6 +98,13 @@ TEXT_DETECTION_CLASSES = {
 MIN_EMBEDDED_TEXT        = 8
 MAX_GARBLED_BAD_RATIO    = 0.05
 MIN_GARBLED_LETTER_RATIO = 0.20
+
+# Shorter-than-MIN_EMBEDDED_TEXT strings ( equation numbers '(1)' , headers
+# 'Methods' , 'Fig. 2' ) fail the letter-ratio test , so on their own they
+# used to force a whole-page OCR. Trust them when they're plain label chars.
+_SHORT_LABEL_RE = re.compile(
+	r"^[A-Za-z0-9 ().,:;\[\]\-–]*[A-Za-z0-9][A-Za-z0-9 ().,:;\[\]\-–]*$"
+)
 
 # Unspaced-text detection : CID extracts and some OCR outputs lose
 # inter-word spacing ( 'furthertechnicaladvantageof' ) -- if it looks
@@ -283,16 +299,44 @@ def _split_stuck_words( text ):
 # Geometry
 # ---------------------------------------------------------------------------
 
-def _yolo_bbox_to_pdf_rect( bbox , yolo_dpi , page_height_pt ):
-	"""Convert a YOLO bbox ( pixel coords , top-left origin ) into a
-	pdfium rectangle ( point coords , bottom-left origin )."""
+def _device_to_page( page , width_px , height_px , x , y ):
+	"""pdfium's own inverse of page.render() : a pixel in a width_px x
+	height_px render of `page` -> PDF user-space point."""
+	px , py = ctypes.c_double() , ctypes.c_double()
+	ok = pdfium_c.FPDF_DeviceToPage(
+		page.raw , 0 , 0 , width_px , height_px , 0 ,
+		int( round( x ) ) , int( round( y ) ) ,
+		ctypes.byref( px ) , ctypes.byref( py ) ,
+	)
+	if not ok:
+		raise RuntimeError( "FPDF_DeviceToPage failed" )
+	return px.value , py.value
+
+
+def _yolo_bbox_to_pdf_rect( page , bbox , yolo_dpi ):
+	"""Convert a YOLO bbox ( pixel coords in the page render YOLO saw ,
+	top-left origin ) into a pdfium rectangle ( PDF user space ,
+	bottom-left origin ) for get_text_bounded().
+
+	The render covers the CropBox with /Rotate applied , while text sits in
+	MediaBox user space -- so a bare 'px * 72 / dpi' is off by the CropBox
+	origin ( e.g. 80pt on World Scientific's trimmed A4 pages ) and wrong
+	outright on rotated pages. pdfium's DeviceToPage applies the exact
+	inverse of what render() did."""
 	x1 , y1 , x2 , y2 = bbox
-	pt_per_px = 72.0 / yolo_dpi
-	left   = x1 * pt_per_px
-	right  = x2 * pt_per_px
-	top    = page_height_pt - ( y1 * pt_per_px )
-	bottom = page_height_pt - ( y2 * pt_per_px )
-	return left , bottom , right , top
+	w_pt , h_pt = page.get_size()
+	scale = yolo_dpi / 72.0
+	w_px , h_px = int( round( w_pt * scale ) ) , int( round( h_pt * scale ) )
+	try:
+		ax , ay = _device_to_page( page , w_px , h_px , x1 , y1 )
+		bx , by = _device_to_page( page , w_px , h_px , x2 , y2 )
+		return min( ax , bx ) , min( ay , by ) , max( ax , bx ) , max( ay , by )
+	except Exception:
+		# Unrotated approximation , still CropBox-aware.
+		c_left , _c_bottom , _c_right , c_top = page.get_cropbox()
+		pt_per_px = 72.0 / yolo_dpi
+		return ( c_left + x1 * pt_per_px , c_top - y2 * pt_per_px ,
+		         c_left + x2 * pt_per_px , c_top - y1 * pt_per_px )
 
 
 def _polygon_to_aabb( polygon ):
@@ -350,11 +394,11 @@ def _crop_page_image_for_bbox( page_image , bbox , yolo_dpi ):
 # Embedded text ( pdfium text layer )
 # ---------------------------------------------------------------------------
 
-def _embedded_text( textpage , bbox , yolo_dpi , page_height_pt ):
+def _embedded_text( textpage , page , bbox , yolo_dpi ):
 	"""Pull text from a YOLO bbox using pdfium's text layer. Returns ''
 	if there's nothing there ( scanned page / image-only PDF )."""
 	left , bottom , right , top = _yolo_bbox_to_pdf_rect(
-		bbox , yolo_dpi , page_height_pt ,
+		page , bbox , yolo_dpi ,
 	)
 	try:
 		text = textpage.get_text_bounded(
@@ -748,8 +792,34 @@ def _lines_to_text( lines ):
 # Per-detection extraction
 # ---------------------------------------------------------------------------
 
+# A box edge that clips the NEIGHBOURING line picks up only its tall or deep
+# glyphs : descender tails ( g j p q y ) of the line above along the top
+# edge , ascenders ( b d f h k l t ) of the line below along the bottom.
+# Those lines read as 'yggy p' / 'lfddhhbh' -- letters only from that set
+# and no a / e / o / u , which no real line of prose is. ( Common on skewed
+# scans , where a straight box can't avoid its neighbours. )
+_TOP_FRAGMENT_RE    = re.compile( r"^[gjpqy ,;.]+$" )
+_BOTTOM_FRAGMENT_RE = re.compile( r"^[bdfhiklt' ]{4,}$" )
+
+
+def _strip_edge_fragments( text ):
+	lines = text.split( "\n" )
+	if len( lines ) > 1 and _TOP_FRAGMENT_RE.match( lines[ 0 ].strip() ):
+		lines = lines[ 1: ]
+	if len( lines ) > 1 and _BOTTOM_FRAGMENT_RE.match( lines[ -1 ].strip() ):
+		lines = lines[ :-1 ]
+	return "\n".join( lines )
+
+
+def _embedded_ok( text ):
+	"""Is this text-layer string good enough to skip OCR ?"""
+	if len( text ) < MIN_EMBEDDED_TEXT:
+		return bool( _SHORT_LABEL_RE.match( text ) )
+	return not _is_garbled( text ) and not _looks_unspaced( text )
+
+
 def _extract_text_for_det(
-	det , textpage , page_height_pt , yolo_dpi ,
+	det , textpage , page , yolo_dpi ,
 	ocr_lines_getter , force_ocr ,
 ):
 	"""3-stage cascade : embedded -> garbled-check -> OCR fallback.
@@ -760,21 +830,22 @@ def _extract_text_for_det(
 	if not bbox:
 		return ""
 	if not force_ocr:
-		text = _embedded_text( textpage , bbox , yolo_dpi , page_height_pt )
-		if (
-			len( text ) >= MIN_EMBEDDED_TEXT
-			and not _is_garbled( text )
-			and not _looks_unspaced( text )
-		):
-			return _split_stuck_words( _normalize_text( text ) )
+		text = _embedded_text( textpage , page , bbox , yolo_dpi )
+		# No wordninja here : this branch only accepts text that is NOT
+		# unspaced , and splitting clean text mangles real words
+		# ( 'perceptron' -> 'perce ptr on' ).
+		if _embedded_ok( text ):
+			return _strip_edge_fragments( _normalize_text( text ) )
 	all_lines = ocr_lines_getter()
 	if not all_lines:
 		return ""
 	hits = _lines_in_bbox( all_lines , bbox , yolo_dpi , OCR_DPI )
-	text = _lines_to_text( hits )
+	text = _normalize_text( _lines_to_text( hits ) )
 	if len( text ) < MIN_OCR_TEXT:
 		return ""
-	return _split_stuck_words( _normalize_text( text ) )
+	if _looks_unspaced( text ):
+		text = _split_stuck_words( text )
+	return text
 
 
 # ---------------------------------------------------------------------------
@@ -824,6 +895,7 @@ def ocr_paper(
 
 	pdf = pdfium.PdfDocument( str( pdf_path ) )
 	n_written = 0
+	n_kept    = 0   # dets left holding text from an earlier run
 	try:
 		n_pdf_pages = len( pdf )
 		for page_idx , page_dets in enumerate( pages_yolo ):
@@ -844,8 +916,7 @@ def ocr_paper(
 						det.setdefault( "ocr" , {} )[ engine ] = ""
 				continue
 
-			page      = pdf[ page_idx ]
-			page_h_pt = page.get_height()
+			page = pdf[ page_idx ]
 
 			# Lazy page-level OCR : only paid when at least one detection
 			# on this page actually needs OCR ( embedded text was bad ).
@@ -863,9 +934,10 @@ def ocr_paper(
 				for det in text_dets:
 					if not force:
 						if engine in ( det.get( "ocr" ) or {} ):
+							n_kept += 1
 							continue
 					text = _extract_text_for_det(
-						det , textpage , page_h_pt , yolo_dpi ,
+						det , textpage , page , yolo_dpi ,
 						get_ocr_lines , force_ocr ,
 					)
 					det.setdefault( "ocr" , {} )[ engine ] = text
@@ -881,4 +953,8 @@ def ocr_paper(
 		try: pdf.close()
 		except Exception: pass
 
+	# Stamp only when every det's text came from THIS version -- a non-force
+	# run that kept older text must not claim the paper is current.
+	if isinstance( yolo_data , dict ) and not n_kept and max_pages is None:
+		yolo_data.setdefault( "meta" , {} )[ "ocr_version" ] = OCR_VERSION
 	return n_written

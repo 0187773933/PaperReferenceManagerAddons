@@ -92,7 +92,7 @@
   .results.show { display:block; }
   .hit { display:flex; gap:10px; align-items:flex-start; padding:8px 11px; border-bottom:1px solid var(--line); cursor:grab; }
   .hit:last-child { border-bottom:none; }
-  .hit.sel { background:var(--panel2); }
+  .hit.sel { background:var(--panel2); box-shadow:inset 3px 0 0 var(--accent); }
   .hit .ht { font-weight:500; }
   .hit .hm { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
   .hit .in { flex:none; color:var(--green); font-size:12px; white-space:nowrap; padding-top:3px; }
@@ -107,13 +107,16 @@
   .hit .at::placeholder { color:var(--muted); }
   .hit .at:focus { outline:none; border-color:var(--accent); background:var(--panel); }
   .rhint { padding:7px 11px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--line); }
-  /* "show 25 · 50" in the recently-added hint line -- how many of them to ask
-     for, put where it costs the ( already full ) toolbar row nothing. */
+  /* "show past 2 weeks · past month" in the recently-added hint line -- how far
+     back to look, put where it costs the ( already full ) toolbar row nothing. */
   .rhint a { color:var(--accent); text-decoration:none; }
   .rhint a:hover { text-decoration:underline; }
   /* A recently-added paper the dashboard index has never seen : addable, but
      nothing has read it yet, so it comes in bare. */
   .hit .nyet { color:var(--warn); white-space:nowrap; }
+  /* The tags a hit will arrive with, typed before ＋ Add : the row's own chip
+     box, at the end of the line that already shows its modality chips. */
+  .hit .hm .chipin { font-size:11px; padding:1px 7px; }
 
   .paintbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
   .pblabel { color:var(--muted); font-size:12px; }
@@ -190,7 +193,14 @@
   :root[data-fold] .row > .c:nth-child(1), :root[data-fold] .colhead > div:nth-child(1) { left:0; }
   :root[data-fold] .row > .c:nth-child(2), :root[data-fold] .colhead > div:nth-child(2) { left:52px; }
   #board.dropinto { box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
-  .row { border-bottom:1px solid var(--line); background:var(--row); }
+  /* `contain` : nothing in a row draws outside it, and saying so lets the
+     browser treat each row as its own box -- a row deleted, moved or selected
+     no longer has it re-checking every row below. Every row is still drawn ;
+     this is not lazy rendering. Layout only, NOT paint : Chrome rounds a
+     paint-contained row's position and its height separately, so whenever the
+     fractions line up wrong the next row starts 1px early and paints over this
+     row's bottom border -- about one boundary in four lost its line. */
+  .row { border-bottom:1px solid var(--line); background:var(--row); contain:layout; }
   .row:last-child { border-bottom:none; }
   .row:hover { background:var(--panel2); }
   .row.dragging { opacity:.4; }
@@ -716,7 +726,21 @@ function reskin(c){
 const TAGFG = "#20242c";
 const isHex = c => /^#[0-9a-f]{6}$/i.test(String(c||""));
 function hashIdx(s){ let h = 0; for(let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0; return h % PALETTE.length; }
-function vocabEntry(name){ return (DOC.vocab.tags||[]).find(t=>lc(t.name)===lc(name)); }
+// A redraw paints a few thousand chips, and walking the vocabulary for each one
+// was most of what a redraw cost. So a redraw builds this name -> entry map once
+// ( withVocab ) and drops it after : held any longer it would miss a colour
+// changed in place, and outside a redraw the walk is cheap enough.
+let VOCABMAP = null;
+function vocabEntry(name){
+  if(VOCABMAP) return VOCABMAP.get(lc(name));
+  return (DOC.vocab.tags||[]).find(t=>lc(t.name)===lc(name));
+}
+function withVocab(fn){
+  if(VOCABMAP) return fn();
+  VOCABMAP = new Map();
+  (DOC.vocab.tags||[]).forEach(t=>{ const k = lc(t.name); if(!VOCABMAP.has(k)) VOCABMAP.set(k, t); });
+  try { return fn(); } finally { VOCABMAP = null; }
+}
 function colorOf(name){
   const e = vocabEntry(name);
   return (e && isHex(e.color)) ? reskin(e.color) : PALETTE[hashIdx(lc(name))];
@@ -734,6 +758,13 @@ function sortTags(it){ if(it && it.tags) it.tags.sort(byName); }
 function findItem(key){
   const i = DOC.items.findIndex(x=>x.key===key);
   return i<0 ? null : { idx:i, it:DOC.items[i] };
+}
+// key -> item for a pass over every row : findItem per row is a walk of the
+// list per row, which on a thousand-row board is a million steps.
+function itemMap(){
+  const m = new Map();
+  DOC.items.forEach(it=>{ if(!m.has(it.key)) m.set(it.key, it); });   // findItem's first match
+  return m;
 }
 // Every tag the chips offer : the document's own tag list ( which is what makes
 // an invented tag survive a restart ), the modality vocabulary, and anything
@@ -1299,11 +1330,10 @@ async function fetchCites(){
 // Only the citation strips, the same way repaintLinks only touches the link
 // ones : a batch of sixty lands while you are typing in a note three rows down.
 function repaintCites(){
+  const items = itemMap();
   $$(".row").forEach(row=>{
-    const f = findItem(row.dataset.key);
-    if(!f) return;
-    const el = row.querySelector("[data-cite]");
-    if(el) el.innerHTML = citeHtml(f.it);
+    const it = items.get(row.dataset.key);
+    if(it) patchParts(row, it, { cite: citeHtml(it) });
   });
 }
 
@@ -1330,8 +1360,8 @@ function labelFold(){
     ` — ${f.map(c=>c.label).join(" · ")}`+
     (SHOWFOLD ? "" : " ( the board scrolls sideways while they're out )");
   b.classList.toggle("on", SHOWFOLD && f.length > 0);
-  if(SHOWFOLD && f.length) document.documentElement.dataset.fold = "1";
-  else delete document.documentElement.dataset.fold;
+  const fold = SHOWFOLD && f.length > 0, root = document.documentElement;
+  if(fold !== ("fold" in root.dataset)){ if(fold) root.dataset.fold = "1"; else delete root.dataset.fold; }
 }
 $("#foldbtn").addEventListener("click", ()=>{
   SHOWFOLD = !SHOWFOLD;
@@ -1366,9 +1396,10 @@ function gridTemplate(){
     .concat(LOCKED ? [] : [[54]]));
 }
 function renderColHead(){
-  const g = gridTemplate();
-  document.documentElement.style.setProperty("--grid", g.css);
-  document.documentElement.style.setProperty("--gridmin", g.min + "px");
+  const g = gridTemplate(), root = document.documentElement.style;
+  // Only when they change : every row's layout hangs off these two.
+  if(root.getPropertyValue("--grid") !== g.css) root.setProperty("--grid", g.css);
+  if(root.getPropertyValue("--gridmin") !== g.min + "px") root.setProperty("--gridmin", g.min + "px");
   $("#colhead").innerHTML = `<div style="text-align:right">#</div><div>Paper</div><div>Tags</div>`+
     shownCols().map(c=>`<div class="colname" data-col="${esc(c.id)}" title="Double-click to rename · shift-click to delete">${esc(c.label)}</div>`).join("")+
     (LOCKED?"":`<div></div>`);
@@ -1470,23 +1501,34 @@ function labelView(){
   else delete document.documentElement.dataset.view;
 }
 
-function rowHtml(it, n){
+// A row is drawn in two layers. The PARTS -- the citation line, the link strip
+// and the "not in library" badge -- come from /api/cite and /api/paper-meta,
+// which answer after the board is up, so they are patched into the row in place
+// when they land ( patchParts ). The rest is the row's SKELETON : rowHtml with
+// no parts. The number and the selection go on afterwards too ( renderBoard ),
+// so that renumbering the list doesn't make every row look changed.
+const NOPARTS = { cite:"", links:"", loose:"" };
+function rowParts(it){
+  const m = META[it.key] || {};
+  return { cite: citeHtml(it), links: rowLinks(it),
+           loose: (m.in_library === false) ? looseBadge(it) : "" };
+}
+function rowHtml(it, p){
   const m = META[it.key] || {};
   const title = it.title || m.title || it.key;
   const year  = it.year || m.year || "";
   const inner = esc(title);          // plain text -- open it from the link strip
-  const loose = (m.in_library === false) ? " " + looseBadge(it) : "";
-  return `<div class="row${SEL.has(it.key)?" selected":""}" data-key="${esc(it.key)}">`+
+  return `<div class="row" data-key="${esc(it.key)}">`+
     `<div class="c numc">`+
-      `<input class="numin" value="${n}" title="Where this paper sits in YOUR order — type a number and press ↵ to send it there, from any view" `+
+      `<input class="numin" title="Where this paper sits in YOUR order — type a number and press ↵ to send it there, from any view" `+
         `inputmode="numeric" autocomplete="off"${RO()}>`+
       `<span class="anchormark" title="The anchor — ⤓ To anchor brings you back here">⚓</span>`+
       `<span class="grip" title="Drag to move it up or down">⠿</span></div>`+
     `<div class="c titlec">`+
-      `<div class="tt">${inner}${loose}</div>`+
+      `<div class="tt">${inner}${p.loose ? " " + p.loose : ""}</div>`+
       `<div class="meta">${year?esc(year):""}${it.journal?" · "+esc(it.journal):""}<span class="mkey"> · ${esc(it.key)}</span></div>`+
-      `<div class="cite" data-cite="1">${citeHtml(it)}</div>`+
-      `<div class="links" data-links="1">${rowLinks(it)}</div>`+
+      `<div class="cite" data-cite="1">${p.cite}</div>`+
+      `<div class="links" data-links="1">${p.links}</div>`+
     `</div>`+
     `<div class="c" data-cell="tags">${tagsCell(it)}</div>`+
     shownCols().map(c=>`<div class="c notecell">${cellHtml(it, c)}</div>`).join("")+
@@ -1495,8 +1537,46 @@ function rowHtml(it, n){
     `</div>`)+
   `</div>`;
 }
-// A full redraw keeps whatever you were typing in : the caret is restored to the
-// same field afterwards, so a re-render never eats a word of a note.
+// Bring a drawn row's parts up to `p` ( all of them, or only those named ),
+// touching only the ones that changed. row._p is what the row shows now.
+function patchParts(row, it, p){
+  const was = row._p || (row._p = Object.assign({}, NOPARTS));
+  if("cite" in p && p.cite !== was.cite){
+    const el = row.querySelector("[data-cite]");
+    if(el) el.innerHTML = p.cite;
+    was.cite = p.cite;
+  }
+  if("links" in p && p.links !== was.links){
+    const el = row.querySelector("[data-links]");
+    if(el) el.innerHTML = p.links;
+    was.links = p.links;
+  }
+  // Redrawn rather than only ever added : a paper the index has caught up
+  // with loses its badge, and a placeholder's reads "processing". The space
+  // before the badge shares a text node with the title, so only that one
+  // character goes with it.
+  if("loose" in p && p.loose !== was.loose){
+    const old = row.querySelector(".tt .loose");
+    if(p.loose){
+      if(old) old.outerHTML = p.loose;
+      else row.querySelector(".tt").insertAdjacentHTML("beforeend", " " + p.loose);
+    } else if(old){
+      const prev = old.previousSibling;
+      if(prev && prev.nodeType === 3) prev.textContent = prev.textContent.replace(/ $/, "");
+      old.remove();
+    }
+    was.loose = p.loose;
+  }
+}
+// A redraw keeps every row whose skeleton hasn't changed -- the same element,
+// left where it is -- builds new ones only for the rows that did, and moves the
+// fewest it can. Rebuilding all of them took a second on a thousand-row board
+// ( four textareas a row ), and it ran on every delete, undo, redo and
+// renumber ; now those touch the rows they changed.
+//
+// And it keeps whatever you were typing in : a row that is kept keeps its
+// caret, and one that had to be rebuilt gets it back in the same field, so a
+// re-render never eats a word of a note.
 function renderBoard(){
   const a = document.activeElement;
   let focus = null;
@@ -1507,12 +1587,11 @@ function renderBoard(){
               num:  a.classList.contains("numin"),
               start: a.selectionStart, end: a.selectionEnd, val: a.value };
   }
-  const no = manualNo();
-  $("#board").innerHTML = DOC.items.length
-    ? viewItems().map(it=>rowHtml(it, no.get(it.key))).join("")
-    : `<div class="empty">Nothing here yet — search above and press ↵ ( or double-click a hit ) to add papers.</div>`;
+  const board = $("#board");
+  if(DOC.items.length) withVocab(()=>drawRows(board));
+  else board.innerHTML = `<div class="empty">Nothing here yet — search above and press ↵ ( or double-click a hit ) to add papers.</div>`;
   applyFilter();
-  if(focus){
+  if(focus && document.activeElement !== a){
     const row = rowEl(focus.key);
     if(row){
       const el = focus.chip ? row.querySelector(".chipin")
@@ -1526,6 +1605,49 @@ function renderBoard(){
     }
   }
 }
+function drawRows(board){
+  const view = viewItems(), no = manualNo();
+  const had = new Map();
+  for(const el of board.children) if(el._sig !== undefined) had.set(el.dataset.key, el);
+  const els = new Array(view.length), fresh = [];
+  view.forEach((it, i)=>{
+    const sig = rowHtml(it, NOPARTS), p = rowParts(it), el = had.get(it.key);
+    if(el && el._sig === sig){ had.delete(it.key); patchParts(el, it, p); els[i] = el; }
+    else fresh.push({ i, sig, p, html: rowHtml(it, p) });
+  });
+  if(fresh.length){
+    // One parse for every new row, as the whole board used to be. `made` is
+    // live, so every row is read out of it before the first one is moved.
+    const t = document.createElement("template");
+    t.innerHTML = fresh.map(f=>f.html).join("");
+    const made = t.content.children;
+    fresh.forEach((f, j)=>{ const el = made[j]; el._sig = f.sig; el._p = f.p; els[f.i] = el; });
+  }
+  // Walk the board and the new order together. A row in the way that is going
+  // nowhere is dropped ; one that is in the way only because it moved further
+  // down is stepped over -- it is put back when its turn comes -- so a row
+  // dragged down the list is one move, not one for every row it passed.
+  const keep = new Set(els);
+  let at = board.firstElementChild;
+  const drop = ()=>{ const nx = at.nextElementSibling; at.remove(); at = nx; };
+  for(const el of els){
+    while(at && !keep.has(at)) drop();
+    if(at === el){ at = at.nextElementSibling; continue; }
+    if(at && at.nextElementSibling === el){ at = el.nextElementSibling; continue; }
+    board.insertBefore(el, at);
+  }
+  while(at) drop();
+  els.forEach((el, i)=>{
+    const it = view[i], n = String(no.get(it.key));
+    const box = el._num || (el._num = el.querySelector(".numin"));
+    if(box && box.value !== n) box.value = n;
+    el.classList.toggle("selected", SEL.has(it.key));
+  });
+}
+// A row that flashed keeps no trace of it, so a kept row can flash again.
+$("#board").addEventListener("animationend", e=>{
+  if(e.animationName === "flash") e.target.classList.remove("flash");
+});
 function renderCounts(){
   const n = DOC.items.length;
   const tagged = DOC.items.filter(it=>(it.tags||[]).length).length;
@@ -1547,13 +1669,21 @@ function renderCounts(){
 // after each redraw ; rewriting them as markup every time would throw those
 // listeners away, and would empty the + new tag box mid-word.
 const PBCTL = $("#pbctl");
+// How many of `list` carry each tag, by lowercased name -- one pass, where a
+// count per chip was a pass over the board per tag.
+function tagTally(list){
+  const n = new Map();
+  list.forEach(it=>new Set((it.tags||[]).map(lc)).forEach(t=>n.set(t, (n.get(t)||0) + 1)));
+  return n;
+}
 function renderPaintbar(){
   const sel = filtering ? [] : selectedItems();
-  $("#tagchips").innerHTML = tagOptions().map(v=>{
-    const n   = DOC.items.filter(it=>hasTag(it,v)).length;
+  const all = tagTally(DOC.items), mine = tagTally(sel);
+  $("#tagchips").innerHTML = withVocab(()=>tagOptions().map(v=>{
+    const n   = all.get(lc(v)) || 0, k = mine.get(lc(v)) || 0;
     const inF = filtering && TAGF.has(v);
-    const on  = sel.length && sel.every(it=>hasTag(it,v));
-    const som = !on && sel.some(it=>hasTag(it,v));
+    const on  = sel.length && k === sel.length;
+    const som = !on && k > 0;
     const how = filtering  ? (filterMode === "none"
                 ? `${inF?"hiding":"not hiding"} the papers tagged it — click to ${inF?"show them again":"hide them"} ( ${n} paper(s) )`
                 : `${inF?"in":"not in"} the filter — click to ${inF?"drop":"add"} it ( ${n} paper(s) )`)
@@ -1562,7 +1692,7 @@ function renderPaintbar(){
     return `<span class="chip ${(inF||armed===v||on)?'on':som?'half':''}" ${chipStyle(v)} draggable="true" `+
       `data-val="${esc(v)}" title="${esc(how)} — drag it to move it along the bar">${esc(v)}<span class="n">${n||""}</span>`+
       `<span class="x" data-deltag="${esc(v)}" title="Delete this tag everywhere">×</span></span>`;
-  }).join("");
+  }).join(""));
   $("#tagchips").appendChild(PBCTL);
   renderAnchor();   // every selection change comes through here
   renderCopyTo();   // ... and so does ⇢ Copy to list, which only a selection has
@@ -1570,7 +1700,9 @@ function renderPaintbar(){
 }
 const hasTag = (it,v) => (it.tags||[]).some(t=>lc(t)===lc(v));
 function selectedItems(){
-  return Array.from(SEL).map(k=>findItem(k)).filter(Boolean).map(f=>f.it);
+  if(!SEL.size) return [];
+  const items = itemMap();
+  return Array.from(SEL).map(k=>items.get(k)).filter(Boolean);
 }
 // Click a row to select it ( ⌘ / ctrl adds one, shift takes the range ). A plain
 // click on the only selected row deselects it again.
@@ -1631,25 +1763,13 @@ function looseBadge(it){
     : `<span class="loose" title="Not matched to a paper in your library — links other than the DOI are unavailable">not in library</span>`;
 }
 function repaintLinks(){
+  const items = itemMap();
   $$(".row").forEach(row=>{
-    const f = findItem(row.dataset.key);
-    if(!f) return;
-    const el = row.querySelector('[data-links]');
-    if(el) el.innerHTML = rowLinks(f.it);
-    const m = META[f.it.key];
-    // Redrawn rather than only ever added : a paper the index has caught up
-    // with loses its badge, and a placeholder's reads "processing". The space
-    // before the badge shares a text node with the title, so only that one
-    // character goes with it.
-    const old = row.querySelector(".tt .loose");
-    if(m && m.in_library === false){
-      if(old) old.outerHTML = looseBadge(f.it);
-      else row.querySelector(".tt").insertAdjacentHTML("beforeend", " " + looseBadge(f.it));
-    } else if(old && m){
-      const prev = old.previousSibling;
-      if(prev && prev.nodeType === 3) prev.textContent = prev.textContent.replace(/ $/, "");
-      old.remove();
-    }
+    const it = items.get(row.dataset.key);
+    if(!it) return;
+    const p = rowParts(it);
+    // A paper meta hasn't answered for keeps the badge it has.
+    patchParts(row, it, META[it.key] ? { links: p.links, loose: p.loose } : { links: p.links });
   });
   // The shelf's rows hang off the same meta ( "in library", and which links
   // exist ), and it lands after they're first drawn. Only those two strips are
@@ -1665,6 +1785,10 @@ function repaintLinks(){
 }
 function cssEsc(s){ return String(s).replace(/["\\]/g, "\\$&"); }
 function rowEl(key){ return document.querySelector(`.row[data-key="${cssEsc(key)}"]`); }
+// A row changed in place no longer shows the skeleton it was drawn from, so the
+// next redraw must rebuild it rather than keep it. Kept, it would go on showing
+// the tag or the note an undo had just taken back out.
+function unstamp(row){ if(row) row._sig = null; }
 // Only the one row's tag cell -- so tagging never disturbs anything else on the
 // page ( and never moves the row, unless Auto-move is on ).
 function refreshTags(key){
@@ -1672,6 +1796,7 @@ function refreshTags(key){
   if(!f || !row) return;
   const cell = row.querySelector('[data-cell="tags"]');
   if(cell) cell.innerHTML = tagsCell(f.it);
+  unstamp(row);
 }
 function toast(msg, ms, undoLabel, onUndo){
   const t = $("#toast");
@@ -2116,6 +2241,7 @@ document.addEventListener("focusout", e=>{ if(isCell(e.target)) e.target.parentE
 function syncCellLink(ta){
   const box = ta.parentElement;
   if(!box || !box.classList.contains("cellbox")) return;
+  unstamp(box.closest(".row"));
   const want = hasLink(ta.value);
   let lnk = box.querySelector(".lnk");
   box.classList.toggle("linked", want);
@@ -2211,47 +2337,60 @@ function prefill(it, m){
 // has no box ; its text is there when you unfold it.
 function refreshFields(it, ids){
   const row = rowEl(it.key);
+  unstamp(row);
   ids.forEach(id=>{
     const ta = row && row.querySelector(`textarea[data-field="${cssEsc(id)}"]`);
     if(ta){ ta.value = it.fields[id]; syncCellLink(ta); }   // Code / Datasets arrive as links
   });
 }
-// `at` is where a hit dragged into the list was dropped ; without it the paper
-// lands wherever the "add to…" dropdown says, and the page scrolls to it.
-async function addPaper(hit, at){
+// Papers from the hits list onto the board, in the order given, side by side
+// from `at` -- where they were dropped -- or, without it, from wherever the
+// "add to…" dropdown says. One board redraw and one metadata lookup however
+// many there are. The page stays where it is : each row flashes where it
+// landed, and its hit says ✓ #n, so a run of adds is a run of clicks rather
+// than a scroll down to every new row and back up to the list.
+async function addPapers(list, at){
   if(guard()) return;
-  if(findItem(hit.key)){ toast("Already on the board"); return; }
-  const it = newItem(hit);
-  const m  = META[hit.key];
-  if(m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); }  // pre-tagged from the Methods stamp
-  prefill(it, m);
-  DOC.items.splice(at == null ? insertIndex() : Math.min(at, DOC.items.length), 0, it);
+  const fresh = onePerKey(list).filter(h=>!findItem(h.key));
+  if(!fresh.length){ toast(list.length === 1 ? "Already on the board" : "Those are all on the board already"); return; }
+  let i = at == null ? insertIndex() : Math.min(at, DOC.items.length);
+  const added = fresh.map(hit=>{
+    const it = newItem(hit);
+    const m  = META[hit.key];
+    if(m && m.mods && m.mods.length){ it.tags = m.mods.slice(); sortTags(it); }  // pre-tagged from the Methods stamp
+    // And the tags typed beside its ＋ Add ( TAGSAT ) -- on top of those, never
+    // instead of them : the same row as adding it and then tagging it.
+    const own = preTags(hit.key);
+    own.forEach(v=>addTag(it, v));
+    TAGSAT.delete(hit.key); POSAT.delete(hit.key);
+    prefill(it, m);
+    DOC.items.splice(i++, 0, it);
+    return { hit, it, own };
+  });
   markDirty(); renderBoard(); renderCounts(); renderPaintbar();
-  const el = rowEl(it.key);
-  if(el){
-    el.classList.add("flash");
-    if(at == null){
-      // Added from the search box and landing out of sight : the search comes
-      // along to where the paper lands ( see floatTools ), so the next one is a
-      // keystroke away -- and dropping it now, before the scroll, is what lets
-      // the scroll land the row below it.
-      const r = el.getBoundingClientRect();
-      if(document.activeElement === $("#q") && (r.top < 0 || r.bottom > innerHeight)) floatTools(true);
-      el.scrollIntoView({ block:"center", behavior:"smooth" });
+  added.forEach(({ it })=>{ const el = rowEl(it.key); if(el) el.classList.add("flash"); });
+  if(hits.length) renderResults();
+  const got = await fetchMeta(added.map(a=>a.it.key), true);
+  let changed = false, pending = false;
+  added.forEach(({ hit, it, own })=>{
+    if(!findItem(it.key)) return;            // taken off again while the lookup ran
+    const gm = got[it.key];
+    // Nothing on it yet but what you typed beside ＋ Add : the modality tags it
+    // would have arrived with still belong.
+    if(gm && gm.mods && gm.mods.length && it.tags.every(v=>own.some(o=>lc(o)===lc(v)))){
+      gm.mods.forEach(v=>{ if(!it.tags.some(x=>lc(x)===lc(v))) it.tags.push(v); });
+      sortTags(it); refreshTags(it.key); changed = true;
     }
-  }
-  const got = await fetchMeta([it.key], true);
-  const gm = got[it.key];
-  if(gm && !it.tags.length && gm.mods && gm.mods.length){
-    it.tags = gm.mods.slice(); sortTags(it); markDirty(); refreshTags(it.key); renderPaintbar(); renderCounts();
-  }
-  const wrote = prefill(it, gm);
-  if(wrote.length){ markDirty(); refreshFields(it, wrote); }
-  // Straight out of Recently added ( those hits carry `added` ) and nothing has
-  // processed it yet : a placeholder, filled in by backfillPending once the
-  // pipeline has run it. A search hit that isn't in the library is left alone --
-  // it may never be.
-  if("added" in hit && gm && gm.in_library === false){ it.pending = true; markDirty(); repaintLinks(); }
+    const wrote = prefill(it, gm);
+    if(wrote.length){ refreshFields(it, wrote); changed = true; }
+    // Straight out of Recently added ( those hits carry `added` ) and nothing has
+    // processed it yet : a placeholder, filled in by backfillPending once the
+    // pipeline has run it. A search hit that isn't in the library is left alone --
+    // it may never be.
+    if("added" in hit && gm && gm.in_library === false){ it.pending = true; changed = pending = true; }
+  });
+  if(changed){ markDirty(); renderPaintbar(); renderCounts(); }
+  if(pending) repaintLinks();
   if(hits.length) renderResults();
 }
 // The placeholders ( it.pending ) get what addPaper would have given them had
@@ -2416,17 +2555,38 @@ async function runSearch(){
     $("#results").classList.add("show");
     return;
   }
-  hits = d.results || []; hitIdx = 0; hitTotal = d.total; hitFuzzy = !!d.fuzzy;
+  hits = d.results || []; pickOnly(0); hitTotal = d.total; hitFuzzy = !!d.fuzzy;
   hitMode = d.mode || mode;
   renderResults();
   fetchMeta(hits.map(h=>h.key), true).then(()=>renderResults());
 }
-// Where a recently-added paper should land, typed in the list beside the button
-// that adds it -- the number you would otherwise have had to go and type into
-// the row after it arrived. Kept per paper rather than in the DOM : the list
-// redraws itself whenever the metadata lands or the poll finds a newer paper,
-// and a redraw must not take back what you typed.
+// Where a hit should land -- a search hit or a recently-added paper -- typed in
+// the list beside the button that adds it : the number you would otherwise have
+// had to go and type into the row after it arrived. Kept per paper rather than
+// in the DOM : the list redraws itself whenever the metadata lands or the poll
+// finds a newer paper, and a redraw must not take back what you typed.
 const POSAT = new Map();
+// The tags it should arrive with, typed the same way : kept per paper, put on
+// by addPaper alongside the modality tags it would have got anyway. Never the
+// document's tag list until the paper is really added -- a tag typed against a
+// hit you then don't add mustn't turn up in the chip bar.
+const TAGSAT = new Map();
+function preTags(key){ return TAGSAT.get(key) || []; }
+function preTag(key, v){
+  const have = preTags(key);
+  if(have.some(x=>lc(x)===lc(v))) return;
+  TAGSAT.set(key, have.concat(v).sort(byName));
+}
+function unPreTag(key, v){
+  const left = preTags(key).filter(x=>lc(x)!==lc(v));
+  if(left.length) TAGSAT.set(key, left); else TAGSAT.delete(key);
+}
+function preTagsHtml(h, i){
+  return preTags(h.key).map(v=>`<span class="chip" ${chipStyle(v)}>${esc(v)}`+
+      `<span class="x" data-unpre="${esc(v)}" title="Don't add this tag">×</span></span>`).join("")+
+    `<input class="chipin" data-i="${i}" placeholder="+ tag" autocomplete="off" draggable="false"`+
+    ` title="Tags it arrives with, on top of the modality tags shown here — ↵ adds one ( to every picked hit, when this is one of several ) ; ↵ on an empty box adds the paper">`;
+}
 // Empty is the original ＋ Add : the paper goes where "add to …" says. A number
 // is a position in YOUR order, counted the way the row numbers and the ✓ #n
 // here count it -- 1 is the top, anything past the end is the bottom.
@@ -2437,8 +2597,7 @@ function posBox(h, i){
 }
 function renderResults(){
   if(!hits.length){
-    $("#results").innerHTML = hitMode === "recent"
-      ? `<div class="rhint">${esc(recentNote || "Nothing has been added to your library yet.")}</div>`
+    $("#results").innerHTML = hitMode === "recent" ? recentEmpty()
       : `<div class="rhint">Nothing close to that${hitMode==="title"?" in any title":""}.</div>`;
     $("#results").classList.add("show");
     return;
@@ -2447,33 +2606,46 @@ function renderResults(){
     : hitFuzzy
     ? `<div class="rhint" style="color:var(--warn)">Nothing came close — these are the least-far-off titles</div>`
     : hitMode === "title"
-      ? `<div class="rhint">${hits.length} closest title${hits.length===1?"":"s"} · ↵ or double-click adds ( tagged, Code + Datasets filled in ) · or drag a hit into the list</div>`
-      : `<div class="rhint">${hits.length} of ${hitTotal} · best match first · ↵ or double-click adds · or drag a hit into the list</div>`;
-  // A number typed against a paper that has since dropped out of the list ( the
-  // window moved, or you asked for a different "show 25" ) is not waiting for it
-  // to come back.
-  if(hitMode === "recent"){
-    const live = new Set(hits.map(h=>h.key));
-    POSAT.forEach((v,k)=>{ if(!live.has(k)) POSAT.delete(k); });
-  }
+      ? `<div class="rhint">${hits.length} closest title${hits.length===1?"":"s"} · ↵ or double-click adds ( tagged, Code + Datasets filled in ) · ⇧ / ⌘-click picks several · or drag a hit into the list</div>`
+      : `<div class="rhint">${hits.length} of ${hitTotal} · best match first · ↵ or double-click adds · ⇧ / ⌘-click picks several · or drag a hit into the list</div>`;
+  // A number or tags typed against a paper that has since dropped out of the
+  // list ( the query changed, the window moved, or you asked for a longer one )
+  // are not waiting for it to come back.
+  const live = new Set(hits.map(h=>h.key));
+  POSAT.forEach((v,k)=>{ if(!live.has(k)) POSAT.delete(k); });
+  TAGSAT.forEach((v,k)=>{ if(!live.has(k)) TAGSAT.delete(k); });
+  HSEL.forEach(k=>{ if(!live.has(k)) HSEL.delete(k); });
+  // The list redraws under you ( the metadata landing, the poll finding a newer
+  // paper, the tag you just typed ) : the box you were typing in comes back
+  // focused, with whatever was half-typed in it.
+  const fa = document.activeElement;
+  const fhit = fa && fa.closest && fa.closest("#results .hit");
+  const keep = fhit && (fa.matches(".at") ? ".at" : fa.matches(".chipin") ? ".chipin" : null);
+  const keepKey = keep && fhit.dataset.k, keepVal = keep && fa.value;
   $("#results").innerHTML = hint+
     hits.map((h,i)=>{
       const f = findItem(h.key);
       const m = META[h.key] || {};
       const mods = (m.mods||[]).map(v=>`<span class="chip" ${chipStyle(v)}>${esc(v)}</span>`).join(" ");
-      return `<div class="hit ${i===hitIdx?'sel':''}" data-i="${i}" draggable="true">`+
+      return `<div class="hit ${HSEL.has(h.key)?'sel':''}" data-i="${i}" data-k="${esc(h.key)}" draggable="true">`+
         `<div style="flex:1;min-width:0">`+
           `<div class="ht">${esc(h.title||h.key)}</div>`+
           `<div class="hm">${h.year?esc(h.year):""}${h.journal?" · "+esc(h.journal):""}`+
             `${h.cited_by!=null?` · ${h.cited_by} cites`:""}`+
-            `${hitMode==="recent"?recentBadges(h):""} ${mods}</div>`+
+            `${hitMode==="recent"?recentBadges(h):""} ${mods}${f ? "" : preTagsHtml(h, i)}</div>`+
         `</div>`+
         (f ? `<div class="in">✓ #${f.idx+1}</div>`
-           : `<div class="acts">${hitMode==="recent" ? posBox(h,i) : ""}`+
+           : `<div class="acts">${posBox(h,i)}`+
              `<button class="add" data-i="${i}">＋ Add</button></div>`)+
       `</div>`;
     }).join("");
   $("#results").classList.add("show");
+  paintHits();
+  if(keep){
+    const el = $$("#results .hit").find(x=>x.dataset.k === keepKey);
+    const box = el && el.querySelector(keep);
+    if(box){ box.value = keepVal; box.focus(); box.setSelectionRange(keepVal.length, keepVal.length); }
+  }
 }
 
 // ---- recently added -------------------------------------------------------
@@ -2491,10 +2663,34 @@ function renderResults(){
 // The hits go into the SAME `hits` array the search fills, so ＋ Add, ↵,
 // double-click, dragging a hit into the list and the arrow keys are all the
 // ones that were already there.
-const RECENT_KEY = "prma-sort-recent-n";
-const RECENT_NS  = [ 10, 25, 50 ];
-let recentN = 10, recentNote = "", recentBusy = false;
-try { recentN = Math.max(1, +localStorage.getItem(RECENT_KEY) || 10); } catch(e){}
+//
+// It is a WINDOW, not a count : everything added in the past week ( or two, or
+// a month ) that isn't on this list yet -- the papers you saved and haven't got
+// round to, however many days of saving that was. One already on the list is
+// left out ; one you add while it's open stays, as ✓ #n, until it's reopened.
+const RECENT_KEY   = "prma-sort-recent-days";
+const RECENT_SPANS = [ [7, "past week"], [14, "past 2 weeks"], [30, "past month"] ];
+const RECENT_CAP   = 200;    // the server's ceiling on one read
+let recentDays = 7, recentAll = 0, recentNote = "", recentBusy = false;
+try {
+  const d = +localStorage.getItem(RECENT_KEY);
+  if(RECENT_SPANS.some(([n])=>n===d)) recentDays = d;
+} catch(e){}
+const recentSpan = () => (RECENT_SPANS.find(([n])=>n===recentDays) || RECENT_SPANS[0])[1];
+const recentUrl  = () => `/api/recent?days=${recentDays}&limit=${RECENT_CAP}`;
+// The rows worth offering out of a read : not on this list -- or among `shown`,
+// the ones already up, so the one you just added keeps its ✓ #n there.
+function recentRows(rows, shown){
+  const keep = new Set((shown||[]).map(h=>h.key));
+  return rows.filter(h=>!findItem(h.key) || keep.has(h.key));
+}
+// One row per paper : the same DOI saved into Zotero twice is two items there
+// but one paper here, and two hits for it would be two rows on the board. The
+// newest is the one kept.
+function onePerKey(rows){
+  const seen = new Set();
+  return rows.filter(h=>!seen.has(h.key) && seen.add(h.key));
+}
 
 // "added 2h ago" — how recent a thing is, which is the only part of an added
 // stamp anyone reads here. The server sends UTC without a zone ( SQLite's
@@ -2523,11 +2719,24 @@ function recentBadges(h){
     ? `<span class="nyet" title="prma hasn't processed this paper yet. Add it anyway : it comes in marked ⏳ processing, and its tags and Code / Datasets cells fill themselves in once the live server ( \` prma \` ) has run it — or after \` prma process \` + \` prma reindex \` if the server runs without --watch.">not indexed yet</span>` : "";
   return (when ? ` · ${esc(when)}` : "") + raw;
 }
+function recentMore(){
+  return "show " + RECENT_SPANS.filter(([n])=>n!==recentDays)
+    .map(([n,l])=>`<a href="#" data-recent-days="${n}">${l}</a>`).join(" · ");
+}
 function recentHint(){
-  const more = RECENT_NS.filter(n=>n!==recentN)
-    .map(n=>`<a href="#" data-recent-n="${n}">${n}</a>`).join(" · ");
-  return `<div class="rhint">last ${hits.length} added to your library · ↵ or double-click adds · `+
-    `type a # beside ＋ Add to send it to that spot · or drag one into the list &nbsp;&nbsp;show ${more}</div>`;
+  const left = hits.filter(h=>!findItem(h.key)).length, on = recentAll - left;
+  return `<div class="rhint">${left} added in the ${recentSpan()} not on this list yet`+
+    `${on > 0 ? ` ( ${on} already on it )` : ""}${recentAll >= RECENT_CAP ? ` · the newest ${RECENT_CAP} only` : ""}`+
+    ` · ↵ or double-click adds · ⇧ / ⌘-click picks several · type tags or a # beside ＋ Add first · or drag one into the list`+
+    ` &nbsp;&nbsp;${recentMore()}</div>`;
+}
+// Nothing to offer : say why, and keep the way to look further back.
+function recentEmpty(){
+  if(recentNote) return `<div class="rhint">${esc(recentNote)}</div>`;
+  const why = recentAll
+    ? `All ${recentAll} paper${recentAll===1?"":"s"} added in the ${recentSpan()} ${recentAll===1?"is":"are"} on this list already.`
+    : `Nothing has been added to your library in the ${recentSpan()}.`;
+  return `<div class="rhint">${why} &nbsp;&nbsp;${recentMore()}</div>`;
 }
 async function showRecent(){
   if(recentBusy) return;
@@ -2535,10 +2744,11 @@ async function showRecent(){
   const b = $("#recentbtn"), label = b.textContent;
   b.textContent = "🆕 …";
   let d;
-  try { d = await (await fetch(`/api/recent?limit=${recentN}`)).json(); }
+  try { d = await (await fetch(recentUrl())).json(); }
   catch(e){ d = { results: [], note: "Couldn't reach the server." }; }
   finally { recentBusy = false; b.textContent = label; }
-  hits = d.results || []; hitIdx = 0; hitTotal = hits.length;
+  const rows = onePerKey(d.results || []);
+  hits = recentRows(rows); pickOnly(0); hitTotal = hits.length; recentAll = rows.length;
   hitFuzzy = false; hitMode = "recent"; recentNote = d.note || "";
   renderResults();
   // The stamp and the links a row would be filled in from -- and, for a paper
@@ -2557,14 +2767,16 @@ function recentOpen(){ return hitMode === "recent" && $("#results").classList.co
 async function refreshRecent(){
   if(recentBusy) return;
   let d;
-  try { d = await (await fetch(`/api/recent?limit=${recentN}`)).json(); } catch(e){ return; }
-  const rows = (d && d.results) || [];
-  if(!recentOpen() || recentBusy || (!rows.length && d.note)) return;
+  try { d = await (await fetch(recentUrl())).json(); } catch(e){ return; }
+  const all = onePerKey((d && d.results) || []);
+  if(!recentOpen() || recentBusy || (!all.length && d.note)) return;
+  const rows = recentRows(all, hits);
   const sig = list => list.map(h=>h.key).join("\n");
-  if(sig(rows) === sig(hits)) return;
+  if(sig(rows) === sig(hits) && all.length === recentAll) return;
   const cur = hits[hitIdx] && hits[hitIdx].key;
-  hits = rows; hitTotal = rows.length; recentNote = d.note || "";
+  hits = rows; hitTotal = rows.length; recentAll = all.length; recentNote = d.note || "";
   hitIdx = Math.max(0, hits.findIndex(h=>h.key === cur));
+  if(!pickedHits().length) pickOnly(hitIdx);
   renderResults();
   fetchMeta(hits.map(h=>h.key), true).then(()=>{ if(recentOpen()) renderResults(); });
 }
@@ -2573,32 +2785,92 @@ $("#recentbtn").addEventListener("click", ()=>{
   if(recentOpen()){ closeResults(); return; }
   showRecent();
 });
-// "show 25 · 50" in the panel's own hint line, rather than another select in a
-// row that is already full. The choice is this browser's, like the search mode.
+// "show past 2 weeks · past month" in the panel's own hint line, rather than
+// another select in a row that is already full. The choice is this browser's,
+// like the search mode.
 $("#results").addEventListener("click", e=>{
-  const a = e.target.closest("[data-recent-n]");
+  const a = e.target.closest("[data-recent-days]");
   if(!a) return;
   e.preventDefault();
-  recentN = +a.dataset.recentN;
-  try { localStorage.setItem(RECENT_KEY, String(recentN)); } catch(e){}
+  recentDays = +a.dataset.recentDays;
+  try { localStorage.setItem(RECENT_KEY, String(recentDays)); } catch(e){}
   showRecent();
 });
-function closeResults(){ $("#results").classList.remove("show"); hits = []; }
-function moveHit(delta){
+function closeResults(){ $("#results").classList.remove("show"); hits = []; HSEL.clear(); hitAnchor = null; }
+
+// ---- picking several hits ---------------------------------------------------
+// Click a hit to pick it, ⌘ / ctrl-click to pick another ( or let one go ),
+// ⇧-click to take the range from the last one clicked -- the board's own
+// selectRow, for the hits. Then ↵, ＋ Add on any picked hit ( it says how many ),
+// ↵ in one's # or tag box, or dragging one in adds them all, side by side, in
+// list order, and a tag typed into one's box goes on all of them. The arrow
+// keys move a single pick ; ⇧ with them stretches it.
+const HSEL = new Set();
+let hitAnchor = null;     // the key a ⇧-range starts from
+function pickedHits(){ return hits.filter(h=>HSEL.has(h.key)); }
+// What acting on hit i acts on : every picked hit when it's one of several.
+function hitGroup(i){
+  const h = hits[i];
+  if(!h) return [];
+  return HSEL.size > 1 && HSEL.has(h.key) ? pickedHits() : [ h ];
+}
+function pickOnly(i){
+  HSEL.clear(); hitAnchor = null; hitIdx = i;
+  if(hits[i]){ HSEL.add(hits[i].key); hitAnchor = hits[i].key; }
+}
+function pickRange(from, to){
+  let a = hits.findIndex(h=>h.key === from), b = to;
+  if(a < 0) a = b;
+  if(a > b){ const t = a; a = b; b = t; }
+  for(let k = a; k <= b; k++) HSEL.add(hits[k].key);
+}
+function pickHit(i, e){
+  const h = hits[i];
+  if(!h) return;
+  if(e && (e.metaKey || e.ctrlKey)){
+    HSEL.has(h.key) ? HSEL.delete(h.key) : HSEL.add(h.key);
+    hitAnchor = h.key; hitIdx = i;
+  } else if(e && e.shiftKey && hitAnchor){
+    pickRange(hitAnchor, i); hitIdx = i;
+  } else pickOnly(i);
+  paintHits();
+}
+// The picks, and the count on each picked hit's ＋ Add -- how many it would add.
+function paintHits(){
+  const n = pickedHits().filter(h=>!findItem(h.key)).length;
+  $$("#results .hit").forEach(el=>{
+    const on = HSEL.has(el.dataset.k);
+    el.classList.toggle("sel", on);
+    const b = el.querySelector("button.add");
+    if(b) b.textContent = on && n > 1 ? `＋ Add ${n}` : "＋ Add";
+  });
+}
+function moveHit(delta, stretch){
   if(!hits.length) return;
-  hitIdx = Math.max(0, Math.min(hits.length-1, hitIdx+delta));
-  $$("#results .hit").forEach((el,i)=>el.classList.toggle("sel", i===hitIdx));
+  const to = Math.max(0, Math.min(hits.length-1, hitIdx+delta));
+  if(stretch && hitAnchor){ HSEL.clear(); pickRange(hitAnchor, to); hitIdx = to; }
+  else pickOnly(to);
+  paintHits();
   const el = $$("#results .hit")[hitIdx];
   if(el) el.scrollIntoView({ block:"nearest" });
 }
+// A tag typed into hit i's box : on it, or on every picked hit when it's one of several.
+function preTagGroup(i, v){ hitGroup(i).filter(h=>!findItem(h.key)).forEach(h=>preTag(h.key, v)); }
 
 // ---- autocomplete ---------------------------------------------------------
-let AC = { input:null, opts:[], idx:0 };
+let AC = { input:null, opts:[], idx:0, nav:false };
 // The rows a chip input types onto : one board row, one staged row, or -- from
 // the shelf's own "+ tag checked" box -- every checked staged row at once. One
-// function so the autocomplete, and everything below it, is written once.
+// function so the autocomplete, and everything below it, is written once. A
+// search hit's box has no row yet : it answers with the row it will become --
+// the tags typed beside its ＋ Add and the modality ones it arrives with -- so
+// the list doesn't offer those again.
 function acTargets(input){
   if(input.id === "stagetag") return picked();
+  if(input.closest("#results .hit")){
+    return hitGroup(+input.dataset.i).filter(h=>!findItem(h.key))
+      .map(h=>({ tags: preTags(h.key).concat((META[h.key] || {}).mods || []) }));
+  }
   const s = input.closest(".srow");
   if(s){ const it = findStage(s.dataset.key); return it ? [ it ] : []; }
   const r = input.closest(".row");
@@ -2615,7 +2887,7 @@ function acOptions(input){
   const term = lc(input.value.trim());
   return tagOptions().filter(v=>!have.includes(lc(v))).filter(v=>!term || lc(v).includes(term));
 }
-function acOpen(input){ AC.input = input; AC.idx = 0; AC.opts = acOptions(input); acRender(); }
+function acOpen(input){ AC.input = input; AC.idx = 0; AC.nav = false; AC.opts = acOptions(input); acRender(); }
 function acRender(){
   const pop = $("#acpop");
   if(!AC.input){ pop.classList.remove("show"); return; }
@@ -2638,6 +2910,13 @@ function acCommit(value){
   const v = (value != null ? value : input.value).trim();
   if(!v){ acClose(); return; }
   if(input.id === "tagfind"){ findCommit(v); return; }
+  // A search hit's box : the tag waits beside ＋ Add for the paper ( TAGSAT ),
+  // and the redraw hands this box its focus back for the next one.
+  if(input.closest("#results .hit")){
+    input.value = ""; acClose();
+    preTagGroup(+input.dataset.i, v); renderResults();
+    return;
+  }
   const board = input.closest(".row");
   const srow  = input.closest(".srow");
   const n = acTargets(input).filter(it=>addTag(it, v)).length;
@@ -2695,7 +2974,7 @@ document.addEventListener("drop", e=>{
   // on, so only a paper dragged in from the search can get here -- and it goes
   // where "add to ..." says rather than somewhere arbitrary.
   if(dragKey) moveTo(dragKey, t.index);
-  else if(dragHit) addPaper(dragHit, VIEW ? insertIndex() : t.index);
+  else if(dragHit) addPapers(dragHit, VIEW ? insertIndex() : t.index);
   dragKey = dragHit = null;
 });
 document.addEventListener("dragend", ()=>{
@@ -2721,12 +3000,12 @@ $("#board").addEventListener("dragstart", e=>{
 $("#results").addEventListener("dragstart", e=>{
   const hit = e.target.closest(".hit");
   if(!hit) return;
-  // Dragging across the position box is selecting what you typed.
-  if(e.target.closest(".at")){ e.preventDefault(); return; }
+  // Dragging across the position or tag box is selecting what you typed.
+  if(e.target.closest(".at,.chipin")){ e.preventDefault(); return; }
   if(LOCKED){ e.preventDefault(); return; }
-  dragHit = hits[+hit.dataset.i];
+  dragHit = hitGroup(+hit.dataset.i);      // a picked hit brings the rest of the pick
   e.dataTransfer.effectAllowed = "copy";
-  try { e.dataTransfer.setData("text/plain", dragHit.key); } catch(err){}
+  try { e.dataTransfer.setData("text/plain", dragHit.map(h=>h.key).join("\n")); } catch(err){}
 });
 
 // ---- row interactions -----------------------------------------------------
@@ -2783,6 +3062,7 @@ function captureField(el){
   const was = (f.it.fields||{})[el.dataset.field];
   if(was === el.value) return;
   (f.it.fields = f.it.fields||{})[el.dataset.field] = el.value;
+  unstamp(row);
   markDirty();
 }
 // Type a position into a row's number and press ↵ ( or tab away ) to send it
@@ -2843,14 +3123,18 @@ $("#board").addEventListener("focusout", e=>{
 
 // chip inputs -> autocomplete
 document.addEventListener("focusin", e=>{ if(e.target.matches(".chipin:not(#newtag)")) acOpen(e.target); });
-document.addEventListener("input", e=>{ if(e.target.matches(".chipin:not(#newtag)") && AC.input===e.target){ AC.opts = acOptions(e.target); AC.idx = 0; acRender(); } });
+document.addEventListener("input", e=>{ if(e.target.matches(".chipin:not(#newtag)") && AC.input===e.target){ AC.opts = acOptions(e.target); AC.idx = 0; AC.nav = false; acRender(); } });
 document.addEventListener("keydown", e=>{
   if(!e.target.matches(".chipin:not(#newtag)")) return;
-  if(e.key==="ArrowDown"){ e.preventDefault(); AC.idx = Math.min(AC.opts.length-1, AC.idx+1); acRender(); }
-  else if(e.key==="ArrowUp"){ e.preventDefault(); AC.idx = Math.max(0, AC.idx-1); acRender(); }
+  if(e.key==="ArrowDown"){ e.preventDefault(); AC.nav = true; AC.idx = Math.min(AC.opts.length-1, AC.idx+1); acRender(); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); AC.nav = true; AC.idx = Math.max(0, AC.idx-1); acRender(); }
   else if(e.key==="Enter"){
     e.preventDefault();
     const typed = e.target.value.trim(), pick = AC.opts[AC.idx];
+    // A search hit's box with nothing typed : ↵ adds the paper, tags and all,
+    // the way ↵ in its # box does -- unless you've arrowed onto a suggestion.
+    const hit = e.target.closest("#results .hit");
+    if(hit && !typed && !AC.nav){ acClose(); addHit(+hit.dataset.i); return; }
     acCommit(pick && (!typed || lc(pick).startsWith(lc(typed))) ? pick : typed);
   }
   else if(e.key==="Escape"){ acClose(); e.target.blur(); }
@@ -3048,31 +3332,68 @@ $("#smode").addEventListener("change", ()=>{
   labelMode(); runSearch();
 });
 $("#q").addEventListener("keydown", e=>{
-  if(e.key==="ArrowDown"){ e.preventDefault(); moveHit(1); }
-  else if(e.key==="ArrowUp"){ e.preventDefault(); moveHit(-1); }
-  else if(e.key==="Enter" && hits[hitIdx]){ e.preventDefault(); addHit(hitIdx); }
+  if(e.key==="ArrowDown"){ e.preventDefault(); moveHit(1, e.shiftKey); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); moveHit(-1, e.shiftKey); }
+  else if(e.key==="Enter" && hits.length){
+    e.preventDefault();
+    const list = pickedHits();
+    addHits(list.length ? list : hitGroup(hitIdx));
+  }
   else if(e.key==="Escape"){ closeResults(); e.target.blur(); }
 });
-// ＋ Add for a hit in the list, honouring the position box next to it ( recently
-// added only -- a search hit has no box, so this is plain addPaper ). The number
-// is 1-based like everything the eye reads here, and past the end means the end.
-async function addHit(i){
-  const h = hits[i];
-  if(!h) return;
-  const typed = hitMode === "recent" ? parseInt(POSAT.get(h.key) || "", 10) : NaN;
-  await addPaper(h, isNaN(typed) ? null : Math.max(0, Math.min(typed-1, DOC.items.length)));
-  // Only once it's really on the board : a press that bailed ( view only ) keeps
-  // the number for the press that works. The row has already redrawn as ✓ #n by
-  // now, which is where it says what the number did.
-  if(findItem(h.key)) POSAT.delete(h.key);
+// ＋ Add for hit i -- and for the rest of the pick, when it's one of several.
+function addHit(i){ return addHits(hitGroup(i)); }
+// Hits onto the board, honouring each one's position box. The ones with no
+// number go in together, in list order, where "add to …" says ; then each
+// numbered one goes to its number -- 1-based like everything the eye reads
+// here, past the end meaning the end. A press that bails ( view only ) keeps
+// the numbers and tags for the press that works ( addPapers clears them ).
+async function addHits(list){
+  if(!list.length || guard()) return;
+  // A tag typed into a box but not ↵'d is still one you meant them to have.
+  list.forEach(h=>{
+    const el = $$("#results .hit").find(x=>x.dataset.k === h.key);
+    const half = el && el.querySelector(".chipin");
+    const v = half && half.value.trim();
+    if(v){ preTagGroup(+el.dataset.i, v); half.value = ""; }
+  });
+  const num = h => parseInt(POSAT.get(h.key) || "", 10);
+  const loose = list.filter(h=>isNaN(num(h)));
+  // Each call puts its rows on the board before it awaits anything, so the
+  // numbered ones land after -- and at exactly -- the place typed for them.
+  const jobs = loose.length ? [ addPapers(loose, null) ] : [];
+  list.filter(h=>!isNaN(num(h))).forEach(h=>
+    jobs.push(addPapers([ h ], Math.max(0, Math.min(num(h)-1, DOC.items.length)))));
+  await Promise.all(jobs);
 }
 $("#results").addEventListener("click", e=>{
   const b = e.target.closest(".add");
   if(b){ addHit(+b.dataset.i); return; }
-  // Clicking into the position box is typing, not picking the hit under it.
-  if(e.target.closest(".at")) return;
+  // × on a tag typed beside ＋ Add : it won't go on after all.
+  const x = e.target.closest("[data-unpre]");
+  if(x){
+    const h = hits[+x.closest(".hit").dataset.i];
+    if(h){ unPreTag(h.key, x.dataset.unpre); renderResults(); }
+    return;
+  }
+  // Clicking into the position or tag box is typing, not picking the hit under it.
+  if(e.target.closest(".at,.chipin")) return;
   const h = e.target.closest(".hit");
-  if(h){ hitIdx = +h.dataset.i; moveHit(0); }
+  if(h && !(e.shiftKey || e.metaKey || e.ctrlKey)) pickHit(+h.dataset.i);
+});
+// ⇧ / ⌘ / ctrl-clicks pick on the press rather than the click : no text gets
+// selected under the pointer, the search box keeps the focus ( so ↵ adds them ),
+// and a Mac ctrl-click -- which the system turns into a right-click, with no
+// click to follow -- picks like everywhere else instead of opening a menu.
+$("#results").addEventListener("mousedown", e=>{
+  if(e.button !== 0 || !(e.shiftKey || e.metaKey || e.ctrlKey)) return;
+  const h = e.target.closest(".hit");
+  if(!h || e.target.closest("input,button,a,[data-unpre]")) return;
+  e.preventDefault();
+  pickHit(+h.dataset.i, e);
+});
+$("#results").addEventListener("contextmenu", e=>{
+  if(e.ctrlKey && e.target.closest(".hit") && !e.target.closest("input")) e.preventDefault();
 });
 // Digits only, remembered as they're typed. Escape isn't handled : it falls
 // through and puts the list away, the way it does from the search box.
@@ -3091,22 +3412,28 @@ $("#results").addEventListener("keydown", e=>{
 $("#results").addEventListener("dblclick", e=>{
   const h = e.target.closest(".hit");
   if(!h) return;
-  // Double-clicking the position box is selecting the number in it.
-  if(e.target.closest(".at")) return;
+  // Double-clicking the position or tag box is selecting what's in it ; a quick
+  // second click on a typed tag's × is taking off another, not adding the paper.
+  if(e.target.closest(".at,.chipin,[data-unpre]")) return;
+  if(e.shiftKey || e.metaKey || e.ctrlKey) return;    // picking, quickly
   e.preventDefault();
   addHit(+h.dataset.i);
 });
 // Clicking away puts the hits list down -- but not the button that raises it :
 // its own handler would otherwise be undone by this one a moment later.
-document.addEventListener("click", e=>{ if(!e.target.closest(".searchwrap,#recentbtn")) closeResults(); });
+// Nor a suggestion picked for a hit's tag box : that popup lives outside it.
+// And a click whose target a handler has just redrawn away ( a typed tag's ×,
+// a suggestion -- both redraw the list ) is no longer anywhere to be "away" from.
+document.addEventListener("click", e=>{
+  if(!e.target.isConnected) return;
+  if(!e.target.closest(".searchwrap,#recentbtn,#acpop")) closeResults();
+});
 $("#filter").addEventListener("input", applyFilter);
 $("#filter").addEventListener("search", applyFilter);   // the ✕ ( and Esc ) clearing it
 // Two filters, ANDed : the text box, and the set of tags picked in the tag bar
 // ( 🔎 Filter ). A row hidden by either drops out of the selection too, so the
-// chips never tag a paper you can't see.
-function matchesTags(it){
-  return tagMatch(it.tags, Array.from(TAGF).map(lc), filterMode);
-}
+// chips never tag a paper you can't see. ( applyFilter , below. )
+//
 // The tag filter's rule, the same for the board and ⇩ Import from lists ( and
 // for an agent : sortops.tags_match ) : any = a paper carrying one of the picked
 // tags, all = every one of them, none = not one of them. Nothing picked lets
@@ -3122,15 +3449,16 @@ function tagMatch(tags, want, mode){
 }
 function applyFilter(){
   const q = $("#filter").value.trim();
+  const items = itemMap(), want = Array.from(TAGF).map(lc);
   let pruned = false;
   $$(".row").forEach(row=>{
-    const f = findItem(row.dataset.key);
-    if(!f) return;
+    const it = items.get(row.dataset.key);
+    if(!it) return;
     // textHas ( /static/common.js ) : a title pasted from a PDF -- curly quotes,
     // a line break -- still finds the row.
-    const hay = q ? [ f.it.title, f.it.key, f.it.doi, (f.it.tags||[]).join(" "),
-      Object.values(f.it.fields||{}).join(" ") ].join(" ") : "";
-    const hide = (q && !textHas(hay, q)) || !matchesTags(f.it);
+    const hay = q ? [ it.title, it.key, it.doi, (it.tags||[]).join(" "),
+      Object.values(it.fields||{}).join(" ") ].join(" ") : "";
+    const hide = (q && !textHas(hay, q)) || !tagMatch(it.tags, want, filterMode);
     row.classList.toggle("hide", hide);
     if(hide && SEL.delete(row.dataset.key)) pruned = true;
   });
@@ -3345,8 +3673,8 @@ initTheme();
 // the list -- its slot keeps its height, so nothing under it moves -- and puts
 // itself away the moment you scroll the list by hand ( unless you're typing in
 // it ), on Esc, or when you scroll back up to where it lives. A search you're
-// in the middle of follows you the same way : adding a paper scrolls to its
-// row, and the next one is likely a keystroke away.
+// in the middle of stays down with you while you add from it ( adding never
+// scrolls ), so the next one is a keystroke away.
 //
 // The bar itself stays ONE row ( .titlebar in the style ) : fitBar takes back
 // everything it gave up, then gives it up again a step at a time until the row
@@ -3394,8 +3722,8 @@ window.addEventListener("scroll", ()=>{
   });
 }, { passive:true });
 // Put away by the list being scrolled BY HAND -- a wheel or a swipe outside the
-// tools -- not by any scroll at all : adding a paper scrolls to its row, and
-// that shouldn't take the search away from under you.
+// tools -- not by any scroll at all : Jump to, ↑ Top or ⤓ To anchor moving the
+// page shouldn't take the search away from under you.
 function stowTools(e){
   if(!toolsOpen() || TOOLS.contains(e.target) || typingInTools()) return;
   closeResults();
@@ -4738,7 +5066,7 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         <kbd>Jump to</kbd>. The tools, the save stamp and the tag bar scroll away with the
         list, so a long list gets the whole window. <kbd>/</kbd> brings the search back down over
         the list from anywhere without losing your place, and a search you're in the middle of
-        follows you as you add from it; it goes away again when you scroll by hand ( unless
+        stays down while you add from it; it goes away again when you scroll by hand ( unless
         you're typing in it ), on <kbd>Esc</kbd>, or when you scroll back up to it.</li>
     <li><b>Getting around a long list</b>: select a row and click <kbd>⚓ Anchor</kbd> to mark it
         ( click it again on that row to lift it ), and <kbd>⤓ To anchor</kbd> scrolls back to it from
@@ -4754,7 +5082,14 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         its <code>prma modalities</code> stamp, with its <b>Code</b> and <b>Datasets</b> filled in
         from what <a href="/code">/code</a> and <a href="/datasets">/datasets</a> found for it — one
         link per line, a named dataset as <kbd>name — its home page</kbd>. Only empty cells are
-        written. Drag a hit in to drop it at an exact position.</li>
+        written. Drag a hit in to drop it at an exact position. Adding never scrolls the page: the
+        new row flashes wherever it landed and its hit says <kbd>✓ #n</kbd>, so you can keep adding.</li>
+    <li><b>Several at once</b>, in the search hits and <kbd>🆕 Recently added</kbd> alike: click a hit
+        to pick it, <kbd>⌘</kbd> / <kbd>ctrl</kbd>-click picks another ( or lets one go ),
+        <kbd>⇧</kbd>-click takes the range, and <kbd>⇧↑</kbd> / <kbd>⇧↓</kbd> stretch it from the
+        keyboard. Then <kbd>↵</kbd>, <kbd>＋ Add</kbd> on any picked hit ( it says how many ) or
+        dragging one in adds them all, side by side in list order — and a tag typed into one picked
+        hit's <kbd>+ tag</kbd> box goes on all of them.</li>
     <li><b>🆕 Recently added</b> is the other way to find a paper: the newest papers in your
         reference manager, newest first, in the same hits list the search uses — so add them the
         same way ( <kbd>↵</kbd>, a double-click, <kbd>＋ Add</kbd>, or drag one in ). It reads
@@ -4764,12 +5099,22 @@ $("#helpbtn").addEventListener("click", ()=>sheet(`
         hasn't been through the pipeline yet says <kbd>not indexed yet</kbd>; add it anyway and it comes
         in marked <kbd>⏳ processing</kbd>, without tags and with empty Code / Datasets cells — they
         fill themselves in ( only the empty ones ) as soon as the live server has processed it. The
-        list keeps itself current while it's open, so a paper you save with it up appears in it. Ten by
-        default; <kbd>show 25</kbd> / <kbd>50</kbd> in the list asks for more, and that choice is
-        this browser's.</li>
+        list keeps itself current while it's open, so a paper you save with it up appears in it. It
+        shows <b>everything added in the past week that isn't on this list yet</b> — papers already on
+        it are left out ( the hint line counts them ), and one you add while it's open stays as
+        <kbd>✓ #n</kbd> until you reopen it. <kbd>past 2 weeks</kbd> / <kbd>past month</kbd> in the
+        list looks further back, and that choice is this browser's.</li>
     <li><b>Where adds land</b> is the dropdown next to the search box: the bottom, the top, or
         <i>after last sorted</i> — right below the last row you placed by hand, so the part you've
-        already ranked stays put and new papers queue under it.</li>
+        already ranked stays put and new papers queue under it. To place one paper exactly, type a
+        position into the <kbd>#</kbd> box beside its <kbd>＋ Add</kbd> ( search hits and recently
+        added alike ) and press <kbd>↵</kbd> or <kbd>＋ Add</kbd> — 1 is the top, past the end is the
+        bottom.</li>
+    <li><b>Tag before you add</b>: every hit not on the list yet has a <kbd>+ tag</kbd> box at the end
+        of its line. Type a tag ( it autocompletes ) and press <kbd>↵</kbd> — it waits there as a chip
+        ( <kbd>×</kbd> takes it back ) — then <kbd>＋ Add</kbd>, <kbd>↵</kbd> on the empty box, a
+        double-click or dragging it in puts the paper on the list with those tags, on top of the
+        modality tags shown beside them.</li>
     <li><b>Tags</b> say what a paper is — <kbd>fMRI</kbd>, <kbd>EEG</kbd>, both, or anything you invent.
         Three ways to put one on: type into a row's <kbd>+</kbd> box ( it autocompletes ) ;
         <b>click a row to select it</b> ( <kbd>⌘</kbd>-click adds another, <kbd>⇧</kbd>-click takes the

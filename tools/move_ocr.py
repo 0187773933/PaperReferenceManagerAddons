@@ -56,12 +56,12 @@ from src.pdf  import ocr as OCR
 DEFAULT_ENGINE = "rapid"
 
 
-def _extract_text_for_bbox( textpage , bbox , yolo_dpi , page_height_pt ):
+def _extract_text_for_bbox( textpage , page , bbox , yolo_dpi ):
 	"""Reuse the OCR module's embedded-text helper , then normalize
 	through its standard cleanup ( ligatures , soft hyphens , control
 	chars , whitespace ) so what we pin is the same shape the new
 	per-bbox pipeline would produce."""
-	raw = OCR._embedded_text( textpage , bbox , yolo_dpi , page_height_pt )
+	raw = OCR._embedded_text( textpage , page , bbox , yolo_dpi )
 	if not raw:
 		return ""
 	return OCR._normalize_text( raw )
@@ -89,9 +89,8 @@ def _process_paper( paper , engine , force=False , dry_run=False ):
 		for page_idx , dets in enumerate( pages_yolo ):
 			if page_idx >= n_pdf_pages:
 				break
-			page = pdf[ page_idx ]
-			page_h_pt = page.get_height()
-			textpage  = page.get_textpage()
+			page     = pdf[ page_idx ]
+			textpage = page.get_textpage()
 			try:
 				for det in dets:
 					if not isinstance( det , dict ):
@@ -104,7 +103,7 @@ def _process_paper( paper , engine , force=False , dry_run=False ):
 					if not bbox:
 						continue
 					text = _extract_text_for_bbox(
-						textpage , bbox , yolo_dpi , page_h_pt ,
+						textpage , page , bbox , yolo_dpi ,
 					)
 					if not text:
 						n_empty += 1

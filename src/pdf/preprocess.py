@@ -101,10 +101,151 @@ ABANDON_CLASSES = { "abandon" }
 # in well under this ; we bail to a plain sort if we somehow blow past.
 MAX_CUT_DEPTH = 60
 
+# Text-bearing YOLO classes ( mirrors ocr.TEXT_DETECTION_CLASSES -- not
+# imported , so this module stays free of the pdfium / cv2 stack ).
+TEXT_CLASSES = {
+	"title" ,
+	"plain text" , "plain_text" ,
+	"figure_caption" ,
+	"table_caption" , "table_footnote" ,
+	"formula_caption" ,
+}
+
+# Body-text classes that may be dropped as a duplicate of ANY overlapping
+# text det. Titles and captions only yield to their own type : a title is a
+# section anchor and a caption feeds the figures / tables buckets , so a
+# body block that happens to repeat one must not swallow it.
+_BODY_TEXT_CLASSES = { "plain text" , "plain_text" }
+
+# A text det is a YOLO duplicate ( left out of reading order ) when at least
+# this share of its words is already held by overlapping text dets we keep.
+DUPLICATE_WORD_COVERAGE = 0.85
+
+_WORD_RE = re.compile( r"\w+" )
+
+# Figure / table boxes YOLO stacks on one graphic ( see duplicate_image_idxs ).
+IMAGE_CLASSES = { "figure" , "table" }
+# IoU at which two boxes are the same graphic twice.
+DUP_IMAGE_SAME_IOU = 0.80
+# Share of a smaller box inside a larger one for it to count as a sub-panel.
+DUP_IMAGE_CONTAINED = 0.80
+# A larger box only absorbs a smaller one if it's at most this much LESS
+# confident -- a 0.24 page-sized box must not swallow three 0.6 figures.
+DUP_IMAGE_CONF_SLACK = 0.10
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _overlaps( a , b ):
+	return ( min( a[ 2 ] , b[ 2 ] ) > max( a[ 0 ] , b[ 0 ] )
+	     and min( a[ 3 ] , b[ 3 ] ) > max( a[ 1 ] , b[ 1 ] ) )
+
+
+def _duplicate_text_idxs( page_dets ):
+	"""Indexes of text dets that only repeat words held by other text dets
+	overlapping them. YOLOv10 at our low confidence threshold often stacks
+	two or three nested boxes on one block , and each one used to print.
+
+	Two passes. ( 1 ) Walk by confidence , dropping a det whose words the
+	higher-confidence keepers already cover. ( 2 ) Walk the survivors from
+	fewest words up , dropping any still covered by the OTHER survivors --
+	catches a small box nested in a loose box that was kept for holding
+	extra text. The test is on words , not geometry alone , so a box with
+	text nobody else has always stays : a little duplication beats loss."""
+	cands = []
+	for idx , d in enumerate( page_dets or [] ):
+		if not isinstance( d , dict ) or d.get( "type" ) not in TEXT_CLASSES:
+			continue
+		bbox = d.get( "bbox" )
+		if not bbox or len( bbox ) != 4:
+			continue
+		words = _WORD_RE.findall( _text_for_det( d ).lower() )
+		if not words:
+			continue
+		cands.append( {
+			"idx": idx , "type": d.get( "type" ) , "bbox": bbox ,
+			"conf": float( d.get( "confidence" ) or 0.0 ) ,
+			"words": words , "set": set( words ) ,
+		} )
+
+	def covered( c , pool ):
+		have = set()
+		for o in pool:
+			if o is c or not _overlaps( c[ "bbox" ] , o[ "bbox" ] ):
+				continue
+			if c[ "type" ] not in _BODY_TEXT_CLASSES and o[ "type" ] != c[ "type" ]:
+				continue
+			have |= o[ "set" ]
+		if not have:
+			return False
+		hit = sum( 1 for w in c[ "words" ] if w in have )
+		return hit / len( c[ "words" ] ) >= DUPLICATE_WORD_COVERAGE
+
+	kept = []
+	for c in sorted( cands , key=lambda c: ( -c[ "conf" ] , c[ "idx" ] ) ):
+		if not covered( c , kept ):
+			kept.append( c )
+	for c in sorted( kept , key=lambda c: ( len( c[ "words" ] ) , c[ "conf" ] ) ):
+		if covered( c , kept ):
+			kept.remove( c )
+
+	keep_idx = { c[ "idx" ] for c in kept }
+	return { c[ "idx" ] for c in cands } - keep_idx
+
+
+def _area( b ):
+	return max( 0.0 , b[ 2 ] - b[ 0 ] ) * max( 0.0 , b[ 3 ] - b[ 1 ] )
+
+
+def _intersection( a , b ):
+	return ( max( 0.0 , min( a[ 2 ] , b[ 2 ] ) - max( a[ 0 ] , b[ 0 ] ) )
+	       * max( 0.0 , min( a[ 3 ] , b[ 3 ] ) - max( a[ 1 ] , b[ 1 ] ) ) )
+
+
+def duplicate_image_idxs( page_dets ):
+	"""Indexes of figure / table dets that repeat a graphic another box of
+	the same type already shows :
+	  - two near-identical boxes ( IoU >= DUP_IMAGE_SAME_IOU ) -> the less
+	    confident one ;
+	  - a box mostly inside a larger one ( a sub-panel ) -> the smaller ,
+	    unless the larger is much less confident ( DUP_IMAGE_CONF_SLACK ).
+	Every hidden box sits inside a kept one , so no pixels go missing.
+
+	HIDE , never delete : ` prma images ` numbers its crops over EVERY figure
+	box , and the /images + /method-images picks are keyed on that number
+	( '<key>#figure-N' ) , so the yolo data and the crops stay as they are
+	and the readers ( reading order , the figure reports ) skip these."""
+	boxes = [
+		( idx , d ) for idx , d in enumerate( page_dets or [] )
+		if isinstance( d , dict ) and d.get( "type" ) in IMAGE_CLASSES
+		and d.get( "bbox" ) and len( d[ "bbox" ] ) == 4
+	]
+	hidden = set()
+	for i , a in boxes:
+		ab , ac = a[ "bbox" ] , float( a.get( "confidence" ) or 0.0 )
+		aa = _area( ab )
+		if aa <= 0:
+			continue
+		for j , b in boxes:
+			if i == j or a[ "type" ] != b[ "type" ]:
+				continue
+			bb , bc = b[ "bbox" ] , float( b.get( "confidence" ) or 0.0 )
+			inter = _intersection( ab , bb )
+			if not inter:
+				continue
+			ba = _area( bb )
+			if inter / ( aa + ba - inter ) >= DUP_IMAGE_SAME_IOU:
+				if ( ac , -i ) < ( bc , -j ):
+					hidden.add( i )
+					break
+			elif ( ba > aa and inter / aa >= DUP_IMAGE_CONTAINED
+			       and bc >= ac - DUP_IMAGE_CONF_SLACK ):
+				hidden.add( i )
+				break
+	return hidden
+
 
 def _page_extent( dets ):
 	"""Approximate page width / height from the union of detection
@@ -206,18 +347,23 @@ def _xy_cut( dets , primary , min_x_gap , min_y_gap , depth=0 ):
 def preprocess_page( page_dets ):
 	"""Return one page's reading-order permutation of detection indexes.
 
-	Indexes are positions in the original `page_dets` list. 'abandon'
-	and any det without a valid bbox are omitted ( so the returned
-	list is usually shorter than `page_dets` )."""
+	Indexes are positions in the original `page_dets` list. 'abandon' ,
+	any det without a valid bbox , and dets that merely duplicate an
+	overlapping one ( see _duplicate_text_idxs / duplicate_image_idxs )
+	are omitted ( so the returned list is usually shorter than
+	`page_dets` )."""
 	# Build (orig_idx , det) pairs , filter , and wrap each as a thin
 	# dict the xy-cut code can read like a real det. We carry the
 	# original index through so the final permutation maps back to
 	# paper[ 'yolo' ][ 'pages' ][ page_idx ].
+	dupes = _duplicate_text_idxs( page_dets ) | duplicate_image_idxs( page_dets )
 	keep = []
 	for idx , d in enumerate( page_dets or [] ):
 		if not isinstance( d , dict ):
 			continue
 		if d.get( "type" ) in ABANDON_CLASSES:
+			continue
+		if idx in dupes:
 			continue
 		bbox = d.get( "bbox" )
 		if not bbox or len( bbox ) != 4:

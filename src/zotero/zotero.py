@@ -313,7 +313,11 @@ class Zotero():
 	# the newest keys , then the field / creator rows for JUST those items.
 	# Scoped to `limit` , so it stays a few milliseconds on top of the SQLite
 	# copy however large the library is.
-	def take_recent( self , limit=10 ):
+	#
+	# `since` ( 'YYYY-MM-DD HH:MM:SS' , UTC -- dateAdded's own spelling , so the
+	# two compare as strings ) bounds it by date too : everything added since
+	# then , still at most `limit` of it.
+	def take_recent( self , limit=10 , since=None ):
 		limit = max( 1 , min( int( limit or 10 ) , 200 ) )
 		# Over-fetch : the newest rows include items we drop below ( no title
 		# and no DOI -- a bare web link , an empty placeholder ) , and dropping
@@ -329,9 +333,10 @@ class Zotero():
 				LEFT JOIN deletedItems ON deletedItems.itemID = items.itemID
 				WHERE deletedItems.itemID IS NULL
 				  AND itemTypes.typeName NOT IN ( 'attachment' , 'note' , 'annotation' )
+				  AND ( ? IS NULL OR items.dateAdded >= ? )
 				ORDER BY items.dateAdded DESC
 				LIMIT ?
-			""" , ( scan , ) ):
+			""" , ( since , since , scan ) ):
 				order.append( row[ "itemID" ] )
 				ids[ row[ "itemID" ] ] = {
 					"zkey":  row[ "key" ] ,
